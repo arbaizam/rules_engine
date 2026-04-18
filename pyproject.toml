@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rules-engine"
+version = "0.1.0"
+description = "Strict YAML rules engine metadata package for Databricks."
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+    "pyspark>=3.5",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+]
+
+[tool.setuptools.packages.find]
+include = ["rules_engine*", "tools*"]
+
