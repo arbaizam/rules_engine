@@ -39,8 +39,10 @@ class ReconciliationSpecTranslator:
     def __init__(
         self,
         assignment_target_field: str = "translated_match_rule_name",
+        stop_on_match: bool = True,
     ) -> None:
         self.assignment_target_field = assignment_target_field
+        self.stop_on_match = stop_on_match
 
     def translate(
         self,
@@ -70,6 +72,7 @@ class ReconciliationSpecTranslator:
                         "rule_name": rule_name,
                         "rule_order": index,
                         "active_flag": True,
+                        "stop_on_match": self.stop_on_match,
                         "when": when_payload,
                         "assign": {
                             self.assignment_target_field: rule_name,

@@ -41,7 +41,16 @@ def test_all_and_source_rule_translates_correctly():
     rule = result.payload["rules"][0]
     assert "all" in rule["when"]
     assert rule["assign"] == {"match_rule": "Rule A"}
+    assert rule["stop_on_match"] is True
     assert result.audit_records[0].grouping_pattern_detected == "left_to_right:and"
+
+
+def test_translator_can_disable_stop_on_match():
+    result = ReconciliationSpecTranslator(stop_on_match=False).translate(
+        [source_row("Rule A", 1, "Field", "TextEquals", "x", None)]
+    )
+
+    assert result.payload["rules"][0]["stop_on_match"] is False
 
 
 def test_mixed_join_chain_translates_left_to_right():

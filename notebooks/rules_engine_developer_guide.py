@@ -422,6 +422,9 @@ display(spark.table(table_names.rulesets))
 # MAGIC - `JoinType`
 # MAGIC
 # MAGIC `JoinType` and `GroupJoinOperator` are folded left-to-right.
+# MAGIC Translated rules default to `stop_on_match: true`, so the first matching
+# MAGIC rule by `rule_order` wins. Treat the translated YAML as a first-pass
+# MAGIC artifact for manual refinement before publish.
 
 # COMMAND ----------
 

@@ -676,6 +676,15 @@ into canonical YAML authoring payloads.
 
 It does not participate in runtime execution.
 
+The intended workflow is:
+
+1. translate the source CSV into YAML,
+2. write the translation audit artifact,
+3. manually refine the YAML for rules or semantics not captured by the source
+   reconciliation spec,
+4. compile, validate, publish, and execute the refined YAML through the rules
+   engine.
+
 Source CSV columns:
 
 ```text
@@ -733,6 +742,10 @@ Join semantics:
   on the final `GroupSequence`.
 - condition and group chains are folded left-to-right. For example,
   `A And B And C Or D` becomes `(((A And B) And C) Or D)`.
+- translated rules default to `stop_on_match: true`, so the first matching
+  rule by `rule_order` wins. Pass `stop_on_match=False` to
+  `ReconciliationSpecTranslator` only when multi-match behavior is explicitly
+  intended.
 - malformed chains fail translation and are reported in the audit.
 
 ## Databricks Smoke Test
