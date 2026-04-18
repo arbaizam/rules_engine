@@ -369,6 +369,9 @@ assert result_df.where("rules_engine_matched").count() == 2
 # MAGIC
 # MAGIC Metadata is deliberately relational where fields are stable and JSON-shaped
 # MAGIC only where operand/function payloads vary.
+# MAGIC
+# MAGIC Clean validation runs write an explicit `INFO / VALIDATION_PASSED` row, so
+# MAGIC the validation table provides positive evidence that validation ran.
 
 # COMMAND ----------
 
@@ -488,4 +491,3 @@ translated_ruleset
 # MAGIC - define package deployment and versioning controls,
 # MAGIC - keep `fail_on_error=True` unless there is explicit downstream error
 # MAGIC   handling.
-

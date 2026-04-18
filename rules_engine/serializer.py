@@ -19,8 +19,10 @@ from rules_engine.enums import (
     LogicalOperator,
     NullInputMode,
     NullResultMode,
+    ObjectType,
     OperandKind,
     RulesetStatus,
+    ValidationSeverity,
 )
 from rules_engine.models import (
     AggregateFilter,
@@ -207,8 +209,25 @@ class DeltaRowSerializer:
         run_at: str = "unknown",
     ) -> list[ValidationResultRow]:
         """
-        Serialize validation issues to persisted rows.
+        Serialize validation results to persisted rows.
+
+        A clean validation still emits one positive audit row so the persisted
+        table proves validation ran rather than relying on absence of issues.
         """
+        if not validation_result.issues:
+            return [
+                ValidationResultRow(
+                    ruleset_id=ruleset_id,
+                    version=version,
+                    severity=ValidationSeverity.INFO.value,
+                    check_name="VALIDATION_PASSED",
+                    message="Validation passed with no issues.",
+                    object_type=ObjectType.RULESET.value,
+                    object_id=ruleset_id,
+                    details_payload={"issue_count": 0},
+                    run_at=run_at,
+                )
+            ]
         return [
             ValidationResultRow(
                 ruleset_id=ruleset_id,

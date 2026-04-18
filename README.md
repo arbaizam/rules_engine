@@ -650,6 +650,11 @@ Validation result rows include:
 run_at
 ```
 
+Clean validation runs write an explicit `INFO / VALIDATION_PASSED` row with
+`details_payload = {"issue_count": 0}`. Validation-result persistence therefore
+records positive evidence that validation ran, rather than relying on an empty
+table to imply success.
+
 `content_hash` is a deterministic SHA-256 hash of canonical ruleset content.
 Lifecycle status and provenance are excluded from the hash, so the hash
 represents rule content rather than who saved or published it.

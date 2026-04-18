@@ -102,6 +102,7 @@ class AggregateFunction(str, Enum):
 class ValidationSeverity(str, Enum):
     """Validation issue severities."""
 
+    INFO = "INFO"
     ERROR = "ERROR"
     WARNING = "WARNING"
 
@@ -126,4 +127,3 @@ COLLECTION_LITERAL_OPERATORS = {
     ComparisonOperator.BETWEEN,
     ComparisonOperator.NOT_BETWEEN,
 }
-

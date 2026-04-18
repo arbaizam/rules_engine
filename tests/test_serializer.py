@@ -1,4 +1,5 @@
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.models import ValidationResult
 from rules_engine.serializer import DeltaRowSerializer
 
 
@@ -93,6 +94,24 @@ def test_serializer_stamps_provenance_and_content_hash():
     assert rows.condition_group_rows[0].created_by == "tester"
     assert rows.condition_rows[0].created_by == "tester"
     assert rows.assignment_rows[0].created_by == "tester"
+
+
+def test_validation_serializer_writes_passed_marker_for_clean_validation():
+    rows = DeltaRowSerializer().serialize_validation_result(
+        "rs1",
+        "1",
+        ValidationResult().finalize(),
+        run_at="2026-04-18T00:00:00+00:00",
+    )
+
+    assert len(rows) == 1
+    assert rows[0].severity == "INFO"
+    assert rows[0].check_name == "VALIDATION_PASSED"
+    assert rows[0].message == "Validation passed with no issues."
+    assert rows[0].object_type == "ruleset"
+    assert rows[0].object_id == "rs1"
+    assert rows[0].details_payload == {"issue_count": 0}
+    assert rows[0].run_at == "2026-04-18T00:00:00+00:00"
 
 
 def test_deserializer_reconstructs_canonical_models():
