@@ -250,8 +250,6 @@ if spark_validation.has_errors():
 
 DATABASE = "default"
 TABLE_PREFIX = "rules_engine_guide"
-AUTHOR = "developer_guide_author"
-APPROVER = "developer_guide_approver"
 
 
 def table_name(suffix: str) -> str:
@@ -283,6 +281,9 @@ table_names
 # MAGIC
 # MAGIC Published metadata is immutable by `(ruleset_id, version)`. If you rerun
 # MAGIC this cell after publication, retire or overwrite the smoke tables first.
+# MAGIC
+# MAGIC `created_by` and `published_by` are optional. When omitted, persisted
+# MAGIC metadata uses `system`, which fits dedicated production cluster execution.
 
 # COMMAND ----------
 
@@ -292,20 +293,13 @@ publish_service = PublishService(
     normalizer=RulesetNormalizer(),
 )
 
-draft_validation = publish_service.save_draft(
-    ruleset,
-    created_by=AUTHOR,
-)
+draft_validation = publish_service.save_draft(ruleset)
 print(draft_validation.to_text())
 
 if draft_validation.has_errors():
     raise ValueError(draft_validation.to_text())
 
-publish_service.publish(
-    ruleset,
-    created_by=AUTHOR,
-    published_by=APPROVER,
-)
+publish_service.publish(ruleset)
 
 display(spark.table(table_names.rulesets))
 

@@ -24,7 +24,6 @@ from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepo
 
 DATABASE = "default"
 TABLE_PREFIX = "rules_engine_smoke"
-ACTOR = "databricks_smoke_test"
 
 
 def table_name(name: str) -> str:
@@ -110,11 +109,7 @@ def run_smoke_test(spark_session) -> None:
     if validation.has_errors():
         raise AssertionError(validation.to_text())
 
-    publish_service.publish(
-        ruleset,
-        created_by=ACTOR,
-        published_by=ACTOR,
-    )
+    publish_service.publish(ruleset)
     loaded = repository.load_published("Smoke Ruleset", version="1")
 
     input_df = spark_session.createDataFrame(

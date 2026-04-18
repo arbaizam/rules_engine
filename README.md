@@ -600,18 +600,11 @@ publish_service = PublishService(
     normalizer=RulesetNormalizer(),
 )
 
-validation = publish_service.save_draft(
-    ruleset,
-    created_by="author@example.com",
-)
+validation = publish_service.save_draft(ruleset)
 if validation.has_errors():
     raise ValueError(validation.to_text())
 
-publish_service.publish(
-    ruleset,
-    created_by="author@example.com",
-    published_by="approver@example.com",
-)
+publish_service.publish(ruleset)
 ```
 
 Lifecycle rules:
@@ -636,6 +629,10 @@ published_by
 published_at
 content_hash
 ```
+
+`created_by` and `published_by` are optional. When omitted, persisted metadata
+uses `system`, which is appropriate for locked-down production jobs that run
+through a dedicated cluster or service principal.
 
 Child metadata rows include:
 

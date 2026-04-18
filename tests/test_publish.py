@@ -9,11 +9,11 @@ from rules_engine.validator import RulesetValidator
 
 
 class RecordingRepository:
-    def save_draft(self, ruleset, *, created_by):
+    def save_draft(self, ruleset, *, created_by=None):
         self.saved = ruleset
         self.created_by = created_by
 
-    def publish(self, ruleset_id, version, *, published_by):
+    def publish(self, ruleset_id, version, *, published_by=None):
         self.published = (ruleset_id, version)
         self.published_by = published_by
 
@@ -90,3 +90,12 @@ def test_publish_passes_provenance_to_repository():
 
     assert service._repository.created_by == "author"
     assert service._repository.published_by == "approver"
+
+
+def test_publish_allows_omitted_provenance():
+    service = _service()
+
+    service.publish(_ruleset("draft"))
+
+    assert service._repository.created_by is None
+    assert service._repository.published_by is None

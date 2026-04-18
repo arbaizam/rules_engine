@@ -60,7 +60,7 @@ class DeltaRowSerializer:
         self,
         ruleset: Ruleset,
         *,
-        created_by: str = "unknown",
+        created_by: str = "system",
         created_at: str = "unknown",
         published_by: str | None = None,
         published_at: str | None = None,

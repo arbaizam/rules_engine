@@ -96,6 +96,40 @@ def test_serializer_stamps_provenance_and_content_hash():
     assert rows.assignment_rows[0].created_by == "tester"
 
 
+def test_serializer_defaults_created_by_to_system():
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Ruleset",
+            "version": "1",
+            "status": "draft",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "Rule 1",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "A"},
+                }
+            ],
+        }
+    )
+
+    rows = DeltaRowSerializer().serialize_ruleset(ruleset)
+
+    assert rows.ruleset_row.created_by == "system"
+
+
 def test_validation_serializer_writes_passed_marker_for_clean_validation():
     rows = DeltaRowSerializer().serialize_validation_result(
         "rs1",

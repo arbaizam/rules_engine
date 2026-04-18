@@ -27,7 +27,12 @@ class PublishService:
         self._validator = validator
         self._normalizer = normalizer
 
-    def save_draft(self, ruleset: Ruleset, *, created_by: str) -> ValidationResult:
+    def save_draft(
+        self,
+        ruleset: Ruleset,
+        *,
+        created_by: str | None = None,
+    ) -> ValidationResult:
         """
         Normalize, validate, and save draft metadata.
         """
@@ -43,7 +48,13 @@ class PublishService:
         )
         return validation
 
-    def publish(self, ruleset: Ruleset, *, created_by: str, published_by: str) -> None:
+    def publish(
+        self,
+        ruleset: Ruleset,
+        *,
+        created_by: str | None = None,
+        published_by: str | None = None,
+    ) -> None:
         """
         Validate and publish a ruleset version.
         """

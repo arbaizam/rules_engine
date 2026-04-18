@@ -57,10 +57,10 @@ class RulesEngineTableNames:
 class RulesetRepository(Protocol):
     """Repository protocol used by publish and runtime services."""
 
-    def save_draft(self, ruleset: Ruleset, *, created_by: str) -> None:
+    def save_draft(self, ruleset: Ruleset, *, created_by: str | None = None) -> None:
         """Persist draft metadata."""
 
-    def publish(self, ruleset_id: str, version: str, *, published_by: str) -> None:
+    def publish(self, ruleset_id: str, version: str, *, published_by: str | None = None) -> None:
         """Mark a persisted ruleset version as published."""
 
     def retire(self, ruleset_id: str, version: str) -> None:
@@ -243,7 +243,7 @@ class SparkDeltaRulesetRepository:
                 mode
             ).saveAsTable(table_name)
 
-    def save_draft(self, ruleset: Ruleset, *, created_by: str) -> None:
+    def save_draft(self, ruleset: Ruleset, *, created_by: str | None = None) -> None:
         """
         Persist a draft ruleset version.
 
@@ -258,10 +258,9 @@ class SparkDeltaRulesetRepository:
                 f"Cannot overwrite ruleset version with status={existing_status}: "
                 f"ruleset_id={ruleset.ruleset_id}, version={ruleset.version}"
             )
-        self._require_actor(created_by, "created_by")
         rows = self.serializer.serialize_ruleset(
             ruleset,
-            created_by=created_by,
+            created_by=self._actor_or_system(created_by),
             created_at=self._utc_now(),
         )
         self._delete_ruleset_version(ruleset.ruleset_id, ruleset.version)
@@ -291,17 +290,16 @@ class SparkDeltaRulesetRepository:
             self.assignment_schema,
         )
 
-    def publish(self, ruleset_id: str, version: str, *, published_by: str) -> None:
+    def publish(self, ruleset_id: str, version: str, *, published_by: str | None = None) -> None:
         """
         Mark a persisted ruleset version as published.
         """
-        self._require_actor(published_by, "published_by")
         self._assert_publish_allowed(ruleset_id, version)
         self._set_status(
             ruleset_id,
             version,
             RulesetStatus.PUBLISHED.value,
-            published_by=published_by,
+            published_by=self._actor_or_system(published_by),
             published_at=self._utc_now(),
         )
 
@@ -537,9 +535,11 @@ class SparkDeltaRulesetRepository:
     def _utc_now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
-    def _require_actor(self, value: str, label: str) -> None:
-        if not isinstance(value, str) or not value.strip():
-            raise RepositoryError(f"{label} must be a non-empty string.")
+    def _actor_or_system(self, value: str | None) -> str:
+        if value is None:
+            return "system"
+        stripped = value.strip()
+        return stripped or "system"
 
     def _condition_to_spark_dict(self, row: ConditionRow) -> dict:
         return {
