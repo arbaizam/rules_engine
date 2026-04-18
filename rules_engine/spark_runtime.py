@@ -66,6 +66,20 @@ class AggregateBinding:
     column_name: str
 
 
+class _SparkRowNoOpRepository:
+    """
+    Minimal repository placeholder for Spark worker-side row evaluation.
+
+    The row evaluator never loads metadata from the repository because the
+    ruleset is already serialized into the UDF closure. Passing the real
+    Spark/Delta repository would also serialize the active Spark session into
+    the Python worker, which fails under Databricks Spark Connect.
+    """
+
+    def load_published(self, ruleset_name: str, version: str | None = None) -> Ruleset:
+        raise RuntimeError("Spark row UDF cannot load published metadata.")
+
+
 class SparkRulesEngineRuntime:
     """
     Spark DataFrame runtime for ruleset evaluation.
@@ -162,7 +176,7 @@ class SparkRulesEngineRuntime:
         source_columns: list[str],
     ):
         runtime = SparkRowRuntime(
-            self._repository,
+            _SparkRowNoOpRepository(),
             self._function_registry,
             aggregate_lookup,
         )
