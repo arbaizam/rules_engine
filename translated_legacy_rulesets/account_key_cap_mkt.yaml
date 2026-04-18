@@ -1,0 +1,1144 @@
+ruleset_id: account_key_cap_mkt
+ruleset_name: Account Key Capital Markets
+version: 1.0.0
+status: draft
+description: Translated from PySpark when-chain for account_key_cap_mkt.
+rules:
+- rule_id: cap_001
+  rule_name: cap_001
+  rule_order: 10
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ISWAP
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: ASWAPS
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10110'
+- rule_id: cap_002
+  rule_name: cap_002
+  rule_order: 20
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: INV-P
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10111'
+- rule_id: cap_003
+  rule_name: cap_003
+  rule_order: 30
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: eq
+      right:
+        literal: INV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: InstrumentType
+      operator: eq
+      right:
+        literal: Fed Funds Sold Overnight
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10112'
+- rule_id: cap_004
+  rule_name: cap_004
+  rule_order: 40
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: INV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: contains
+      right:
+        literal: STFA
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: not_like
+      right:
+        literal: INV-P%
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10113'
+- rule_id: cap_005
+  rule_name: cap_005
+  rule_order: 50
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: INV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: LTFA
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10120'
+- rule_id: cap_006
+  rule_name: cap_006
+  rule_order: 60
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: INV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: LSVA
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10130'
+- rule_id: cap_007
+  rule_name: cap_007
+  rule_order: 70
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: INV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: ASWAP_BONDS
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10140'
+- rule_id: cap_008
+  rule_name: cap_008
+  rule_order: 80
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: INV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: MUNI
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10175'
+- rule_id: cap_009
+  rule_name: cap_009
+  rule_order: 90
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: INV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: ARM
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10190'
+- rule_id: cap_010
+  rule_name: cap_010
+  rule_order: 100
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: INV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: in
+      right:
+        literal:
+        - MVR
+        - MVRP
+        - VARDUS
+        value_type: list
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10191'
+- rule_id: cap_011
+  rule_name: cap_011
+  rule_order: 110
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: INV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: MBS
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10192'
+- rule_id: cap_012
+  rule_name: cap_012
+  rule_order: 120
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: INV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: in
+      right:
+        literal:
+        - MFX
+        - DUS
+        value_type: list
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10193'
+- rule_id: cap_013
+  rule_name: cap_013
+  rule_order: 130
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: LOC
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10205'
+- rule_id: cap_014
+  rule_name: cap_014
+  rule_order: 140
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: FIXADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: eq
+      right:
+        literal: '0'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10210'
+- rule_id: cap_015
+  rule_name: cap_015
+  rule_order: 150
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: FIXADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: eq
+      right:
+        literal: '1'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10215'
+- rule_id: cap_016
+  rule_name: cap_016
+  rule_order: 160
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: ADJADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10220'
+- rule_id: cap_017
+  rule_name: cap_017
+  rule_order: 170
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: AMORTADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10230'
+- rule_id: cap_018
+  rule_name: cap_018
+  rule_order: 180
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: FPADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10240'
+- rule_id: cap_019
+  rule_name: cap_019
+  rule_order: 190
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: APADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10250'
+- rule_id: cap_020
+  rule_name: cap_020
+  rule_order: 200
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: FBADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10260'
+- rule_id: cap_021
+  rule_name: cap_021
+  rule_order: 210
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: CONVADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10270'
+- rule_id: cap_022
+  rule_name: cap_022
+  rule_order: 220
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ISWAP
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: PUTSWAP
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10280'
+- rule_id: cap_023
+  rule_name: cap_023
+  rule_order: 230
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ADV
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: CONVADVF
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10290'
+- rule_id: cap_024
+  rule_name: cap_024
+  rule_order: 240
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ISWAP
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: in
+      right:
+        literal:
+        - ADVDERIV
+        - TNS_ADVDERIV
+        value_type: list
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10299'
+- rule_id: cap_025
+  rule_name: cap_025
+  rule_order: 250
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: MPFLN
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10310'
+- rule_id: cap_026
+  rule_name: cap_026
+  rule_order: 260
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: MPFDC
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10340'
+- rule_id: cap_027
+  rule_name: cap_027
+  rule_order: 270
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: MD
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: in
+      right:
+        literal:
+        - MEM_DEM
+        - MEM_OND
+        value_type: list
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: ne
+      right:
+        literal: '1'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20105'
+- rule_id: cap_028
+  rule_name: cap_028
+  rule_order: 280
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ISWAP
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: LSWAPS
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: ne
+      right:
+        literal: '1'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20110'
+- rule_id: cap_029
+  rule_name: cap_029
+  rule_order: 290
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - any:
+      - left:
+          field: BK_PositionID
+        operator: starts_with
+        right:
+          literal: BOND
+          value_type: string
+        tolerance_abs: '0'
+        null_input_mode: propagate
+        null_result_mode: 'null'
+      - left:
+          field: BK_PositionID
+        operator: starts_with
+        right:
+          literal: DN
+          value_type: string
+        tolerance_abs: '0'
+        null_input_mode: propagate
+        null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: contains
+      right:
+        literal: _LSWAP_BONDS
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: ne
+      right:
+        literal: '1'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20120'
+- rule_id: cap_030
+  rule_name: cap_030
+  rule_order: 300
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: BOND
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: LCALBND
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: ne
+      right:
+        literal: '1'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20130'
+- rule_id: cap_031
+  rule_name: cap_031
+  rule_order: 310
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - any:
+      - left:
+          field: BK_PositionID
+        operator: starts_with
+        right:
+          literal: BOND
+          value_type: string
+        tolerance_abs: '0'
+        null_input_mode: propagate
+        null_result_mode: 'null'
+      - left:
+          field: BK_PositionID
+        operator: starts_with
+        right:
+          literal: DN
+          value_type: string
+        tolerance_abs: '0'
+        null_input_mode: propagate
+        null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: FIXBND&MTN
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: ne
+      right:
+        literal: '1'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20140'
+- rule_id: cap_032
+  rule_name: cap_032
+  rule_order: 320
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - any:
+      - left:
+          field: BK_PositionID
+        operator: starts_with
+        right:
+          literal: BOND
+          value_type: string
+        tolerance_abs: '0'
+        null_input_mode: propagate
+        null_result_mode: 'null'
+      - left:
+          field: BK_PositionID
+        operator: starts_with
+        right:
+          literal: DN
+          value_type: string
+        tolerance_abs: '0'
+        null_input_mode: propagate
+        null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: NSVL
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: ne
+      right:
+        literal: '1'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20150'
+- rule_id: cap_033
+  rule_name: cap_033
+  rule_order: 330
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: MD
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: CD_REPO
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: ne
+      right:
+        literal: '1'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20155'
+- rule_id: cap_034
+  rule_name: cap_034
+  rule_order: 340
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: DN
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: DN&ZB
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: ne
+      right:
+        literal: '1'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20160'
+- rule_id: cap_035
+  rule_name: cap_035
+  rule_order: 350
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: MACRO
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20410'
+- rule_id: cap_036
+  rule_name: cap_036
+  rule_order: 360
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: ISWAP
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: LSWAP
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: eq
+      right:
+        literal: '1'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20420'
+- rule_id: cap_037
+  rule_name: cap_037
+  rule_order: 370
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - any:
+      - left:
+          field: BK_PositionID
+        operator: starts_with
+        right:
+          literal: BOND
+          value_type: string
+        tolerance_abs: '0'
+        null_input_mode: propagate
+        null_result_mode: 'null'
+      - left:
+          field: BK_PositionID
+        operator: starts_with
+        right:
+          literal: DN
+          value_type: string
+        tolerance_abs: '0'
+        null_input_mode: propagate
+        null_result_mode: 'null'
+    - left:
+        field: IsTNS
+      operator: eq
+      right:
+        literal: '1'
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20430'
+- rule_id: cap_038
+  rule_name: cap_038
+  rule_order: 380
+  active_flag: true
+  stop_on_match: true
+  when:
+    all:
+    - left:
+        field: BK_PositionID
+      operator: starts_with
+      right:
+        literal: CAP
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - left:
+        field: BK_AccountID
+      operator: eq
+      right:
+        literal: CAP
+        value_type: string
+      tolerance_abs: '0'
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20910'
