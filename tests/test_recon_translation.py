@@ -119,6 +119,21 @@ def test_operator_mapping_for_all_supported_source_operators():
     assert actual == [expected for _, expected, _ in operators]
 
 
+def test_slug_collision_emits_unique_rule_ids_and_audit_warning():
+    result = ReconciliationSpecTranslator().translate(
+        [
+            source_row("US Account", 1, "Field", "TextEquals", "x", None),
+            source_row("US-Account", 1, "Field", "TextEquals", "y", None),
+        ]
+    )
+
+    rule_ids = [rule["rule_id"] for rule in result.payload["rules"]]
+
+    assert rule_ids == ["us_account", "us_account_2"]
+    assert len(rule_ids) == len(set(rule_ids))
+    assert result.audit_records[1].warnings
+
+
 def test_invalid_source_operator_fails_translation():
     result = ReconciliationSpecTranslator().translate(
         [source_row("Rule A", 1, "Field", "Unsupported", "x", None)]

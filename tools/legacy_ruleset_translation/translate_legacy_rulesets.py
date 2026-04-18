@@ -151,6 +151,11 @@ class LegacyRulesetTranslator:
             )
 
         if length > len(value):
+            # PySpark substring does not pad short input strings. For example,
+            # substring("INV", 1, 5) returns "INV", while substring("INV-P", 1, 5)
+            # returns "INV-P". When the requested substring length is greater than
+            # the literal length, equality is therefore equivalent to an exact
+            # field equality check, not a prefix check.
             return {
                 "left": {"field": field_name},
                 "operator": "eq" if operator == "=" else "not_like",
@@ -270,7 +275,7 @@ def main() -> None:
     parser.add_argument(
         "--source-dir",
         type=Path,
-        default=Path(r"C:\Users\aarba\pydev\rules_engine_old\rulesets"),
+        required=True,
         help="Directory containing legacy rules_engine_old YAML files.",
     )
     parser.add_argument(

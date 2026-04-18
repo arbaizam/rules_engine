@@ -1,0 +1,11 @@
+resources:
+  jobs:
+    rules_engine_smoke_test:
+      name: ${bundle.target}_rules_engine_smoke_test
+      tasks:
+        - task_key: smoke_test
+          existing_cluster_id: ${var.existing_cluster_id}
+          spark_python_task:
+            python_file: ./databricks/smoke_test_rules_engine.py
+          libraries:
+            - whl: ./dist/*.whl

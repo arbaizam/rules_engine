@@ -58,6 +58,7 @@ class ReconciliationSpecTranslator:
         rules: list[dict[str, Any]] = []
         audit_records: list[TranslationAuditRecord] = []
         grouped = group_by_match_rule(rows)
+        used_rule_ids: dict[str, str] = {}
         for index, (rule_name, criteria) in enumerate(grouped.items(), start=1):
             audit = TranslationAuditRecord(
                 source_rule_name=rule_name,
@@ -65,7 +66,11 @@ class ReconciliationSpecTranslator:
             )
             try:
                 when_payload, condition_count, pattern = self._translate_rule_tree(criteria)
-                rule_id = self._slug(rule_name)
+                rule_id = self._unique_rule_id(self._slug(rule_name), rule_name, used_rule_ids)
+                if rule_id != self._slug(rule_name):
+                    audit.warnings.append(
+                        f"Rule ID slug collision detected; emitted unique rule_id {rule_id!r}."
+                    )
                 rules.append(
                     {
                         "rule_id": rule_id,
@@ -285,3 +290,27 @@ class ReconciliationSpecTranslator:
     def _slug(self, value: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower()).strip("_")
         return slug or "translated_rule"
+
+    def _unique_rule_id(
+        self,
+        base_rule_id: str,
+        rule_name: str,
+        used_rule_ids: dict[str, str],
+    ) -> str:
+        """
+        Return a deterministic unique rule id for one translated rule.
+
+        Rule ids are audit keys and runtime result identifiers. Source rule
+        names that normalize to the same slug must not produce duplicate ids.
+        """
+        if base_rule_id not in used_rule_ids:
+            used_rule_ids[base_rule_id] = rule_name
+            return base_rule_id
+
+        suffix = 2
+        while True:
+            candidate = f"{base_rule_id}_{suffix}"
+            if candidate not in used_rule_ids:
+                used_rule_ids[candidate] = rule_name
+                return candidate
+            suffix += 1

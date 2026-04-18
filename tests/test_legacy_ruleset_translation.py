@@ -51,6 +51,33 @@ def test_legacy_substring_equality_translates_to_starts_with():
     YamlRulesetCompiler().compile_payload(payload)
 
 
+def test_legacy_substring_equality_with_longer_length_translates_to_exact_eq():
+    payload = LegacyRulesetTranslator().translate_payload(
+        _legacy_payload(
+            {
+                "op": "=",
+                "left": {
+                    "func": {
+                        "name": "substring",
+                        "args": [
+                            {"field": "BK_PositionID"},
+                            {"value": 1, "type": "integer"},
+                            {"value": 5, "type": "integer"},
+                        ],
+                    }
+                },
+                "right": {"value": "INV", "type": "string"},
+            }
+        )
+    )
+
+    condition = payload["rules"][0]["when"]["all"][0]
+
+    assert condition["operator"] == "eq"
+    assert condition["right"] == {"literal": "INV", "value_type": "string"}
+    YamlRulesetCompiler().compile_payload(payload)
+
+
 def test_legacy_substring_inequality_with_longer_length_translates_to_exact_not_like():
     payload = LegacyRulesetTranslator().translate_payload(
         _legacy_payload(

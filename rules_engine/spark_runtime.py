@@ -452,7 +452,7 @@ class SparkRulesEngineRuntime:
         null_default_value: Any | None,
     ):
         if null_result_mode is NullResultMode.ERROR:
-            return F.coalesce(expression, F.lit(False))
+            raise ValueError("Spark expression path does not support null_result_mode=error.")
         if null_result_mode is NullResultMode.DEFAULT:
             return F.coalesce(expression, F.lit(bool(null_default_value)))
         return F.coalesce(expression, F.lit(False))

@@ -33,6 +33,7 @@ semantic weakening.
 - [Reconciliation CSV Translation Utility](#reconciliation-csv-translation-utility)
 - [Databricks Smoke Test](#databricks-smoke-test)
 - [Testing](#testing)
+- [Packaging And Asset Bundles](#packaging-and-asset-bundles)
 - [Developer Workflow](#developer-workflow)
 - [Troubleshooting](#troubleshooting)
 - [Known Limitations](#known-limitations)
@@ -151,6 +152,7 @@ databricks/
 
 notebooks/
   rules_engine_developer_guide.py
+  legacy_ruleset_translation_guide.py
 
 tools/
   recon_spec_translation/
@@ -1133,6 +1135,21 @@ Databricks or copy cells into a Databricks notebook. It walks through:
 - Spark DataFrame evaluation,
 - reconciliation CSV translation.
 
+The legacy account-key Python-authoring notebook is:
+
+```text
+notebooks/legacy_ruleset_translation_guide.py
+```
+
+It demonstrates code-based ruleset authoring with the public dataclass API:
+`Ruleset`, `Rule`, `ConditionGroup`, `Condition`, operands, and assignments.
+The notebook reads the legacy `rules_engine_old/rulesets` files only as source
+facts, builds canonical Python ruleset objects, validates those objects, exports
+canonical YAML with `YamlRulesetExporter`, and then compiles the exported YAML
+again as a round-trip check. By default, it writes files to
+`python_authored_legacy_rulesets/` so it does not overwrite the direct
+translation artifacts in `translated_legacy_rulesets/`.
+
 ## Testing
 
 Run the default local suite:
@@ -1150,6 +1167,67 @@ $env:RULES_ENGINE_RUN_SPARK_TESTS = "1"
 ```
 
 Run Spark tests in Databricks before relying on Spark execution in production.
+
+## Packaging And Asset Bundles
+
+The recommended production deployment pattern is wheel-based:
+
+```text
+source repo -> build wheel -> deploy Asset Bundle -> install wheel on job task -> run smoke test
+```
+
+This avoids production dependencies on workspace source folders and removes the
+need for `sys.path.append(...)` in production jobs. Development notebooks may
+still use `sys.path` while files are being copied manually, but production jobs
+should import the installed package:
+
+```python
+from rules_engine import YamlRulesetCompiler, SparkRulesEngineRuntime
+```
+
+The repo includes:
+
+```text
+pyproject.toml
+databricks.yml
+resources/rules_engine_smoke_test.job.yml
+databricks/smoke_test_rules_engine.py
+```
+
+Build the wheel locally:
+
+```powershell
+& 'C:\Users\aarba\.conda\envs\GeneralEnv\python.exe' -m pip install build
+& 'C:\Users\aarba\.conda\envs\GeneralEnv\python.exe' -m build --wheel
+```
+
+Validate and deploy the bundle from the repo root after configuring Databricks
+CLI authentication:
+
+```powershell
+databricks bundle validate --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
+databricks bundle deploy --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
+databricks bundle run rules_engine_smoke_test --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
+```
+
+The smoke-test script creates/overwrites its own smoke-test Delta metadata
+tables, publishes a small ruleset, evaluates a Spark DataFrame, verifies that
+two rows match, retires the ruleset, and confirms retired metadata is no longer
+loadable as published.
+
+For Azure DevOps, keep the same sequence in the pipeline:
+
+```text
+install dependencies
+run pytest
+build wheel
+databricks bundle validate
+databricks bundle deploy
+databricks bundle run rules_engine_smoke_test
+```
+
+Production deployment should use a service principal or your organization's
+approved Databricks authentication pattern rather than a personal token.
 
 ## Developer Workflow
 

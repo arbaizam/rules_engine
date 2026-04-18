@@ -8,6 +8,9 @@ ruleset, evaluates a Spark DataFrame, and verifies retire/load behavior.
 
 from __future__ import annotations
 
+import os
+
+from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
 from rules_engine import (
@@ -22,8 +25,8 @@ from rules_engine.exceptions import RepositoryError
 from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository
 
 
-DATABASE = "default"
-TABLE_PREFIX = "rules_engine_smoke"
+DATABASE = os.getenv("RULES_ENGINE_SMOKE_DATABASE", "default")
+TABLE_PREFIX = os.getenv("RULES_ENGINE_SMOKE_TABLE_PREFIX", "rules_engine_smoke")
 
 
 def table_name(name: str) -> str:
@@ -140,5 +143,5 @@ def run_smoke_test(spark_session) -> None:
     raise AssertionError("Retired ruleset was still loadable as published.")
 
 
-# Databricks notebooks expose a global `spark` variable.
-run_smoke_test(spark)
+if __name__ == "__main__":
+    run_smoke_test(SparkSession.builder.getOrCreate())

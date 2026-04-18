@@ -1,0 +1,29 @@
+bundle:
+  name: rules_engine
+
+include:
+  - resources/*.yml
+
+artifacts:
+  rules_engine:
+    type: whl
+    build: python -m build --wheel
+    path: .
+
+variables:
+  existing_cluster_id:
+    description: Existing Databricks cluster ID used by the smoke-test job.
+  workspace_host:
+    description: Databricks workspace URL for the selected deployment target.
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: ${var.workspace_host}
+
+  prod:
+    mode: production
+    workspace:
+      host: ${var.workspace_host}

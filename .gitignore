@@ -10,6 +10,7 @@ build/
 .venv/
 venv/
 *.log
+.bundle/
 ~$*
 README.html
 README_files/

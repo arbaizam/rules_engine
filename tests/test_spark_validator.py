@@ -133,3 +133,39 @@ def test_spark_validator_rejects_unsupported_filter_null_modes():
         "SPARK_FILTER_NULL_INPUT_ERROR_UNSUPPORTED",
         "SPARK_FILTER_NULL_RESULT_ERROR_UNSUPPORTED",
     } <= {issue.check_name for issue in result.issues}
+
+
+def test_spark_validator_allows_condition_null_result_error_for_udf_row_path():
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Ruleset",
+            "version": "1",
+            "status": "draft",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "Rule 1",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "status"},
+                                "operator": "eq",
+                                "right": {"literal": "OPEN"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "error",
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "matched"},
+                }
+            ],
+        }
+    )
+
+    result = SparkRulesetCompatibilityValidator().validate(ruleset)
+
+    assert "SPARK_CONDITION_NULL_RESULT_ERROR_UNSUPPORTED" not in {
+        issue.check_name for issue in result.issues
+    }

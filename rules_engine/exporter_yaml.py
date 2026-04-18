@@ -69,7 +69,7 @@ class YamlRulesetExporter:
         return yaml.safe_dump(
             self.export_payload(ruleset),
             sort_keys=False,
-            allow_unicode=False,
+            allow_unicode=True,
         )
 
     def export_path(self, ruleset: Ruleset, path: str | Path) -> None:
