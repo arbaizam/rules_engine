@@ -18,6 +18,7 @@ semantic weakening.
 - [Who This Is For](#who-this-is-for)
 - [Core Concepts](#core-concepts)
 - [Package Layout](#package-layout)
+- [Method Reference And Side Effects](#method-reference-and-side-effects)
 - [Semantic Contract](#semantic-contract)
 - [Authoring YAML](#authoring-yaml)
 - [Compile, Validate, Normalize](#compile-validate-normalize)
@@ -162,6 +163,312 @@ tools/
 
 tests/
 ```
+
+## Method Reference And Side Effects
+
+This section maps the major package methods to what they do, what they touch,
+and what they intentionally do not do. Use this as the operational reference
+while reading the developer notebook.
+
+### `YamlRulesetCompiler.compile_text(yaml_text)`
+
+Purpose:
+
+- Parse a YAML string into the canonical `Ruleset` dataclass model.
+- Reject malformed YAML and unsupported enum values.
+- Preserve canonical vocabulary only.
+
+Side effects:
+
+- None. It does not write Delta metadata, validate semantic rules, or execute
+  data.
+
+Common failures:
+
+- unquoted `null_result_mode: null`, which YAML parses as Python `None`.
+  Use `null_result_mode: "null"`.
+- unsupported aliases such as `value` instead of `literal`.
+- unsupported aliases such as `assignments` instead of `assign`.
+
+### `YamlRulesetCompiler.compile_path(path)`
+
+Purpose:
+
+- Read YAML text from disk and delegate to `compile_text()`.
+
+Side effects:
+
+- Reads one local/workspace file.
+- Does not persist metadata or evaluate data.
+
+### `RulesetValidator.validate(ruleset)`
+
+Purpose:
+
+- Validate the runtime-neutral semantic contract.
+- Return a `ValidationResult` containing stable check names and human-readable
+  messages.
+
+Checks include:
+
+- required IDs and rule attributes,
+- duplicate rule and assignment IDs,
+- empty condition groups,
+- unary/binary operand compatibility,
+- aggregate scope rules,
+- quantile `q`,
+- order-sensitive aggregate `order_by`,
+- custom function registry contracts,
+- nested aggregate prohibition.
+
+Side effects:
+
+- None. Validation does not mutate the ruleset and does not write metadata.
+
+### `SparkRulesetCompatibilityValidator.validate(ruleset)`
+
+Purpose:
+
+- Run base semantic validation plus Spark runtime compatibility checks.
+- Catch metadata that is valid in theory but unsupported by the current Spark
+  execution path.
+
+Additional Spark checks include:
+
+- exact `median` and `quantile` unsupported,
+- aggregate `null_input_mode=error` unsupported,
+- aggregate `null_result_mode=error` unsupported,
+- aggregate-filter error null modes unsupported,
+- `first` / `last` with `null_input_mode=propagate` unsupported.
+
+Side effects:
+
+- None. This is a preflight gate.
+
+### `RulesetNormalizer.normalize_ruleset(ruleset)`
+
+Purpose:
+
+- Materialize publish/runtime-ready explicit metadata.
+- Ensure omitted tolerance is represented as `0`.
+- Ensure aggregate payload defaults are explicit.
+
+Side effects:
+
+- None. It returns a normalized ruleset model.
+
+### `YamlRulesetExporter.export_text(ruleset)`
+
+Purpose:
+
+- Convert a `Ruleset` dataclass back to canonical YAML.
+- Preserve explicit IDs so compile-export-compile round trips are stable.
+
+Side effects:
+
+- None. It returns YAML text.
+
+### `YamlRulesetExporter.export_path(ruleset, path)`
+
+Purpose:
+
+- Write canonical YAML to a file.
+
+Side effects:
+
+- Writes one file.
+- Does not publish metadata and does not evaluate data.
+
+### `PublishService.save_draft(ruleset, created_by=None)`
+
+Purpose:
+
+- Normalize, validate, save draft metadata, and persist validation results.
+
+Detailed sequence:
+
+1. Require `ruleset.status == draft`.
+2. Normalize the ruleset.
+3. Validate the normalized ruleset.
+4. Save metadata rows with `status = draft`.
+5. Replace existing draft rows for the same `(ruleset_id, version)`.
+6. Persist validation-result rows.
+
+Delta tables affected:
+
+- `rulesets`
+- `rules`
+- `condition_groups`
+- `conditions`
+- `assignments`
+- `validation_results`
+
+Side effects:
+
+- Writes metadata and validation audit rows.
+- Does not make the ruleset loadable by `load_published()` unless it is later
+  published.
+- Does not evaluate business data.
+
+Actor behavior:
+
+- `created_by` is optional.
+- If omitted, metadata uses `system`.
+
+### `PublishService.publish(ruleset, created_by=None, published_by=None)`
+
+Purpose:
+
+- Validate and promote a draft ruleset version to published metadata.
+
+Detailed sequence:
+
+1. Require `ruleset.status == draft`.
+2. Normalize the ruleset again.
+3. Validate the normalized ruleset again as a publish-time gate.
+4. Persist validation-result rows.
+5. Stop if validation has errors.
+6. Save the normalized ruleset as draft metadata.
+7. Verify the persisted target version exists and is still draft.
+8. Verify another version of the same `ruleset_name` is not already published.
+9. Update the parent `rulesets` row to `status = published`.
+10. Stamp `published_by` and `published_at`.
+
+Delta tables affected:
+
+- writes/replaces rows in the metadata child tables,
+- writes validation results,
+- updates the parent `rulesets` row status.
+
+Side effects:
+
+- Makes the ruleset loadable through `load_published()`.
+- Does not evaluate input data.
+- Does not overwrite already-published versions.
+
+Actor behavior:
+
+- `created_by` and `published_by` are optional.
+- If omitted, metadata uses `system`.
+
+### `SparkDeltaRulesetRepository.create_base_tables(mode)`
+
+Purpose:
+
+- Create empty Spark/Delta metadata tables with explicit schemas.
+
+Side effects:
+
+- Creates or overwrites Delta tables depending on `mode`.
+- Use `mode="overwrite"` only for non-production setup or controlled smoke
+  tests.
+
+### `SparkDeltaRulesetRepository.load_published(ruleset_name, version=None)`
+
+Purpose:
+
+- Load published metadata from Delta and reconstruct a canonical `Ruleset`.
+
+Detailed sequence:
+
+1. Query `rulesets` for `ruleset_name`, optional `version`, and
+   `status = published`.
+2. Load related rule, condition-group, condition, and assignment rows.
+3. Deserialize row payloads into dataclasses.
+
+Side effects:
+
+- Reads Delta metadata tables.
+- Does not write metadata.
+- Does not evaluate business data.
+
+### `SparkDeltaRulesetRepository.retire(ruleset_id, version)`
+
+Purpose:
+
+- Mark a ruleset version as retired.
+
+Side effects:
+
+- Updates the parent `rulesets.status` to `retired`.
+- Does not delete metadata.
+- Makes that version unavailable through `load_published()`.
+
+### `RulesEngineRuntime.evaluate(rows, ruleset)`
+
+Purpose:
+
+- Evaluate a ruleset against an iterable of Python dictionaries.
+
+Side effects:
+
+- None. It returns output rows and traces.
+- Does not write metadata or mutate input rows.
+
+Best use:
+
+- local unit tests,
+- small fixtures,
+- semantic parity checks.
+
+### `SparkRulesEngineRuntime.evaluate_dataframe(df, ruleset, fail_on_error=True)`
+
+Purpose:
+
+- Evaluate a Spark DataFrame against a ruleset.
+
+Detailed sequence:
+
+1. Discover aggregate operands.
+2. Precompute group and dataset aggregates with Spark operations.
+3. Join aggregate values back to original rows.
+4. Use a Python UDF to evaluate final rule and assignment logic per row.
+5. Append `rules_engine_*` result columns.
+6. If `fail_on_error=True`, raise if any row has `rules_engine_error`.
+
+Returned columns:
+
+- `rules_engine_matched`
+- `rules_engine_matched_rule_ids`
+- `rules_engine_assign`
+- `rules_engine_rule_results`
+- `rules_engine_error`
+
+Side effects:
+
+- Returns a transformed DataFrame.
+- Does not write output rows unless the caller writes the returned DataFrame.
+- Does not mutate input metadata.
+
+### `ReconciliationSpecTranslator.translate(rows, ...)`
+
+Purpose:
+
+- Convert source reconciliation CSV rows into canonical YAML payloads.
+
+Detailed sequence:
+
+1. Group rows by `MatchRuleName`.
+2. Sort by `GroupSequence` and `CriteriaSequence`.
+3. Fold `JoinType` left-to-right inside each group.
+4. Fold `GroupJoinOperator` left-to-right across groups.
+5. Map supported source operators to canonical rules engine operators.
+6. Emit assignments to the configured target field.
+7. Emit `stop_on_match: true` by default.
+8. Produce translation audit records.
+
+Side effects:
+
+- None. It returns a payload and audit records.
+- It does not publish metadata.
+- It does not participate in runtime execution.
+
+Intended workflow:
+
+- translate to YAML,
+- inspect audit,
+- manually refine YAML,
+- compile/validate/publish the refined artifact.
 
 ## Semantic Contract
 

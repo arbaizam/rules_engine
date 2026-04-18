@@ -30,6 +30,22 @@
 # MAGIC
 # MAGIC In Databricks, install or copy the package before running this notebook.
 # MAGIC The global `spark` variable is provided by Databricks.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC - Imports the public package APIs used throughout the guide.
+# MAGIC - Imports the Spark/Delta repository classes used to persist metadata.
+# MAGIC - Imports the reconciliation translation utility, which is intentionally
+# MAGIC   outside the runtime package.
+# MAGIC - Imports standard-library helpers used only by this notebook.
+# MAGIC
+# MAGIC What this cell should prove:
+# MAGIC
+# MAGIC - Databricks can find the copied or installed `rules_engine` package.
+# MAGIC - The notebook is using the package location you expect.
+# MAGIC
+# MAGIC If this cell fails, stop and fix `sys.path`, cluster library installation,
+# MAGIC or repository checkout placement before continuing.
 
 # COMMAND ----------
 
@@ -75,6 +91,32 @@ from tools.recon_spec_translation.writer_yaml import write_yaml
 # MAGIC - a group aggregate,
 # MAGIC - a filtered dataset aggregate,
 # MAGIC - an assignment emitted when the rule matches.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC - Creates a canonical YAML document as a Python string.
+# MAGIC - Defines one draft ruleset named `Account Review Rules`.
+# MAGIC - Defines one rule evaluated by `rule_order = 1`.
+# MAGIC - Uses an `all` condition group, meaning every condition must pass.
+# MAGIC - Adds explicit condition IDs so metadata and diagnostics are readable.
+# MAGIC - Uses `null_result_mode: "null"` with quotes because unquoted YAML `null`
+# MAGIC   is parsed as Python `None`, not as the canonical string value.
+# MAGIC
+# MAGIC The rule means:
+# MAGIC
+# MAGIC - `status` must equal `OPEN`.
+# MAGIC - the sum of `amount` within the current `account` group must be greater
+# MAGIC   than `100`.
+# MAGIC - the dataset-level sum of `amount` for rows where `status == OPEN` must
+# MAGIC   be greater than `100`.
+# MAGIC - when all conditions pass, assign `review_bucket = high_value_open`.
+# MAGIC
+# MAGIC What this cell does not do:
+# MAGIC
+# MAGIC - It does not compile the YAML.
+# MAGIC - It does not validate the YAML.
+# MAGIC - It does not create Delta metadata rows.
+# MAGIC - It does not evaluate business data.
 
 # COMMAND ----------
 
@@ -153,6 +195,25 @@ print(ruleset_yaml)
 # MAGIC `YamlRulesetCompiler` performs shape checks and enum parsing.
 # MAGIC `RulesetValidator` enforces semantic validity.
 # MAGIC `RulesetNormalizer` materializes explicit persisted defaults.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC 1. `compile_text()` parses YAML and builds immutable dataclasses.
+# MAGIC 2. The compiler rejects malformed YAML shape and unsupported enum values.
+# MAGIC 3. `RulesetValidator.validate()` checks semantic rules that apply to both
+# MAGIC    YAML-authored and code-authored rulesets.
+# MAGIC 4. `validation.to_text()` renders validation output for humans.
+# MAGIC 5. `RulesetNormalizer.normalize_ruleset()` materializes publish-ready
+# MAGIC    explicit values.
+# MAGIC
+# MAGIC Important distinction:
+# MAGIC
+# MAGIC - compilation answers "Can this YAML become a ruleset model?"
+# MAGIC - validation answers "Does this ruleset obey the semantic contract?"
+# MAGIC - normalization answers "Is this ruleset fully explicit for persistence
+# MAGIC   and runtime?"
+# MAGIC
+# MAGIC No Delta tables are touched in this cell.
 
 # COMMAND ----------
 
@@ -176,6 +237,21 @@ normalized_ruleset
 # MAGIC Exported YAML uses canonical vocabulary and includes explicit generated
 # MAGIC identifiers. The exported YAML should compile back into the same canonical
 # MAGIC dataclasses.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC - Converts the normalized dataclass model back into canonical YAML.
+# MAGIC - Recompiles the exported YAML.
+# MAGIC - Asserts the recompiled model equals the normalized model.
+# MAGIC
+# MAGIC Why this matters:
+# MAGIC
+# MAGIC - Engineers can author or refine rules through code, then export canonical
+# MAGIC   YAML for review and source control.
+# MAGIC - Governance workflows can compare YAML artifacts rather than relying only
+# MAGIC   on in-memory objects.
+# MAGIC - Exported YAML includes IDs so round-trip equality is preserved, not just
+# MAGIC   semantic similarity.
 
 # COMMAND ----------
 
@@ -194,6 +270,25 @@ print(exported_yaml)
 # MAGIC The pure-Python runtime is useful for local unit tests, small fixtures, and
 # MAGIC semantic parity checks. It evaluates aggregates over the incoming row set
 # MAGIC exactly as provided.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC - Creates a tiny list of Python dictionaries as input rows.
+# MAGIC - Evaluates the normalized ruleset directly in Python.
+# MAGIC - Produces output rows and compact execution traces.
+# MAGIC
+# MAGIC Runtime semantics demonstrated here:
+# MAGIC
+# MAGIC - aggregates are computed over the input row list exactly as supplied,
+# MAGIC - no rows are deduplicated or filtered outside explicit aggregate filters,
+# MAGIC - assignments appear only when a rule matches,
+# MAGIC - traces show which rules matched.
+# MAGIC
+# MAGIC What this cell does not do:
+# MAGIC
+# MAGIC - It does not use Spark.
+# MAGIC - It does not read published metadata from Delta.
+# MAGIC - It does not persist output.
 
 # COMMAND ----------
 
@@ -224,6 +319,23 @@ for row in python_output:
 # MAGIC intentionally unsupported by the current Spark runtime.
 # MAGIC
 # MAGIC Use it before publishing metadata intended for Databricks execution.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC - Runs the Spark-specific validation gate against the normalized ruleset.
+# MAGIC - Raises before metadata promotion if Spark execution would fail or weaken
+# MAGIC   semantics.
+# MAGIC
+# MAGIC Examples of rules this validator rejects:
+# MAGIC
+# MAGIC - `median` and `quantile`, because exact Spark implementation is not enabled.
+# MAGIC - aggregate `null_input_mode=error`.
+# MAGIC - aggregate `null_result_mode=error`.
+# MAGIC - aggregate-filter error null modes.
+# MAGIC - `first` or `last` with aggregate `null_input_mode=propagate`.
+# MAGIC
+# MAGIC This is a preflight check. It does not write metadata and does not evaluate
+# MAGIC input data.
 
 # COMMAND ----------
 
@@ -241,15 +353,42 @@ if spark_validation.has_errors():
 # MAGIC ## 7. Configure Delta Metadata Tables
 # MAGIC
 # MAGIC Choose a catalog/schema/table naming convention that fits your environment.
-# MAGIC This example uses `default` and a notebook-specific prefix.
+# MAGIC This example uses a dedicated guide schema and a short table prefix.
 # MAGIC
-# MAGIC The next cell overwrites smoke-test tables. Do not point it at production
-# MAGIC metadata tables.
+# MAGIC The next cell drops and recreates the guide schema for a clean run. Do not
+# MAGIC point `DATABASE` at production metadata.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC 1. Sets the target catalog/schema path for guide metadata tables.
+# MAGIC 2. Drops the guide schema with `CASCADE` so reruns start cleanly.
+# MAGIC 3. Recreates the schema.
+# MAGIC 4. Builds fully qualified metadata table names.
+# MAGIC 5. Instantiates `SparkDeltaRulesetRepository`.
+# MAGIC 6. Creates empty Delta tables with explicit schemas.
+# MAGIC
+# MAGIC Tables created:
+# MAGIC
+# MAGIC - rulesets
+# MAGIC - rules
+# MAGIC - condition_groups
+# MAGIC - conditions
+# MAGIC - assignments
+# MAGIC - function_registry
+# MAGIC - validation_results
+# MAGIC
+# MAGIC This cell is intentionally destructive for the guide schema only.
 
 # COMMAND ----------
 
-DATABASE = "default"
-TABLE_PREFIX = "rules_engine_guide"
+DATABASE = "alme_dev_bronze.rules_engine_guide"
+TABLE_PREFIX = "test"
+
+cleanup_sql = f"DROP SCHEMA IF EXISTS {DATABASE} CASCADE"
+spark.sql(cleanup_sql)
+
+create_sql = f"CREATE SCHEMA IF NOT EXISTS {DATABASE}"
+spark.sql(create_sql)
 
 
 def table_name(suffix: str) -> str:
@@ -344,6 +483,28 @@ display(spark.table(table_names.rulesets))
 # MAGIC Runtime execution should load published metadata from the repository.
 # MAGIC `fail_on_error=True` is the default and should remain enabled for regulated
 # MAGIC workflows unless downstream controls explicitly inspect `rules_engine_error`.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC 1. Loads the published ruleset from Delta metadata.
+# MAGIC 2. Creates a Spark input DataFrame from `input_rows`.
+# MAGIC 3. Instantiates the Spark runtime.
+# MAGIC 4. Evaluates the DataFrame against the published ruleset.
+# MAGIC 5. Displays output ordered by `row_id`.
+# MAGIC
+# MAGIC Runtime execution details:
+# MAGIC
+# MAGIC - `load_published()` reads only `status = published` metadata.
+# MAGIC - Aggregate operands are discovered from the ruleset.
+# MAGIC - Spark precomputes group and dataset aggregates.
+# MAGIC - Aggregate values are joined back to the original input rows.
+# MAGIC - A Python UDF evaluates final condition and assignment logic per row.
+# MAGIC - Temporary aggregate columns are dropped from the returned DataFrame.
+# MAGIC - `fail_on_error=True` performs an error check and raises if any row has
+# MAGIC   `rules_engine_error`.
+# MAGIC
+# MAGIC For this guide data, rows 1 and 2 should match. Rows 3 and 4 should not.
+# MAGIC This cell does not modify metadata or write result rows to Delta.
 
 # COMMAND ----------
 
@@ -373,6 +534,25 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_error`
 # MAGIC
 # MAGIC Assignment and rule result payloads are JSON strings.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC - Collects the small guide result set to the driver for display.
+# MAGIC - Prints key runtime output fields per row.
+# MAGIC - Asserts that no row-level errors occurred.
+# MAGIC - Asserts that exactly two rows matched.
+# MAGIC
+# MAGIC Output column meaning:
+# MAGIC
+# MAGIC - `rules_engine_matched`: whether at least one rule matched the row.
+# MAGIC - `rules_engine_matched_rule_ids`: ordered list of matched rule IDs.
+# MAGIC - `rules_engine_assign`: JSON object containing assignments from matched
+# MAGIC   rules, or null when no rule matched.
+# MAGIC - `rules_engine_rule_results`: JSON array of per-rule match booleans.
+# MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
+# MAGIC
+# MAGIC In production, avoid collecting large DataFrames. Use aggregations,
+# MAGIC displays, or writes instead.
 
 # COMMAND ----------
 
@@ -399,6 +579,24 @@ assert result_df.where("rules_engine_matched").count() == 2
 # MAGIC
 # MAGIC Clean validation runs write an explicit `INFO / VALIDATION_PASSED` row, so
 # MAGIC the validation table provides positive evidence that validation ran.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC - Displays each metadata table created by the repository.
+# MAGIC - Lets engineers inspect how tree-shaped YAML was flattened into
+# MAGIC   queryable Delta rows.
+# MAGIC
+# MAGIC What to inspect:
+# MAGIC
+# MAGIC - `rulesets.status` should be `published`.
+# MAGIC - `rulesets.created_by` should be `system` when actor fields are omitted.
+# MAGIC - `rulesets.published_by` should be `system` after publish.
+# MAGIC - `rulesets.content_hash` should be populated.
+# MAGIC - `conditions.left_operand_payload_json` should contain structured operand
+# MAGIC   metadata.
+# MAGIC - `validation_results.check_name` should include `VALIDATION_PASSED`.
+# MAGIC
+# MAGIC This cell is read-only.
 
 # COMMAND ----------
 
@@ -415,6 +613,18 @@ display(spark.table(table_names.validation_results))
 # MAGIC ## 12. Retire Published Metadata
 # MAGIC
 # MAGIC Retired metadata should no longer load through `load_published`.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC 1. Calls `repository.retire(ruleset_id, version)`.
+# MAGIC 2. Updates the parent `rulesets` row to `status = retired`.
+# MAGIC 3. Attempts to load the same ruleset through `load_published()`.
+# MAGIC 4. Expects `RepositoryError`, because retired metadata is not published.
+# MAGIC 5. Displays the `rulesets` table so the lifecycle transition is visible.
+# MAGIC
+# MAGIC Retire does not delete metadata. It changes lifecycle status so prior
+# MAGIC metadata remains auditable but is no longer returned by runtime
+# MAGIC `load_published()`.
 
 # COMMAND ----------
 
@@ -452,6 +662,27 @@ display(spark.table(table_names.rulesets))
 # MAGIC Translated rules default to `stop_on_match: true`, so the first matching
 # MAGIC rule by `rule_order` wins. Treat the translated YAML as a first-pass
 # MAGIC artifact for manual refinement before publish.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC - Creates a small CSV reconciliation spec in a temporary directory.
+# MAGIC - Reads source rows with `read_reconciliation_csv()`.
+# MAGIC - Translates source rows into canonical rules engine YAML payload.
+# MAGIC - Writes a translation audit JSON artifact.
+# MAGIC - Fails if any source pattern is unsupported or ambiguous.
+# MAGIC - Writes translated YAML.
+# MAGIC - Prints both YAML and audit output.
+# MAGIC
+# MAGIC Translator behavior:
+# MAGIC
+# MAGIC - Groups rows by `MatchRuleName`.
+# MAGIC - Orders criteria by `GroupSequence` and `CriteriaSequence`.
+# MAGIC - Maps supported source operators to canonical operators.
+# MAGIC - Emits `assign.translated_match_rule_name = MatchRuleName`.
+# MAGIC - Emits `stop_on_match: true` by default.
+# MAGIC
+# MAGIC The translator is not a runtime dependency. Its output should be reviewed
+# MAGIC and refined manually before publication.
 
 # COMMAND ----------
 
@@ -493,6 +724,16 @@ print(json.dumps(translated_audit, indent=2))
 # MAGIC
 # MAGIC Translation output should compile and validate like any other canonical
 # MAGIC ruleset.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC - Compiles the YAML produced by the translation utility.
+# MAGIC - Runs the standard semantic validator.
+# MAGIC - Raises if translated YAML violates the engine contract.
+# MAGIC
+# MAGIC This step proves that translation output is a valid authoring artifact.
+# MAGIC It does not publish the translated ruleset and does not execute it against
+# MAGIC business data.
 
 # COMMAND ----------
 
@@ -521,3 +762,15 @@ translated_ruleset
 # MAGIC - define package deployment and versioning controls,
 # MAGIC - keep `fail_on_error=True` unless there is explicit downstream error
 # MAGIC   handling.
+# MAGIC
+# MAGIC Recommended promotion path:
+# MAGIC
+# MAGIC 1. Translate source specs to YAML where helpful.
+# MAGIC 2. Manually refine YAML for semantics not captured in source specs.
+# MAGIC 3. Compile, validate, normalize, and export YAML.
+# MAGIC 4. Publish into non-production metadata tables.
+# MAGIC 5. Run small hand-verified DataFrame tests.
+# MAGIC 6. Compare against known-good legacy output where available.
+# MAGIC 7. Run representative volume/performance tests.
+# MAGIC 8. Decide packaging and release tagging.
+# MAGIC 9. Promote the exact package version and YAML artifact together.
