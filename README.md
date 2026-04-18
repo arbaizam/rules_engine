@@ -618,6 +618,46 @@ Lifecycle rules:
 - `retire` changes a persisted ruleset version to `retired`.
 - `load_published` loads only `published` metadata.
 
+What `save_draft(ruleset)` does:
+
+1. Normalizes the ruleset so publish/runtime metadata is explicit.
+2. Validates the normalized ruleset.
+3. Persists metadata rows with `status = draft`.
+4. Replaces prior draft rows for the same `(ruleset_id, version)`.
+5. Writes validation-result rows for the same `(ruleset_id, version)`.
+
+What `publish(ruleset)` does:
+
+1. Normalizes the ruleset again.
+2. Validates the normalized ruleset again as a publish-time gate.
+3. Persists validation-result rows for the publish validation run.
+4. Fails before publishing if validation has errors.
+5. Saves the normalized ruleset as draft metadata.
+6. Verifies the target version exists and is still `draft`.
+7. Verifies no other version of the same `ruleset_name` is published.
+8. Updates only the parent ruleset row to `status = published`.
+9. Stamps `published_by` and `published_at`.
+
+The double validation is deliberate. A previous draft save is not treated as
+proof that the ruleset object being published is unchanged.
+
+Tables affected by draft/publish:
+
+- `rulesets`: parent lifecycle/provenance row. This is where `status`,
+  `created_by`, `created_at`, `published_by`, `published_at`, and
+  `content_hash` live.
+- `rules`: one row per rule.
+- `condition_groups`: one row per logical group.
+- `conditions`: one row per condition, with operand payload JSON for variable
+  operand shapes.
+- `assignments`: one row per assignment.
+- `validation_results`: one positive `INFO / VALIDATION_PASSED` row for clean
+  validation, or issue rows when validation fails.
+
+Publishing metadata does not evaluate business data. It answers: "Is this
+ruleset valid, persisted, auditable, and available to runtime?" Spark DataFrame
+evaluation happens separately through `SparkRulesEngineRuntime`.
+
 ## Auditability Model
 
 Ruleset metadata rows include:

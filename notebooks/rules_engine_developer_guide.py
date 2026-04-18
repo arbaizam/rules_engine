@@ -284,6 +284,39 @@ table_names
 # MAGIC
 # MAGIC `created_by` and `published_by` are optional. When omitted, persisted
 # MAGIC metadata uses `system`, which fits dedicated production cluster execution.
+# MAGIC
+# MAGIC What this cell does:
+# MAGIC
+# MAGIC 1. Builds a `PublishService` by wiring together the repository, validator,
+# MAGIC    and normalizer.
+# MAGIC 2. Calls `save_draft(ruleset)`.
+# MAGIC 3. Normalizes the ruleset so persistence-ready fields are explicit.
+# MAGIC 4. Runs semantic validation plus Spark compatibility validation.
+# MAGIC 5. Writes draft metadata into the Delta metadata tables.
+# MAGIC 6. Writes validation audit rows into `validation_results`.
+# MAGIC 7. Calls `publish(ruleset)`.
+# MAGIC 8. Re-normalizes and re-validates the ruleset as a publish-time gate.
+# MAGIC 9. Rewrites the draft rows for this version, because it is still `draft`.
+# MAGIC 10. Updates the parent `rulesets` row to `status = published`.
+# MAGIC
+# MAGIC `save_draft` and `publish` both validate intentionally. A prior draft save
+# MAGIC is not treated as proof that the object being published is unchanged.
+# MAGIC
+# MAGIC Tables affected by this cell:
+# MAGIC
+# MAGIC - `rulesets`: one parent metadata row. After publish, `status` should be
+# MAGIC   `published`, `published_by` should be `system`, and `published_at` should
+# MAGIC   be populated.
+# MAGIC - `rules`: one row per rule.
+# MAGIC - `condition_groups`: one row per logical group.
+# MAGIC - `conditions`: one row per condition, with operand payload JSON.
+# MAGIC - `assignments`: one row per emitted assignment.
+# MAGIC - `validation_results`: one positive `INFO / VALIDATION_PASSED` row when
+# MAGIC   validation is clean, or issue rows when validation fails.
+# MAGIC
+# MAGIC This cell does **not** evaluate input business data. It only promotes rule
+# MAGIC metadata into an auditable, published state. Row evaluation happens in the
+# MAGIC next section.
 
 # COMMAND ----------
 
