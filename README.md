@@ -293,7 +293,7 @@ rules:
           right: { literal: TRAD, value_type: string }
           tolerance_abs: "0"
           null_input_mode: propagate
-          null_result_mode: null
+          null_result_mode: "null"
     assign:
       review_bucket: trad
 ```
@@ -320,12 +320,12 @@ rules:
               args: {}
               order_by: []
               null_input_mode: ignore
-              null_result_mode: null
+              null_result_mode: "null"
           operator: gt
           right: { literal: 1000000, value_type: number }
           tolerance_abs: "0"
           null_input_mode: propagate
-          null_result_mode: null
+          null_result_mode: "null"
     assign:
       review_bucket: high_value
 ```
@@ -347,14 +347,14 @@ left:
           right: { literal: OPEN, value_type: string }
           tolerance_abs: "0"
           null_input_mode: propagate
-          null_result_mode: null
+          null_result_mode: "null"
     null_input_mode: ignore
-    null_result_mode: null
+    null_result_mode: "null"
 operator: gt
 right: { literal: 0, value_type: number }
 tolerance_abs: "0"
 null_input_mode: propagate
-null_result_mode: null
+null_result_mode: "null"
 ```
 
 ### Custom Function Operand
@@ -370,7 +370,7 @@ operator: eq
 right: { literal: 5, value_type: number }
 tolerance_abs: "0"
 null_input_mode: propagate
-null_result_mode: null
+null_result_mode: "null"
 ```
 
 ## Compile, Validate, Normalize

@@ -99,7 +99,7 @@ rules:
           right: { literal: OPEN, value_type: string }
           tolerance_abs: "0"
           null_input_mode: propagate
-          null_result_mode: null
+          null_result_mode: "null"
         - condition_id: c_group_sum_gt_100
           left:
             aggregate:
@@ -110,12 +110,12 @@ rules:
               args: {}
               order_by: []
               null_input_mode: ignore
-              null_result_mode: null
+              null_result_mode: "null"
           operator: gt
           right: { literal: 100, value_type: number }
           tolerance_abs: "0"
           null_input_mode: propagate
-          null_result_mode: null
+          null_result_mode: "null"
         - condition_id: c_open_dataset_sum_gt_100
           left:
             aggregate:
@@ -131,14 +131,14 @@ rules:
                     right: { literal: OPEN, value_type: string }
                     tolerance_abs: "0"
                     null_input_mode: propagate
-                    null_result_mode: null
+                    null_result_mode: "null"
               null_input_mode: ignore
-              null_result_mode: null
+              null_result_mode: "null"
           operator: gt
           right: { literal: 100, value_type: number }
           tolerance_abs: "0"
           null_input_mode: propagate
-          null_result_mode: null
+          null_result_mode: "null"
     assign:
       review_bucket: high_value_open
 """
