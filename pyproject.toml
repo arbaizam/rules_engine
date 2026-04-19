@@ -18,5 +18,4 @@ test = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["rules_engine*", "tools*"]
-
+include = ["rules_engine*"]

@@ -13,6 +13,7 @@ import re
 from statistics import mean, median, pstdev, pvariance
 from typing import Any, Iterable, Mapping
 
+from rules_engine.aggregate_key import aggregate_key
 from rules_engine.enums import (
     AggregateFunction,
     AggregateScope,
@@ -534,17 +535,4 @@ class AggregateContext:
         return tuple(row.get(field_name) for field_name in operand.by)
 
     def _cache_key(self, operand: AggregateOperand) -> str:
-        return repr(
-            (
-                operand.function.value,
-                operand.field_name,
-                operand.scope.value,
-                operand.by,
-                sorted(operand.args.items()),
-                operand.filter,
-                operand.order_by,
-                operand.null_input_mode.value,
-                operand.null_result_mode.value,
-                operand.null_default_value,
-            )
-        )
+        return aggregate_key(operand)

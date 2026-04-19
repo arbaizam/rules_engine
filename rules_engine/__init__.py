@@ -3,7 +3,8 @@ Strict metadata-first rules engine.
 
 The package compiles canonical YAML rulesets into dataclasses, validates the
 semantic contract, and persists fully explicit metadata rows for Databricks
-Delta tables. Runtime evaluation is exposed through ``RulesEngineRuntime``.
+Delta tables. Production runtime evaluation is exposed through
+``SparkRulesEngineRuntime``.
 """
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler

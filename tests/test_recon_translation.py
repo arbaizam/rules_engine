@@ -1,6 +1,10 @@
 import json
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("tools.recon_spec_translation")
+
 from tools.recon_spec_translation.audit import write_audit
 from tools.recon_spec_translation.models import SourceCriterion
 from tools.recon_spec_translation.translator import ReconciliationSpecTranslator

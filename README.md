@@ -50,9 +50,8 @@ workflows where rules must be:
 - auditable after the fact,
 - promoted through controlled lifecycle states.
 
-The primary target runtime is Databricks Spark. The pure-Python runtime exists
-as a reference/runtime utility for small row sets, unit tests, and semantic
-parity checks.
+The primary target runtime is Databricks Spark. The pure-Python evaluator exists
+as a reference/test utility for small row sets and semantic parity checks.
 
 ## Core Concepts
 
@@ -136,13 +135,13 @@ rules_engine/
   enums.py                # canonical vocabulary
   exceptions.py           # package exceptions
   exporter_yaml.py        # dataclasses -> canonical YAML
-  models.py               # domain and Delta row dataclasses
+  models.py               # domain and persistence row dataclasses
   normalizer.py           # publish-ready explicit metadata
   publish.py              # lifecycle orchestration
   registry.py             # custom function registry
   repository.py           # Spark/Delta metadata repository
-  runtime.py              # pure-Python evaluator
-  serializer.py           # dataclasses <-> Delta rows
+  runtime.py              # reference/test row evaluator used by Spark row UDF
+  serializer.py           # dataclasses <-> persisted payload rows
   spark_runtime.py        # Spark DataFrame runtime
   spark_validator.py      # Spark compatibility validator
   validator.py            # semantic validator
@@ -152,7 +151,12 @@ databricks/
 
 notebooks/
   rules_engine_developer_guide.py
-  legacy_ruleset_translation_guide.py
+  rules_engine_quickstart.py
+  python_ruleset_authoring_guide.py
+
+rule_sets/
+  account_key_cap_mkt.yaml
+  account_key_mra.yaml
 
 tools/
   recon_spec_translation/
@@ -285,29 +289,30 @@ Side effects:
 
 Purpose:
 
-- Normalize, validate, save draft metadata, and persist validation results.
+- Normalize, validate, and save draft metadata.
+- Draft validation errors are returned to the caller but do not block saving.
+  This preserves work-in-progress metadata while keeping `publish()` as the
+  hard validation gate.
 
 Detailed sequence:
 
 1. Require `ruleset.status == draft`.
 2. Normalize the ruleset.
 3. Validate the normalized ruleset.
-4. Save metadata rows with `status = draft`.
-5. Replace existing draft rows for the same `(ruleset_id, version)`.
-6. Persist validation-result rows.
+4. Return validation issues to the caller.
+5. Save one `ruleset_versions` row with `status = draft`, even if validation
+   has errors.
+6. Replace an existing draft row for the same `(ruleset_id, version)`.
 
 Delta tables affected:
 
-- `rulesets`
-- `rules`
-- `condition_groups`
-- `conditions`
-- `assignments`
-- `validation_results`
+- `ruleset_versions`
 
 Side effects:
 
-- Writes metadata and validation audit rows.
+- Writes draft metadata.
+- May write invalid draft metadata. Invalid drafts remain unpublishable until
+  corrected.
 - Does not make the ruleset loadable by `load_published()` unless it is later
   published.
 - Does not evaluate business data.
@@ -328,19 +333,17 @@ Detailed sequence:
 1. Require `ruleset.status == draft`.
 2. Normalize the ruleset again.
 3. Validate the normalized ruleset again as a publish-time gate.
-4. Persist validation-result rows.
-5. Stop if validation has errors.
-6. Save the normalized ruleset as draft metadata.
-7. Verify the persisted target version exists and is still draft.
-8. Verify another version of the same `ruleset_name` is not already published.
-9. Update the parent `rulesets` row to `status = published`.
-10. Stamp `published_by` and `published_at`.
+4. Stop if validation has errors.
+5. Save the normalized ruleset as draft metadata.
+6. Verify the persisted target version exists and is still draft.
+7. Verify another version of the same `ruleset_name` is not already published.
+8. Update the `ruleset_versions` row to `status = published`.
+9. Stamp `published_by` and `published_at`.
 
 Delta tables affected:
 
-- writes/replaces rows in the metadata child tables,
-- writes validation results,
-- updates the parent `rulesets` row status.
+- writes/replaces one draft row in `ruleset_versions`,
+- updates that same row to `published`.
 
 Side effects:
 
@@ -373,10 +376,10 @@ Purpose:
 
 Detailed sequence:
 
-1. Query `rulesets` for `ruleset_name`, optional `version`, and
+1. Query `ruleset_versions` for `ruleset_name`, optional `version`, and
    `status = published`.
-2. Load related rule, condition-group, condition, and assignment rows.
-3. Deserialize row payloads into dataclasses.
+2. Read the canonical JSON payload from the matching row.
+3. Compile the payload back into canonical dataclasses.
 
 Side effects:
 
@@ -384,7 +387,7 @@ Side effects:
 - Does not write metadata.
 - Does not evaluate business data.
 
-### `SparkDeltaRulesetRepository.retire(ruleset_id, version)`
+### `SparkDeltaRulesetRepository.retire(ruleset_id, version, retired_by=None)`
 
 Purpose:
 
@@ -392,7 +395,8 @@ Purpose:
 
 Side effects:
 
-- Updates the parent `rulesets.status` to `retired`.
+- Updates `ruleset_versions.status` to `retired`.
+- Stamps `retired_by` and `retired_at`.
 - Does not delete metadata.
 - Makes that version unavailable through `load_published()`.
 
@@ -866,31 +870,24 @@ weaken explicit authoring semantics.
 from rules_engine.repository import SparkDeltaRulesetRepository, RulesEngineTableNames
 
 tables = RulesEngineTableNames(
-    rulesets="catalog.schema.rulesets",
-    rules="catalog.schema.rules",
-    condition_groups="catalog.schema.condition_groups",
-    conditions="catalog.schema.conditions",
-    assignments="catalog.schema.assignments",
+    ruleset_versions="catalog.schema.ruleset_versions",
     function_registry="catalog.schema.function_registry",
-    validation_results="catalog.schema.validation_results",
 )
 
 repository = SparkDeltaRulesetRepository(spark, tables)
 repository.create_base_tables()
 ```
 
-Published metadata is stored across:
+Published metadata is stored in:
 
-- rulesets
-- rules
-- condition groups
-- conditions
-- assignments
-- function registry
-- validation results
+- `ruleset_versions`: one authoritative row per ruleset version.
+- `function_registry`: environment-level custom function metadata.
 
-Stable/queryable fields are first-class columns. Variable operand and registry
-contracts are stored as JSON payload columns.
+`ruleset_versions` stores the complete canonical ruleset payload as JSON
+alongside lifecycle status, provenance, content hash, and summary counts.
+Runtime loading reads one published row and reconstructs the canonical
+dataclasses from that payload. This avoids multi-table tree reconstruction and
+keeps publication easier to audit.
 
 ## Publish Lifecycle
 
@@ -919,6 +916,8 @@ publish_service.publish(ruleset)
 Lifecycle rules:
 
 - `save_draft` requires `ruleset.status == draft`.
+- `save_draft` saves draft metadata even when validation returns errors.
+- callers must inspect the returned `ValidationResult`.
 - `publish` requires `ruleset.status == draft`.
 - publish validates before status change.
 - published rows are immutable by `(ruleset_id, version)`.
@@ -931,37 +930,34 @@ What `save_draft(ruleset)` does:
 
 1. Normalizes the ruleset so publish/runtime metadata is explicit.
 2. Validates the normalized ruleset.
-3. Persists metadata rows with `status = draft`.
-4. Replaces prior draft rows for the same `(ruleset_id, version)`.
-5. Writes validation-result rows for the same `(ruleset_id, version)`.
+3. Returns the validation result to the caller.
+4. Persists one `ruleset_versions` row with `status = draft`, even when the
+   validation result contains errors.
+5. Replaces a prior draft row for the same `(ruleset_id, version)`.
+
+Saving an invalid draft is allowed so authors can checkpoint incomplete work.
+Publishing is the hard gate: `publish(ruleset)` fails before status change if
+the configured validator reports any errors.
 
 What `publish(ruleset)` does:
 
 1. Normalizes the ruleset again.
 2. Validates the normalized ruleset again as a publish-time gate.
-3. Persists validation-result rows for the publish validation run.
-4. Fails before publishing if validation has errors.
-5. Saves the normalized ruleset as draft metadata.
-6. Verifies the target version exists and is still `draft`.
-7. Verifies no other version of the same `ruleset_name` is published.
-8. Updates only the parent ruleset row to `status = published`.
-9. Stamps `published_by` and `published_at`.
+3. Fails before publishing if validation has errors.
+4. Saves the normalized ruleset as draft metadata.
+5. Verifies the target version exists and is still `draft`.
+6. Verifies no other version of the same `ruleset_name` is published.
+7. Updates the same `ruleset_versions` row to `status = published`.
+8. Stamps `published_by` and `published_at`.
 
 The double validation is deliberate. A previous draft save is not treated as
 proof that the ruleset object being published is unchanged.
 
 Tables affected by draft/publish:
 
-- `rulesets`: parent lifecycle/provenance row. This is where `status`,
-  `created_by`, `created_at`, `published_by`, `published_at`, and
-  `content_hash` live.
-- `rules`: one row per rule.
-- `condition_groups`: one row per logical group.
-- `conditions`: one row per condition, with operand payload JSON for variable
-  operand shapes.
-- `assignments`: one row per assignment.
-- `validation_results`: one positive `INFO / VALIDATION_PASSED` row for clean
-  validation, or issue rows when validation fails.
+- `ruleset_versions`: authoritative lifecycle/provenance/payload row.
+- `function_registry`: unaffected by draft/publish unless registry metadata is
+  saved separately.
 
 Publishing metadata does not evaluate business data. It answers: "Is this
 ruleset valid, persisted, auditable, and available to runtime?" Spark DataFrame
@@ -976,6 +972,8 @@ created_by
 created_at
 published_by
 published_at
+retired_by
+retired_at
 content_hash
 ```
 
@@ -983,27 +981,16 @@ content_hash
 uses `system`, which is appropriate for locked-down production jobs that run
 through a dedicated cluster or service principal.
 
-Child metadata rows include:
+`content_hash` is a deterministic SHA-256 hash of the persisted
+`payload_json` bytes. Lifecycle status and provenance are excluded from the
+payload, so the hash represents rule content rather than who saved or
+published it. An auditor can recompute it directly from the stored
+`payload_json` column.
 
-```text
-created_by
-created_at
-```
-
-Validation result rows include:
-
-```text
-run_at
-```
-
-Clean validation runs write an explicit `INFO / VALIDATION_PASSED` row with
-`details_payload = {"issue_count": 0}`. Validation-result persistence therefore
-records positive evidence that validation ran, rather than relying on an empty
-table to imply success.
-
-`content_hash` is a deterministic SHA-256 hash of canonical ruleset content.
-Lifecycle status and provenance are excluded from the hash, so the hash
-represents rule content rather than who saved or published it.
+There is no runtime `validation_results` table. Publication is the validation
+gate: if a ruleset version is `published`, it passed the configured validator
+at publish time. Failed validations are returned to the caller and are not part
+of runtime metadata.
 
 The audit model supports these operational questions:
 
@@ -1012,7 +999,7 @@ The audit model supports these operational questions:
 - Who published it?
 - When was it published?
 - Did the content change between environments?
-- Which validation issues existed at save or publish time?
+- What exact canonical YAML/JSON payload was published?
 
 ## Reconciliation CSV Translation Utility
 
@@ -1021,6 +1008,9 @@ one-time migration utility that converts external reconciliation CSV specs
 into canonical YAML authoring payloads.
 
 It does not participate in runtime execution.
+It is kept in the repository under `tools/`, but it is intentionally excluded
+from the production wheel artifact. Run it from source or package it separately
+for migration work.
 
 The intended workflow is:
 
@@ -1135,20 +1125,25 @@ Databricks or copy cells into a Databricks notebook. It walks through:
 - Spark DataFrame evaluation,
 - reconciliation CSV translation.
 
-The legacy account-key Python-authoring notebook is:
+The quickstart notebook is:
 
 ```text
-notebooks/legacy_ruleset_translation_guide.py
+notebooks/rules_engine_quickstart.py
 ```
 
-It demonstrates code-based ruleset authoring with the public dataclass API:
-`Ruleset`, `Rule`, `ConditionGroup`, `Condition`, operands, and assignments.
-The notebook reads the legacy `rules_engine_old/rulesets` files only as source
-facts, builds canonical Python ruleset objects, validates those objects, exports
-canonical YAML with `YamlRulesetExporter`, and then compiles the exported YAML
-again as a round-trip check. By default, it writes files to
-`python_authored_legacy_rulesets/` so it does not overwrite the direct
-translation artifacts in `translated_legacy_rulesets/`.
+It provides the shortest Databricks workflow: compile YAML, validate for Spark,
+create metadata tables, publish, load, and evaluate a Spark DataFrame.
+
+The Python authoring notebook is:
+
+```text
+notebooks/python_ruleset_authoring_guide.py
+```
+
+It demonstrates code-based ruleset authoring with the public dataclass API,
+validates the resulting model, exports canonical YAML with
+`YamlRulesetExporter`, and evaluates a small fixture with the pure-Python
+runtime. By default, it writes the generated example YAML to `rule_sets/`.
 
 ## Testing
 
@@ -1193,6 +1188,10 @@ databricks.yml
 resources/rules_engine_smoke_test.job.yml
 databricks/smoke_test_rules_engine.py
 ```
+
+The production wheel includes the `rules_engine` package only. Repository
+utilities under `tools/` are intentionally excluded from the wheel because they
+are migration/support tooling, not runtime dependencies.
 
 Build the wheel locally:
 
@@ -1307,6 +1306,13 @@ version or retire/publish through the intended lifecycle.
 
 ## Known Limitations
 
+- v1 supports one published version per `ruleset_name`. Retire the currently
+  published version before publishing a replacement version.
+- v1 does not guarantee concurrent publish safety. Run publication from a
+  controlled promotion workflow, not competing interactive jobs.
+- `save_draft` uses a replace-style draft write. Use it for controlled
+  authoring/checkpoint workflows; do not treat it as a concurrent production
+  promotion transaction.
 - Spark runtime uses a Python UDF for final rule evaluation.
 - Spark runtime does not yet compile every row predicate into native Spark
   expressions.
@@ -1314,7 +1320,14 @@ version or retire/publish through the intended lifecycle.
   [Spark Compatibility Validation](#spark-compatibility-validation).
 - Spark `median` and `quantile` are not enabled until exact Spark semantics are
   implemented.
+- `like` and `not_like` support SQL `%` and `_` wildcards. Escape-character
+  semantics for literal `%` or `_` are not part of v1.
+- Custom function implementations must be available to Spark workers and must
+  be serializable by Spark's Python UDF machinery. Prefer named module-level
+  functions over lambdas.
+- The pure-Python evaluator is a reference/test utility. Production execution
+  is Databricks Spark.
+- Utilities under `tools/`, notebooks, and sample `rule_sets/` are not included
+  in the production wheel.
 - Runtime traces are compact rule/condition pass-fail structures, not full
   resolved-value audit records.
-- Packaging and deployment strategy should be finalized before broader
-  Databricks rollout.

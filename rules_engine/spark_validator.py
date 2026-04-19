@@ -15,7 +15,14 @@ from rules_engine.enums import (
     ObjectType,
     ValidationSeverity,
 )
-from rules_engine.models import AggregateOperand, Condition, ConditionGroup, Operand, Ruleset
+from rules_engine.models import (
+    AggregateOperand,
+    Condition,
+    ConditionGroup,
+    Operand,
+    Ruleset,
+    ValidationResult,
+)
 from rules_engine.validator import RulesetValidator
 
 
@@ -28,7 +35,8 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         """
         Validate base semantics plus Spark runtime compatibility.
         """
-        result = super().validate(ruleset)
+        result = ValidationResult()
+        self.populate_result(ruleset, result)
         for rule in ruleset.rules:
             self._validate_group_for_spark(rule.root_group, result)
         return result.finalize()

@@ -5,13 +5,8 @@ def _repository():
     return SparkDeltaRulesetRepository(
         None,
         RulesEngineTableNames(
-            rulesets="rulesets",
-            rules="rules",
-            condition_groups="condition_groups",
-            conditions="conditions",
-            assignments="assignments",
+            ruleset_versions="ruleset_versions",
             function_registry="function_registry",
-            validation_results="validation_results",
         ),
     )
 
@@ -20,29 +15,28 @@ def _field_names(schema):
     return {field.name for field in schema.fields}
 
 
-def test_ruleset_schema_contains_provenance_and_hash_fields():
-    fields = _field_names(_repository().ruleset_schema)
+def test_ruleset_version_schema_contains_payload_provenance_and_hash_fields():
+    fields = _field_names(_repository().ruleset_version_schema)
 
     assert {
+        "payload_json",
         "created_by",
         "created_at",
         "published_by",
         "published_at",
+        "retired_by",
+        "retired_at",
         "content_hash",
     } <= fields
 
 
-def test_child_metadata_schemas_contain_created_provenance():
-    repository = _repository()
+def test_ruleset_version_schema_contains_summary_counts():
+    fields = _field_names(_repository().ruleset_version_schema)
 
-    for schema in [
-        repository.rule_schema,
-        repository.condition_group_schema,
-        repository.condition_schema,
-        repository.assignment_schema,
-    ]:
-        assert {"created_by", "created_at"} <= _field_names(schema)
-
-
-def test_validation_result_schema_contains_run_at():
-    assert "run_at" in _field_names(_repository().validation_result_schema)
+    assert {
+        "rule_count",
+        "condition_count",
+        "assignment_count",
+        "aggregate_count",
+        "custom_function_count",
+    } <= fields

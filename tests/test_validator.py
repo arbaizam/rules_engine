@@ -196,6 +196,7 @@ def test_null_result_mode_default_without_default_fails_validation():
     )
 
     assert any(issue.check_name == "NULL_DEFAULT_REQUIRED" for issue in result.issues)
+    assert result.passed is False
 
 
 def test_valid_string_operators_validate():
@@ -212,3 +213,82 @@ def test_valid_string_operators_validate():
 
     assert not RulesetValidator().validate(ruleset).has_errors()
 
+
+def test_empty_aggregate_filter_fails_validation():
+    result = _validate_condition(
+        {
+            "left": {
+                "aggregate": {
+                    "function": "sum",
+                    "field": "amount",
+                    "scope": "dataset",
+                    "filter": {"all": []},
+                    "null_input_mode": "ignore",
+                    "null_result_mode": "null",
+                }
+            },
+            "operator": "gt",
+            "right": {"literal": 1},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+
+    assert any(issue.check_name == "AGGREGATE_FILTER_EMPTY" for issue in result.issues)
+
+
+def test_between_with_nonzero_tolerance_fails_validation():
+    result = _validate_condition(
+        {
+            "left": {"field": "amount"},
+            "operator": "between",
+            "right": {"literal": [10, 20]},
+            "tolerance_abs": "0.01",
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+
+    assert any(issue.check_name == "BETWEEN_TOLERANCE_FORBIDDEN" for issue in result.issues)
+
+
+def test_duplicate_condition_ids_fail_validation():
+    payload = {
+        "ruleset_id": "rs1",
+        "ruleset_name": "Ruleset",
+        "version": "1",
+        "status": "draft",
+        "rules": [
+            {
+                "rule_id": "r1",
+                "rule_name": "Rule 1",
+                "rule_order": 1,
+                "when": {
+                    "all": [
+                        {
+                            "condition_id": "duplicate_condition",
+                            "left": {"field": "account"},
+                            "operator": "eq",
+                            "right": {"literal": "A"},
+                            "null_input_mode": "propagate",
+                            "null_result_mode": "null",
+                        },
+                        {
+                            "condition_id": "duplicate_condition",
+                            "left": {"field": "status"},
+                            "operator": "eq",
+                            "right": {"literal": "OPEN"},
+                            "null_input_mode": "propagate",
+                            "null_result_mode": "null",
+                        },
+                    ]
+                },
+                "assign": {"bucket": "A"},
+            }
+        ],
+    }
+
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+    result = RulesetValidator().validate(ruleset)
+
+    assert any(issue.check_name == "CONDITION_ID_DUPLICATE" for issue in result.issues)

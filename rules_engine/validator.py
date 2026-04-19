@@ -62,8 +62,14 @@ class RulesetValidator:
             Structured validation result.
         """
         result = ValidationResult()
-        self._validate_ruleset(ruleset, result)
+        self.populate_result(ruleset, result)
         return result.finalize()
+
+    def populate_result(self, ruleset: Ruleset, result: ValidationResult) -> None:
+        """
+        Add validation issues for a ruleset into an existing result object.
+        """
+        self._validate_ruleset(ruleset, result)
 
     def _validate_ruleset(self, ruleset: Ruleset, result: ValidationResult) -> None:
         if not ruleset.ruleset_id:
@@ -87,6 +93,7 @@ class RulesetValidator:
 
         seen_rule_orders: set[int] = set()
         seen_rule_ids: set[str] = set()
+        seen_condition_ids: set[str] = set()
         for rule in ruleset.rules:
             if rule.rule_id in seen_rule_ids:
                 self._add(
@@ -106,12 +113,17 @@ class RulesetValidator:
                     rule.rule_id,
                 )
             seen_rule_orders.add(rule.rule_order)
-            self._validate_rule(rule, result)
+            self._validate_rule(rule, result, seen_condition_ids)
 
-    def _validate_rule(self, rule: Rule, result: ValidationResult) -> None:
+    def _validate_rule(
+        self,
+        rule: Rule,
+        result: ValidationResult,
+        seen_condition_ids: set[str],
+    ) -> None:
         if not rule.rule_name:
             self._add(result, "RULE_NAME_REQUIRED", "rule_name is required.", ObjectType.RULE, rule.rule_id)
-        self._validate_condition_group(rule.root_group, result)
+        self._validate_condition_group(rule.root_group, result, seen_condition_ids)
         if not rule.assignments:
             self._add(
                 result,
@@ -133,7 +145,12 @@ class RulesetValidator:
             seen_assignment_ids.add(assignment.assignment_id)
             self._validate_assignment(assignment, result)
 
-    def _validate_condition_group(self, group: ConditionGroup, result: ValidationResult) -> None:
+    def _validate_condition_group(
+        self,
+        group: ConditionGroup,
+        result: ValidationResult,
+        seen_condition_ids: set[str],
+    ) -> None:
         if not group.condition_group_id:
             self._add(
                 result,
@@ -151,9 +168,18 @@ class RulesetValidator:
                 group.condition_group_id,
             )
         for condition in group.conditions:
+            if condition.condition_id in seen_condition_ids:
+                self._add(
+                    result,
+                    "CONDITION_ID_DUPLICATE",
+                    f"Duplicate condition_id detected: {condition.condition_id}",
+                    ObjectType.CONDITION,
+                    condition.condition_id,
+                )
+            seen_condition_ids.add(condition.condition_id)
             self._validate_condition(condition, result)
         for nested_group in group.groups:
-            self._validate_condition_group(nested_group, result)
+            self._validate_condition_group(nested_group, result, seen_condition_ids)
 
     def _validate_condition(self, condition: Condition, result: ValidationResult) -> None:
         if condition.tolerance_abs < Decimal("0"):
@@ -196,6 +222,17 @@ class RulesetValidator:
             )
         if condition.operator in COLLECTION_LITERAL_OPERATORS and isinstance(condition.right, LiteralOperand):
             self._validate_collection_literal(condition, result)
+        if (
+            condition.operator in {ComparisonOperator.BETWEEN, ComparisonOperator.NOT_BETWEEN}
+            and condition.tolerance_abs != Decimal("0")
+        ):
+            self._add(
+                result,
+                "BETWEEN_TOLERANCE_FORBIDDEN",
+                "tolerance_abs must be 0 for between/not_between operators.",
+                ObjectType.CONDITION,
+                condition.condition_id,
+            )
 
     def _validate_collection_literal(self, condition: Condition, result: ValidationResult) -> None:
         right = condition.right
@@ -348,6 +385,14 @@ class RulesetValidator:
                 object_id,
             )
         if operand.filter is not None:
+            if not operand.filter.predicates:
+                self._add(
+                    result,
+                    "AGGREGATE_FILTER_EMPTY",
+                    "Aggregate filter must contain at least one predicate.",
+                    ObjectType.CONDITION,
+                    object_id,
+                )
             for predicate in operand.filter.predicates:
                 self._validate_row_filter_predicate(predicate, result, object_id)
 
@@ -493,4 +538,3 @@ class RulesetValidator:
             object_id,
             details,
         )
-

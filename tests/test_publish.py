@@ -17,15 +17,11 @@ class RecordingRepository:
         self.published = (ruleset_id, version)
         self.published_by = published_by
 
-    def retire(self, ruleset_id, version):
+    def retire(self, ruleset_id, version, *, retired_by=None):
         raise NotImplementedError
 
     def load_published(self, ruleset_name, version=None):
         raise NotImplementedError
-
-    def save_validation_results(self, ruleset_id, version, validation_result):
-        self.validation = validation_result
-
 
 def _ruleset(status):
     return YamlRulesetCompiler().compile_payload(

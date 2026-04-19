@@ -369,13 +369,8 @@ if spark_validation.has_errors():
 # MAGIC
 # MAGIC Tables created:
 # MAGIC
-# MAGIC - rulesets
-# MAGIC - rules
-# MAGIC - condition_groups
-# MAGIC - conditions
-# MAGIC - assignments
+# MAGIC - ruleset_versions
 # MAGIC - function_registry
-# MAGIC - validation_results
 # MAGIC
 # MAGIC This cell is intentionally destructive for the guide schema only.
 
@@ -396,13 +391,8 @@ def table_name(suffix: str) -> str:
 
 
 table_names = RulesEngineTableNames(
-    rulesets=table_name("rulesets"),
-    rules=table_name("rules"),
-    condition_groups=table_name("condition_groups"),
-    conditions=table_name("conditions"),
-    assignments=table_name("assignments"),
+    ruleset_versions=table_name("ruleset_versions"),
     function_registry=table_name("function_registry"),
-    validation_results=table_name("validation_results"),
 )
 
 repository = SparkDeltaRulesetRepository(spark, table_names)
@@ -415,8 +405,8 @@ table_names
 # MAGIC %md
 # MAGIC ## 8. Save Draft And Publish
 # MAGIC
-# MAGIC `PublishService` orchestrates normalization, validation, validation-result
-# MAGIC persistence, draft save, and publish status update.
+# MAGIC `PublishService` orchestrates normalization, validation, draft save, and
+# MAGIC publish status update.
 # MAGIC
 # MAGIC Published metadata is immutable by `(ruleset_id, version)`. If you rerun
 # MAGIC this cell after publication, retire or overwrite the smoke tables first.
@@ -431,27 +421,22 @@ table_names
 # MAGIC 2. Calls `save_draft(ruleset)`.
 # MAGIC 3. Normalizes the ruleset so persistence-ready fields are explicit.
 # MAGIC 4. Runs semantic validation plus Spark compatibility validation.
-# MAGIC 5. Writes draft metadata into the Delta metadata tables.
-# MAGIC 6. Writes validation audit rows into `validation_results`.
-# MAGIC 7. Calls `publish(ruleset)`.
-# MAGIC 8. Re-normalizes and re-validates the ruleset as a publish-time gate.
-# MAGIC 9. Rewrites the draft rows for this version, because it is still `draft`.
-# MAGIC 10. Updates the parent `rulesets` row to `status = published`.
+# MAGIC 5. Writes one draft row into `ruleset_versions`.
+# MAGIC 6. Calls `publish(ruleset)`.
+# MAGIC 7. Re-normalizes and re-validates the ruleset as a publish-time gate.
+# MAGIC 8. Rewrites the draft row for this version, because it is still `draft`.
+# MAGIC 9. Updates the same `ruleset_versions` row to `status = published`.
 # MAGIC
 # MAGIC `save_draft` and `publish` both validate intentionally. A prior draft save
 # MAGIC is not treated as proof that the object being published is unchanged.
 # MAGIC
 # MAGIC Tables affected by this cell:
 # MAGIC
-# MAGIC - `rulesets`: one parent metadata row. After publish, `status` should be
-# MAGIC   `published`, `published_by` should be `system`, and `published_at` should
-# MAGIC   be populated.
-# MAGIC - `rules`: one row per rule.
-# MAGIC - `condition_groups`: one row per logical group.
-# MAGIC - `conditions`: one row per condition, with operand payload JSON.
-# MAGIC - `assignments`: one row per emitted assignment.
-# MAGIC - `validation_results`: one positive `INFO / VALIDATION_PASSED` row when
-# MAGIC   validation is clean, or issue rows when validation fails.
+# MAGIC - `ruleset_versions`: one authoritative metadata row. After publish,
+# MAGIC   `status` should be `published`, `published_by` should be `system`,
+# MAGIC   `published_at` should be populated, and `payload_json` should contain the
+# MAGIC   full canonical ruleset. Lifecycle status is authoritative in the table row,
+# MAGIC   not duplicated inside the payload.
 # MAGIC
 # MAGIC This cell does **not** evaluate input business data. It only promotes rule
 # MAGIC metadata into an auditable, published state. Row evaluation happens in the
@@ -473,7 +458,7 @@ if draft_validation.has_errors():
 
 publish_service.publish(ruleset)
 
-display(spark.table(table_names.rulesets))
+display(spark.table(table_names.ruleset_versions))
 
 # COMMAND ----------
 
@@ -578,34 +563,29 @@ assert result_df.where("rules_engine_matched").count() == 2
 # MAGIC only where operand/function payloads vary.
 # MAGIC
 # MAGIC Clean validation runs write an explicit `INFO / VALIDATION_PASSED` row, so
-# MAGIC the validation table provides positive evidence that validation ran.
+# MAGIC the payload columns preserve the exact canonical metadata that was published.
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
 # MAGIC - Displays each metadata table created by the repository.
-# MAGIC - Lets engineers inspect how tree-shaped YAML was flattened into
-# MAGIC   queryable Delta rows.
+# MAGIC - Lets engineers inspect the authoritative ruleset version payload and
+# MAGIC   function registry table.
 # MAGIC
 # MAGIC What to inspect:
 # MAGIC
-# MAGIC - `rulesets.status` should be `published`.
-# MAGIC - `rulesets.created_by` should be `system` when actor fields are omitted.
-# MAGIC - `rulesets.published_by` should be `system` after publish.
-# MAGIC - `rulesets.content_hash` should be populated.
-# MAGIC - `conditions.left_operand_payload_json` should contain structured operand
-# MAGIC   metadata.
-# MAGIC - `validation_results.check_name` should include `VALIDATION_PASSED`.
+# MAGIC - `ruleset_versions.status` should be `published`.
+# MAGIC - `ruleset_versions.created_by` should be `system` when actor fields are omitted.
+# MAGIC - `ruleset_versions.published_by` should be `system` after publish.
+# MAGIC - `ruleset_versions.content_hash` should be populated.
+# MAGIC - `ruleset_versions.payload_json` should contain the full canonical ruleset.
+# MAGIC - `ruleset_versions.rule_count` and `condition_count` should be populated.
 # MAGIC
 # MAGIC This cell is read-only.
 
 # COMMAND ----------
 
-display(spark.table(table_names.rulesets))
-display(spark.table(table_names.rules))
-display(spark.table(table_names.condition_groups))
-display(spark.table(table_names.conditions))
-display(spark.table(table_names.assignments))
-display(spark.table(table_names.validation_results))
+display(spark.table(table_names.ruleset_versions))
+display(spark.table(table_names.function_registry))
 
 # COMMAND ----------
 
@@ -616,11 +596,11 @@ display(spark.table(table_names.validation_results))
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
-# MAGIC 1. Calls `repository.retire(ruleset_id, version)`.
-# MAGIC 2. Updates the parent `rulesets` row to `status = retired`.
+# MAGIC 1. Calls `repository.retire(ruleset_id, version, retired_by=...)`.
+# MAGIC 2. Updates the `ruleset_versions` row to `status = retired`.
 # MAGIC 3. Attempts to load the same ruleset through `load_published()`.
 # MAGIC 4. Expects `RepositoryError`, because retired metadata is not published.
-# MAGIC 5. Displays the `rulesets` table so the lifecycle transition is visible.
+# MAGIC 5. Displays the `ruleset_versions` table so the lifecycle transition is visible.
 # MAGIC
 # MAGIC Retire does not delete metadata. It changes lifecycle status so prior
 # MAGIC metadata remains auditable but is no longer returned by runtime
@@ -628,7 +608,7 @@ display(spark.table(table_names.validation_results))
 
 # COMMAND ----------
 
-repository.retire("account_review_rules", "1")
+repository.retire("account_review_rules", "1", retired_by="developer_guide")
 
 try:
     repository.load_published("Account Review Rules", version="1")
@@ -637,7 +617,7 @@ except RepositoryError as exc:
 else:
     raise AssertionError("Retired ruleset was still loadable as published.")
 
-display(spark.table(table_names.rulesets))
+display(spark.table(table_names.ruleset_versions))
 
 # COMMAND ----------
 

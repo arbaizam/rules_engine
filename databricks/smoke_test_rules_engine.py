@@ -4,6 +4,12 @@ Databricks smoke test for rules_engine.
 Run this after installing or copying the package into a Databricks cluster.
 It creates/overwrites a small set of smoke-test Delta tables, publishes one
 ruleset, evaluates a Spark DataFrame, and verifies retire/load behavior.
+
+Warning
+-------
+This script calls ``create_base_tables(mode="overwrite")`` and destroys the
+target smoke-test metadata tables. Use only disposable database/schema/table
+prefixes.
 """
 
 from __future__ import annotations
@@ -26,7 +32,10 @@ from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepo
 
 
 DATABASE = os.getenv("RULES_ENGINE_SMOKE_DATABASE", "default")
-TABLE_PREFIX = os.getenv("RULES_ENGINE_SMOKE_TABLE_PREFIX", "rules_engine_smoke")
+TABLE_PREFIX = os.getenv(
+    "RULES_ENGINE_SMOKE_TABLE_PREFIX",
+    "rules_engine_smoke_test_deleteme",
+)
 
 
 def table_name(name: str) -> str:
@@ -37,13 +46,8 @@ def table_name(name: str) -> str:
 def build_table_names() -> RulesEngineTableNames:
     """Return the Delta table names used by this smoke test."""
     return RulesEngineTableNames(
-        rulesets=table_name("rulesets"),
-        rules=table_name("rules"),
-        condition_groups=table_name("condition_groups"),
-        conditions=table_name("conditions"),
-        assignments=table_name("assignments"),
+        ruleset_versions=table_name("ruleset_versions"),
         function_registry=table_name("function_registry"),
-        validation_results=table_name("validation_results"),
     )
 
 
@@ -100,7 +104,8 @@ def run_smoke_test(spark_session) -> None:
     repository = SparkDeltaRulesetRepository(spark_session, table_names)
     repository.create_base_tables(mode="overwrite")
 
-    validator = SparkRulesetCompatibilityValidator(FunctionRegistry())
+    registry = FunctionRegistry()
+    validator = SparkRulesetCompatibilityValidator(registry)
     publish_service = PublishService(
         repository=repository,
         validator=validator,
@@ -108,10 +113,6 @@ def run_smoke_test(spark_session) -> None:
     )
 
     ruleset = build_ruleset()
-    validation = validator.validate(ruleset)
-    if validation.has_errors():
-        raise AssertionError(validation.to_text())
-
     publish_service.publish(ruleset)
     loaded = repository.load_published("Smoke Ruleset", version="1")
 
@@ -123,7 +124,7 @@ def run_smoke_test(spark_session) -> None:
             {"account": "C", "status": "CLOSED", "amount": 500},
         ]
     )
-    output_df = SparkRulesEngineRuntime(repository, FunctionRegistry()).evaluate_dataframe(
+    output_df = SparkRulesEngineRuntime(repository, registry).evaluate_dataframe(
         input_df,
         loaded,
         fail_on_error=True,
@@ -135,7 +136,7 @@ def run_smoke_test(spark_session) -> None:
     if matched_count != 2:
         raise AssertionError(f"Expected 2 matched rows, got {matched_count}.")
 
-    repository.retire("smoke_ruleset", "1")
+    repository.retire("smoke_ruleset", "1", retired_by="smoke_test")
     try:
         repository.load_published("Smoke Ruleset", version="1")
     except RepositoryError:

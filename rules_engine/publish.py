@@ -35,17 +35,16 @@ class PublishService:
     ) -> ValidationResult:
         """
         Normalize, validate, and save draft metadata.
+
+        Validation errors are returned but do not block draft persistence.
+        This lets authors checkpoint incomplete work while keeping ``publish``
+        as the hard validation gate.
         """
         if ruleset.status is not RulesetStatus.DRAFT:
             raise ValidationFailedError("save_draft requires ruleset status=draft.")
         normalized = self._normalizer.normalize_ruleset(ruleset)
         validation = self._validator.validate(normalized)
         self._repository.save_draft(normalized, created_by=created_by)
-        self._repository.save_validation_results(
-            normalized.ruleset_id,
-            normalized.version,
-            validation,
-        )
         return validation
 
     def publish(
@@ -62,11 +61,6 @@ class PublishService:
             raise ValidationFailedError("publish requires ruleset status=draft.")
         normalized = self._normalizer.normalize_ruleset(ruleset)
         validation = self._validator.validate(normalized)
-        self._repository.save_validation_results(
-            normalized.ruleset_id,
-            normalized.version,
-            validation,
-        )
         if validation.has_errors():
             raise ValidationFailedError(
                 f"Publish failed for ruleset={normalized.ruleset_name}, version={normalized.version}"

@@ -19,6 +19,7 @@ from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
+from rules_engine.aggregate_key import aggregate_key
 from rules_engine.enums import (
     AggregateFunction,
     AggregateScope,
@@ -126,7 +127,7 @@ class SparkRulesEngineRuntime:
         bindings = self._discover_aggregate_bindings(ruleset)
         augmented = self._with_aggregate_columns(df, bindings)
         aggregate_lookup = {
-            self._aggregate_key(binding.operand): binding.column_name
+            aggregate_key(binding.operand): binding.column_name
             for binding in bindings
         }
 
@@ -253,7 +254,7 @@ class SparkRulesEngineRuntime:
         operands: dict[str, AggregateOperand],
     ) -> None:
         if isinstance(operand, AggregateOperand):
-            operands[self._aggregate_key(operand)] = operand
+            operands[aggregate_key(operand)] = operand
 
     def _with_aggregate_columns(
         self,
@@ -329,6 +330,8 @@ class SparkRulesEngineRuntime:
     def _filtered_frame(self, df: DataFrame, operand: AggregateOperand) -> DataFrame:
         if operand.filter is None:
             return df
+        if not operand.filter.predicates:
+            raise ValueError("Aggregate filter must contain at least one predicate.")
         predicates = [self._row_filter_expr(predicate) for predicate in operand.filter.predicates]
         if operand.filter.logical_operator is LogicalOperator.ALL:
             combined = predicates[0]
@@ -471,13 +474,6 @@ class SparkRulesEngineRuntime:
             return self._aggregate_result_expr(operand, F.count(value_col))
         if operand.function is AggregateFunction.COUNT_DISTINCT:
             return self._aggregate_result_expr(operand, F.count_distinct(value_col))
-        if operand.function is AggregateFunction.MEDIAN:
-            return self._aggregate_result_expr(operand, F.percentile_approx(value_col, 0.5))
-        if operand.function is AggregateFunction.QUANTILE:
-            return self._aggregate_result_expr(
-                operand,
-                F.percentile_approx(value_col, float(operand.args["q"])),
-            )
         if operand.function is AggregateFunction.STDDEV:
             return self._aggregate_result_expr(operand, F.stddev_pop(value_col))
         if operand.function is AggregateFunction.VARIANCE:
@@ -534,22 +530,6 @@ class SparkRulesEngineRuntime:
         column = F.col(order.field)
         return column.desc_nulls_last() if order.direction == "asc" else column.asc_nulls_last()
 
-    def _aggregate_key(self, operand: AggregateOperand) -> str:
-        return repr(
-            (
-                operand.function.value,
-                operand.field_name,
-                operand.scope.value,
-                operand.by,
-                sorted(operand.args.items()),
-                operand.filter,
-                operand.order_by,
-                operand.null_input_mode.value,
-                operand.null_result_mode.value,
-                operand.null_default_value,
-            )
-        )
-
     def _validate_spark_supported_aggregate(self, operand: AggregateOperand) -> None:
         if operand.function in {AggregateFunction.MEDIAN, AggregateFunction.QUANTILE}:
             raise ValueError(
@@ -595,21 +575,5 @@ class SparkRowRuntime(RulesEngineRuntime):
         aggregate_cache: Any,
     ) -> Any:
         if isinstance(operand, AggregateOperand):
-            return row.get(self._aggregate_lookup[self._aggregate_key(operand)])
+            return row.get(self._aggregate_lookup[aggregate_key(operand)])
         return super()._resolve_operand(operand, row, row_index, aggregate_cache)
-
-    def _aggregate_key(self, operand: AggregateOperand) -> str:
-        return repr(
-            (
-                operand.function.value,
-                operand.field_name,
-                operand.scope.value,
-                operand.by,
-                sorted(operand.args.items()),
-                operand.filter,
-                operand.order_by,
-                operand.null_input_mode.value,
-                operand.null_result_mode.value,
-                operand.null_default_value,
-            )
-        )

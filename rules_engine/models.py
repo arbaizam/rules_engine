@@ -2,16 +2,16 @@
 Domain models for rules engine metadata.
 
 These dataclasses define the canonical in-memory representation of a ruleset
-and the flattened row objects used for Delta persistence.
+and the row objects used for Delta persistence.
 
 Design notes
 ------------
 The YAML authoring format is tree-shaped because condition groups are easiest
 to read that way.
 
-The persisted representation is relational because ruleset metadata needs to
-be queryable in Databricks. Variable operand shapes are stored as structured
-payloads while stable fields remain first-class columns.
+The persisted representation treats a ruleset version as one immutable
+metadata document with selected queryable columns for lifecycle, provenance,
+hashing, and summary counts.
 """
 
 from __future__ import annotations
@@ -70,13 +70,23 @@ class ValidationResult:
 
     Notes
     -----
-    The result object mirrors the hierarchy engine pattern: callers can inspect
-    issues programmatically, render a readable text summary, and persist the
-    same details as validation-result metadata rows.
+    ``passed`` is derived from the current issue list so callers cannot observe
+    a stale pass/fail flag before a validator finalizes the result.
     """
 
-    passed: bool = True
     issues: list[ValidationIssue] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        """
+        Return whether validation has no error-severity issues.
+
+        Returns
+        -------
+        bool
+            True when no collected issue has severity ``ERROR``.
+        """
+        return not self.has_errors()
 
     def add_issue(
         self,
@@ -129,14 +139,13 @@ class ValidationResult:
 
     def finalize(self) -> "ValidationResult":
         """
-        Finalize the pass/fail flag from collected issues.
+        Return this result for validators that use an explicit finalize step.
 
         Returns
         -------
         ValidationResult
-            The same object with ``passed`` updated.
+            The same object. ``passed`` is derived dynamically.
         """
-        self.passed = not self.has_errors()
         return self
 
     def to_text(self) -> str:
@@ -391,91 +400,27 @@ class Ruleset:
 
 
 @dataclass(frozen=True)
-class RulesetRow:
-    """Ruleset table row."""
+class RulesetVersionRow:
+    """Authoritative ruleset version table row."""
 
     ruleset_id: str
     ruleset_name: str
     version: str
     status: str
     description: str | None
+    payload_json: str
+    content_hash: str
+    rule_count: int
+    condition_count: int
+    assignment_count: int
+    aggregate_count: int
+    custom_function_count: int
     created_by: str
     created_at: str
     published_by: str | None
     published_at: str | None
-    content_hash: str
-
-
-@dataclass(frozen=True)
-class RuleRow:
-    """Rule table row."""
-
-    rule_id: str
-    ruleset_id: str
-    ruleset_version: str
-    rule_name: str
-    rule_order: int
-    active_flag: bool
-    stop_on_match: bool
-    description: str | None
-    created_by: str
-    created_at: str
-
-
-@dataclass(frozen=True)
-class ConditionGroupRow:
-    """Condition-group table row."""
-
-    condition_group_id: str
-    ruleset_id: str
-    ruleset_version: str
-    rule_id: str
-    parent_condition_group_id: str | None
-    logical_operator: str
-    group_order: int
-    created_by: str
-    created_at: str
-
-
-@dataclass(frozen=True)
-class ConditionRow:
-    """Condition table row."""
-
-    condition_id: str
-    ruleset_id: str
-    ruleset_version: str
-    rule_id: str
-    condition_group_id: str
-    condition_order: int
-    left_operand_kind: str
-    left_operand_payload: dict[str, Any]
-    operator: str
-    right_operand_kind: str | None
-    right_operand_payload: dict[str, Any] | None
-    aggregate_scope: str | None
-    tolerance_abs: str
-    null_input_mode: str
-    null_result_mode: str
-    null_default_value: Any | None
-    active_flag: bool
-    created_by: str
-    created_at: str
-
-
-@dataclass(frozen=True)
-class AssignmentRow:
-    """Assignment table row."""
-
-    assignment_id: str
-    ruleset_id: str
-    ruleset_version: str
-    rule_id: str
-    assignment_order: int
-    target_field: str
-    assign_operand_kind: str
-    assign_operand_payload: dict[str, Any]
-    created_by: str
-    created_at: str
+    retired_by: str | None
+    retired_at: str | None
 
 
 @dataclass(frozen=True)
@@ -494,36 +439,8 @@ class FunctionRegistryRow:
 
 
 @dataclass(frozen=True)
-class ValidationResultRow:
-    """Persisted validation issue row."""
-
-    ruleset_id: str
-    version: str
-    severity: str
-    check_name: str
-    message: str
-    object_type: str
-    object_id: str
-    details_payload: dict[str, Any] | None
-    run_at: str
-
-
-@dataclass(frozen=True)
-class DeltaRows:
-    """
-    Complete relational row set for one ruleset.
-    """
-
-    ruleset_row: RulesetRow
-    rule_rows: list[RuleRow]
-    condition_group_rows: list[ConditionGroupRow]
-    condition_rows: list[ConditionRow]
-    assignment_rows: list[AssignmentRow]
-
-
-@dataclass(frozen=True)
 class ResolvedConditionTrace:
-    """Runtime condition trace placeholder for future evaluation support."""
+    """Runtime condition trace emitted for one evaluated condition."""
 
     condition_id: str
     passed: bool
@@ -531,7 +448,7 @@ class ResolvedConditionTrace:
 
 @dataclass(frozen=True)
 class RuleExecutionTrace:
-    """Runtime rule trace placeholder for future evaluation support."""
+    """Runtime trace emitted for one evaluated rule."""
 
     rule_id: str
     condition_traces: tuple[ResolvedConditionTrace, ...]
