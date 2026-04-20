@@ -25,14 +25,32 @@ class DummyRepository:
 def spark():
     from pyspark.sql import SparkSession
 
-    session = (
-        SparkSession.builder.master("local[1]")
+    active_session = SparkSession.getActiveSession()
+    if active_session is not None:
+        yield active_session
+        return
+
+    builder = (
+        SparkSession.builder
         .appName("rules-engine-cross-runtime-parity-tests")
         .config("spark.ui.enabled", "false")
-        .getOrCreate()
     )
+    connect_or_databricks = any(
+        os.environ.get(name)
+        for name in (
+            "SPARK_REMOTE",
+            "SPARK_CONNECT_MODE_ENABLED",
+            "DATABRICKS_RUNTIME_VERSION",
+            "DATABRICKS_CLUSTER_ID",
+        )
+    )
+    if not connect_or_databricks:
+        builder = builder.master("local[1]")
+
+    session = builder.getOrCreate()
     yield session
-    session.stop()
+    if not connect_or_databricks:
+        session.stop()
 
 
 def _compile(condition):
