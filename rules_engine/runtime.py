@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from decimal import Decimal
+import logging
 import re
 from statistics import mean, median, pstdev, pvariance
 from typing import Any, Iterable, Mapping
@@ -41,12 +42,18 @@ from rules_engine.registry import FunctionRegistry
 from rules_engine.repository import RulesetRepository
 
 
+logger = logging.getLogger(__name__)
+
+
 class RulesEngineRuntime:
     """
     Runtime facade for published ruleset metadata.
     """
 
     def __init__(self, repository: RulesetRepository, function_registry: FunctionRegistry) -> None:
+        """
+        Create a runtime bound to metadata and custom-function registries.
+        """
         self._repository = repository
         self._function_registry = function_registry
 
@@ -78,6 +85,14 @@ class RulesEngineRuntime:
             Output rows and flattened rule execution traces.
         """
         materialized_rows = [dict(row) for row in rows]
+        logger.info(
+            "Evaluating ruleset in Python runtime: ruleset_id=%s ruleset_name=%s version=%s row_count=%s rule_count=%s",
+            ruleset.ruleset_id,
+            ruleset.ruleset_name,
+            ruleset.version,
+            len(materialized_rows),
+            len(ruleset.rules),
+        )
         aggregate_cache = AggregateContext(materialized_rows, self)
         output_rows: list[dict[str, Any]] = []
         traces: list[RuleExecutionTrace] = []
@@ -127,6 +142,14 @@ class RulesEngineRuntime:
                     "rule_results": rule_results,
                 }
             )
+        matched_count = sum(1 for row in output_rows if row["matched"])
+        logger.info(
+            "Python runtime evaluation complete: ruleset_id=%s version=%s row_count=%s matched_count=%s",
+            ruleset.ruleset_id,
+            ruleset.version,
+            len(output_rows),
+            matched_count,
+        )
         return output_rows, traces
 
     def _evaluate_rule(
@@ -136,6 +159,9 @@ class RulesEngineRuntime:
         row_index: int,
         aggregate_cache: "AggregateContext",
     ) -> tuple[bool, list[ResolvedConditionTrace]]:
+        """
+        Evaluate one rule against one row and collect condition traces.
+        """
         condition_traces: list[ResolvedConditionTrace] = []
         matched = self._evaluate_group(
             rule.root_group,
@@ -154,6 +180,9 @@ class RulesEngineRuntime:
         aggregate_cache: "AggregateContext",
         condition_traces: list[ResolvedConditionTrace],
     ) -> bool:
+        """
+        Evaluate a logical group and all nested child groups.
+        """
         results: list[bool] = []
         for condition in group.conditions:
             passed = self._evaluate_condition(condition, row, row_index, aggregate_cache)
@@ -182,6 +211,9 @@ class RulesEngineRuntime:
         row_index: int,
         aggregate_cache: "AggregateContext",
     ) -> bool:
+        """
+        Evaluate one active condition after resolving its operands.
+        """
         if not condition.active_flag:
             return False
         left = self._resolve_operand(condition.left, row, row_index, aggregate_cache)
@@ -210,6 +242,9 @@ class RulesEngineRuntime:
         row_index: int,
         aggregate_cache: "AggregateContext",
     ) -> dict[str, Any]:
+        """
+        Resolve all assignments for a matched rule into output values.
+        """
         return {
             assignment.target_field: self._resolve_operand(
                 assignment.value,
@@ -227,6 +262,9 @@ class RulesEngineRuntime:
         row_index: int,
         aggregate_cache: "AggregateContext",
     ) -> Any:
+        """
+        Resolve one operand against the current row or aggregate context.
+        """
         if isinstance(operand, FieldOperand):
             return row.get(operand.field_name)
         if isinstance(operand, LiteralOperand):
@@ -246,6 +284,9 @@ class RulesEngineRuntime:
         tolerance_abs: Decimal,
         null_input_mode: NullInputMode,
     ) -> bool | None:
+        """
+        Apply one comparison operator with null-input and tolerance handling.
+        """
         if operator is ComparisonOperator.IS_NULL:
             return left is None
         if operator is ComparisonOperator.IS_NOT_NULL:
@@ -301,6 +342,9 @@ class RulesEngineRuntime:
         right: Any,
         null_input_mode: NullInputMode,
     ) -> tuple[Any, Any, bool]:
+        """
+        Apply configured null-input handling before comparison.
+        """
         if left is not None and right is not None:
             return left, right, False
         if null_input_mode is NullInputMode.ERROR:
@@ -315,6 +359,9 @@ class RulesEngineRuntime:
         null_result_mode: NullResultMode,
         null_default_value: Any | None,
     ) -> bool:
+        """
+        Convert a nullable comparison result into a final boolean result.
+        """
         if result is not None:
             return bool(result)
         if null_result_mode is NullResultMode.ERROR:
@@ -324,11 +371,17 @@ class RulesEngineRuntime:
         return False
 
     def _equals(self, left: Any, right: Any, tolerance_abs: Decimal) -> bool:
+        """
+        Compare equality, applying absolute tolerance for numeric values.
+        """
         if self._is_numeric(left) and self._is_numeric(right):
             return abs(self._decimal(left) - self._decimal(right)) <= tolerance_abs
         return left == right
 
     def _is_numeric(self, value: Any) -> bool:
+        """
+        Return whether a value can be safely treated as a non-boolean number.
+        """
         try:
             Decimal(str(value))
         except Exception:
@@ -336,6 +389,9 @@ class RulesEngineRuntime:
         return not isinstance(value, bool)
 
     def _decimal(self, value: Any) -> Decimal:
+        """
+        Convert a runtime value to ``Decimal`` for numeric comparison.
+        """
         return Decimal(str(value))
 
     def _sql_like(self, value: str, pattern: str) -> bool:
@@ -362,6 +418,9 @@ class AggregateContext:
     """
 
     def __init__(self, rows: list[dict[str, Any]], runtime: RulesEngineRuntime) -> None:
+        """
+        Create a per-evaluation aggregate context over materialized rows.
+        """
         self._rows = rows
         self._runtime = runtime
         self._dataset_cache: dict[str, Any] = {}
@@ -374,10 +433,23 @@ class AggregateContext:
         cache_key = self._cache_key(operand)
         if operand.scope is AggregateScope.DATASET:
             if cache_key not in self._dataset_cache:
+                logger.debug(
+                    "Calculating dataset aggregate: function=%s field=%s row_count=%s",
+                    operand.function.value,
+                    operand.field_name,
+                    len(self._rows),
+                )
                 self._dataset_cache[cache_key] = self._calculate(operand, self._rows)
             return self._dataset_cache[cache_key]
 
         if cache_key not in self._group_cache:
+            logger.debug(
+                "Calculating group aggregate: function=%s field=%s by=%s row_count=%s",
+                operand.function.value,
+                operand.field_name,
+                list(operand.by),
+                len(self._rows),
+            )
             grouped_rows: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
             for row in self._rows:
                 grouped_rows[self._group_key(operand, row)].append(row)
@@ -389,6 +461,9 @@ class AggregateContext:
         return self._group_cache[cache_key].get(current_key)
 
     def _calculate(self, operand: AggregateOperand, rows: list[dict[str, Any]]) -> Any:
+        """
+        Calculate one aggregate over a scoped row subset.
+        """
         filtered_rows = self._filter_rows(operand, rows)
         ordered_rows = self._order_rows(operand, filtered_rows)
         values = self._extract_values(operand, ordered_rows)
@@ -427,6 +502,9 @@ class AggregateContext:
         operand: AggregateOperand,
         rows: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        """
+        Apply an aggregate's optional row-level filter to candidate rows.
+        """
         if operand.filter is None:
             return rows
         filtered: list[dict[str, Any]] = []
@@ -448,6 +526,9 @@ class AggregateContext:
         predicate: RowFilterPredicate,
         row: Mapping[str, Any],
     ) -> bool:
+        """
+        Evaluate one aggregate-filter predicate against one row.
+        """
         if isinstance(predicate.left, AggregateOperand) or isinstance(predicate.right, AggregateOperand):
             raise RuntimeError("Nested aggregate in filter predicate at runtime.")
         left = self._runtime._resolve_operand(predicate.left, row, 0, self)
@@ -474,6 +555,9 @@ class AggregateContext:
         operand: AggregateOperand,
         rows: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        """
+        Return rows ordered for order-sensitive aggregate functions.
+        """
         ordered_rows = list(rows)
         for order in reversed(operand.order_by):
             ordered_rows.sort(
@@ -489,6 +573,9 @@ class AggregateContext:
         return ordered_rows
 
     def _sortable_value(self, value: Any) -> Any:
+        """
+        Normalize None for Python sort keys while preserving non-null values.
+        """
         return "" if value is None else value
 
     def _extract_values(
@@ -496,6 +583,9 @@ class AggregateContext:
         operand: AggregateOperand,
         rows: list[dict[str, Any]],
     ) -> list[Any] | None:
+        """
+        Extract aggregate input values while applying null-input behavior.
+        """
         values: list[Any] = []
         for row in rows:
             value = row.get(operand.field_name)
@@ -513,6 +603,9 @@ class AggregateContext:
         return values
 
     def _resolve_aggregate_null(self, operand: AggregateOperand) -> Any:
+        """
+        Resolve an empty or null-propagated aggregate result.
+        """
         if operand.null_result_mode is NullResultMode.ERROR:
             raise ValueError("Null aggregate result encountered with null_result_mode=error.")
         if operand.null_result_mode is NullResultMode.DEFAULT:
@@ -520,6 +613,9 @@ class AggregateContext:
         return None
 
     def _quantile(self, values: list[Any], q: Decimal) -> Any:
+        """
+        Calculate an exact linear-interpolated quantile.
+        """
         sorted_values = sorted(values)
         if len(sorted_values) == 1:
             return sorted_values[0]
@@ -532,7 +628,13 @@ class AggregateContext:
         return lower + (upper - lower) * fraction
 
     def _group_key(self, operand: AggregateOperand, row: Mapping[str, Any]) -> tuple[Any, ...]:
+        """
+        Build the group cache key for a group-scoped aggregate.
+        """
         return tuple(row.get(field_name) for field_name in operand.by)
 
     def _cache_key(self, operand: AggregateOperand) -> str:
+        """
+        Build the aggregate operand cache key.
+        """
         return aggregate_key(operand)

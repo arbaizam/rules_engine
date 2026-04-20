@@ -45,6 +45,9 @@ class RulesetValidator:
     """
 
     def __init__(self, function_registry: FunctionRegistry | None = None) -> None:
+        """
+        Create a validator with an optional custom function registry.
+        """
         self._function_registry = function_registry
 
     def validate(self, ruleset: Ruleset) -> ValidationResult:
@@ -72,6 +75,9 @@ class RulesetValidator:
         self._validate_ruleset(ruleset, result)
 
     def _validate_ruleset(self, ruleset: Ruleset, result: ValidationResult) -> None:
+        """
+        Validate top-level ruleset identity, ownership, and child rules.
+        """
         if not ruleset.ruleset_id:
             self._add(result, "RULESET_ID_REQUIRED", "ruleset_id is required.", ObjectType.RULESET, "")
         if not ruleset.ruleset_name:
@@ -79,6 +85,22 @@ class RulesetValidator:
                 result,
                 "RULESET_NAME_REQUIRED",
                 "ruleset_name is required.",
+                ObjectType.RULESET,
+                ruleset.ruleset_id,
+            )
+        if not ruleset.owner:
+            self._add(
+                result,
+                "RULESET_OWNER_REQUIRED",
+                "owner is required.",
+                ObjectType.RULESET,
+                ruleset.ruleset_id,
+            )
+        if not ruleset.owner_department:
+            self._add(
+                result,
+                "RULESET_OWNER_DEPARTMENT_REQUIRED",
+                "owner_department is required.",
                 ObjectType.RULESET,
                 ruleset.ruleset_id,
             )
@@ -121,6 +143,9 @@ class RulesetValidator:
         result: ValidationResult,
         seen_condition_ids: set[str],
     ) -> None:
+        """
+        Validate one rule and its condition tree and assignments.
+        """
         if not rule.rule_name:
             self._add(result, "RULE_NAME_REQUIRED", "rule_name is required.", ObjectType.RULE, rule.rule_id)
         self._validate_condition_group(rule.root_group, result, seen_condition_ids)
@@ -151,6 +176,9 @@ class RulesetValidator:
         result: ValidationResult,
         seen_condition_ids: set[str],
     ) -> None:
+        """
+        Validate one condition group and recursively validate child groups.
+        """
         if not group.condition_group_id:
             self._add(
                 result,
@@ -182,6 +210,9 @@ class RulesetValidator:
             self._validate_condition_group(nested_group, result, seen_condition_ids)
 
     def _validate_condition(self, condition: Condition, result: ValidationResult) -> None:
+        """
+        Validate one condition's tolerance, null handling, operands, and operator shape.
+        """
         if condition.tolerance_abs < Decimal("0"):
             self._add(
                 result,
@@ -204,6 +235,9 @@ class RulesetValidator:
         self._validate_operator_operands(condition, result)
 
     def _validate_operator_operands(self, condition: Condition, result: ValidationResult) -> None:
+        """
+        Validate operator arity and literal shape requirements.
+        """
         if condition.operator in UNARY_OPERATORS and condition.right is not None:
             self._add(
                 result,
@@ -235,6 +269,9 @@ class RulesetValidator:
             )
 
     def _validate_collection_literal(self, condition: Condition, result: ValidationResult) -> None:
+        """
+        Validate literal collection requirements for collection operators.
+        """
         right = condition.right
         if not isinstance(right, LiteralOperand):
             return
@@ -258,6 +295,9 @@ class RulesetValidator:
                 )
 
     def _validate_assignment(self, assignment: Assignment, result: ValidationResult) -> None:
+        """
+        Validate one assignment target and value operand.
+        """
         if not assignment.target_field:
             self._add(
                 result,
@@ -276,6 +316,9 @@ class RulesetValidator:
         *,
         in_assignment: bool,
     ) -> None:
+        """
+        Validate one operand according to its concrete operand type.
+        """
         object_type = ObjectType.ASSIGNMENT if in_assignment else ObjectType.CONDITION
         if isinstance(operand, FieldOperand):
             if not operand.field_name:
@@ -309,6 +352,9 @@ class RulesetValidator:
         *,
         in_assignment: bool,
     ) -> None:
+        """
+        Validate aggregate scope, args, ordering, null behavior, and filters.
+        """
         if in_assignment:
             self._add(
                 result,
@@ -402,6 +448,9 @@ class RulesetValidator:
         result: ValidationResult,
         object_id: str,
     ) -> None:
+        """
+        Validate one row-level predicate inside an aggregate filter.
+        """
         if predicate.tolerance_abs < Decimal("0"):
             self._add(
                 result,
@@ -451,6 +500,9 @@ class RulesetValidator:
         *,
         in_assignment: bool,
     ) -> None:
+        """
+        Validate a custom-function operand against the registered contract.
+        """
         object_type = ObjectType.ASSIGNMENT if in_assignment else ObjectType.CONDITION
         if self._function_registry is None:
             self._add(
@@ -513,6 +565,9 @@ class RulesetValidator:
             )
 
     def _valid_quantile(self, value: Any) -> bool:
+        """
+        Return whether a quantile argument is numeric and inside [0, 1].
+        """
         if value is None:
             return False
         try:
@@ -530,6 +585,9 @@ class RulesetValidator:
         object_id: str,
         details: dict[str, Any] | None = None,
     ) -> None:
+        """
+        Add one error-severity validation issue to the result.
+        """
         result.add_issue(
             ValidationSeverity.ERROR,
             check_name,

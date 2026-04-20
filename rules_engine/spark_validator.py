@@ -42,17 +42,26 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         return result.finalize()
 
     def _validate_group_for_spark(self, group: ConditionGroup, result) -> None:
+        """
+        Validate every condition in a group tree for Spark compatibility.
+        """
         for condition in group.conditions:
             self._validate_condition_for_spark(condition, result)
         for nested_group in group.groups:
             self._validate_group_for_spark(nested_group, result)
 
     def _validate_condition_for_spark(self, condition: Condition, result) -> None:
+        """
+        Validate Spark compatibility for operands used by one condition.
+        """
         self._validate_operand_for_spark(condition.left, condition.condition_id, result)
         if condition.right is not None:
             self._validate_operand_for_spark(condition.right, condition.condition_id, result)
 
     def _validate_operand_for_spark(self, operand: Operand, condition_id: str, result) -> None:
+        """
+        Dispatch Spark compatibility checks for aggregate operands.
+        """
         if isinstance(operand, AggregateOperand):
             self._validate_aggregate_for_spark(operand, condition_id, result)
 
@@ -62,6 +71,9 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         condition_id: str,
         result,
     ) -> None:
+        """
+        Add Spark compatibility errors for unsupported aggregate features.
+        """
         if operand.function in {AggregateFunction.MEDIAN, AggregateFunction.QUANTILE}:
             self._add_spark_error(
                 result,
@@ -111,6 +123,9 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                     )
 
     def _add_spark_error(self, result, check_name: str, message: str, condition_id: str) -> None:
+        """
+        Append one Spark compatibility validation error.
+        """
         result.add_issue(
             ValidationSeverity.ERROR,
             check_name,

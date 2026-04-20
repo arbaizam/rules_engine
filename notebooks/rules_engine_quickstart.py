@@ -45,6 +45,8 @@ ruleset_id: quickstart_account_review
 ruleset_name: Quickstart Account Review
 version: "1"
 status: draft
+owner: Rules Team
+owner_department: ALM Engineering
 rules:
   - rule_id: open_high_value
     rule_name: Open High Value

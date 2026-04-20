@@ -59,6 +59,8 @@ def build_ruleset():
             "ruleset_name": "Smoke Ruleset",
             "version": "1",
             "status": "draft",
+            "owner": "Rules Team",
+            "owner_department": "ALM Engineering",
             "rules": [
                 {
                     "rule_id": "high_value_open",

@@ -72,6 +72,11 @@ def _assert_parity(spark, rows, condition):
 
 
 def test_cross_runtime_parity_row_comparison(spark):
+    """
+    What: Compares Python and Spark results for a simple row comparison.
+    Why: Spark row UDF behavior should preserve reference runtime semantics.
+    Fails when: Basic equality matching diverges between runtimes.
+    """
     _assert_parity(
         spark,
         [{"row_id": 1, "account": "A"}, {"row_id": 2, "account": "B"}],
@@ -86,6 +91,11 @@ def test_cross_runtime_parity_row_comparison(spark):
 
 
 def test_cross_runtime_parity_string_operator(spark):
+    """
+    What: Compares Python and Spark results for SQL LIKE wildcard matching.
+    Why: LIKE was a prior semantic divergence risk and needs parity coverage.
+    Fails when: Python regex LIKE and Spark Column.like disagree.
+    """
     _assert_parity(
         spark,
         [{"row_id": 1, "name": "abcde"}, {"row_id": 2, "name": "xyz"}],
@@ -100,6 +110,11 @@ def test_cross_runtime_parity_string_operator(spark):
 
 
 def test_cross_runtime_parity_dataset_aggregate(spark):
+    """
+    What: Compares Python and Spark results for dataset aggregate evaluation.
+    Why: Aggregate precompute must preserve reference runtime results.
+    Fails when: Spark dataset aggregate values differ from Python aggregate values.
+    """
     _assert_parity(
         spark,
         [{"row_id": 1, "amount": 10}, {"row_id": 2, "amount": 20}],
@@ -122,6 +137,11 @@ def test_cross_runtime_parity_dataset_aggregate(spark):
 
 
 def test_cross_runtime_parity_group_aggregate(spark):
+    """
+    What: Compares Python and Spark results for group aggregate evaluation.
+    Why: Explicit group scope must behave identically across runtimes.
+    Fails when: Spark grouping/joining diverges from Python group-key resolution.
+    """
     _assert_parity(
         spark,
         [
@@ -149,6 +169,11 @@ def test_cross_runtime_parity_group_aggregate(spark):
 
 
 def test_cross_runtime_parity_filtered_aggregate(spark):
+    """
+    What: Compares Python and Spark results for filtered aggregate evaluation.
+    Why: Filtered aggregate semantics must not depend on runtime implementation.
+    Fails when: Spark filter precompute and Python filter evaluation diverge.
+    """
     _assert_parity(
         spark,
         [
@@ -186,6 +211,11 @@ def test_cross_runtime_parity_filtered_aggregate(spark):
 
 
 def test_cross_runtime_parity_first_with_desc_null_ordering(spark):
+    """
+    What: Compares Python and Spark results for FIRST desc ordering with nulls.
+    Why: Descending null ordering was a prior cross-runtime divergence risk.
+    Fails when: Either runtime changes null placement for order-sensitive aggregates.
+    """
     _assert_parity(
         spark,
         [

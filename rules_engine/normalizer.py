@@ -42,6 +42,9 @@ class RulesetNormalizer:
         )
 
     def _normalize_rule(self, rule: Rule) -> Rule:
+        """
+        Normalize one rule's condition tree and assignment operands.
+        """
         return replace(
             rule,
             root_group=self._normalize_group(rule.root_group),
@@ -49,6 +52,9 @@ class RulesetNormalizer:
         )
 
     def _normalize_group(self, group: ConditionGroup) -> ConditionGroup:
+        """
+        Normalize every condition and nested group in a logical group.
+        """
         return replace(
             group,
             conditions=tuple(self._normalize_condition(item) for item in group.conditions),
@@ -56,6 +62,9 @@ class RulesetNormalizer:
         )
 
     def _normalize_condition(self, condition: Condition) -> Condition:
+        """
+        Normalize a condition's operands and explicit absolute tolerance.
+        """
         return replace(
             condition,
             left=self._normalize_operand(condition.left),
@@ -64,9 +73,19 @@ class RulesetNormalizer:
         )
 
     def _normalize_assignment(self, assignment: Assignment) -> Assignment:
+        """
+        Normalize the operand used as an assignment value.
+        """
         return replace(assignment, value=self._normalize_operand(assignment.value))
 
     def _normalize_operand(self, operand: Operand) -> Operand:
+        """
+        Rebuild an operand into a fully materialized immutable shape.
+
+        This is especially important for aggregate args and custom function
+        args, which are accepted as mappings but should persist as ordinary
+        dictionaries.
+        """
         if isinstance(operand, AggregateOperand):
             return AggregateOperand.build(
                 function=operand.function,
@@ -95,6 +114,9 @@ class RulesetNormalizer:
         self,
         aggregate_filter: AggregateFilter | None,
     ) -> AggregateFilter | None:
+        """
+        Normalize all predicates in an aggregate filter.
+        """
         if aggregate_filter is None:
             return None
         return AggregateFilter(
@@ -116,4 +138,3 @@ class RulesetNormalizer:
                 for predicate in aggregate_filter.predicates
             ),
         )
-

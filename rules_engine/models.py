@@ -397,6 +397,44 @@ class Ruleset:
     status: RulesetStatus
     rules: tuple[Rule, ...]
     description: str | None = None
+    owner: str | None = None
+    owner_department: str | None = None
+
+
+@dataclass(frozen=True)
+class PayloadMetadata:
+    """
+    Summary metadata derived from a canonical ruleset payload.
+
+    These values are stored together as a nested Delta struct so operational
+    queries can inspect ruleset size and complexity without parsing
+    ``payload_json``.
+    """
+
+    rule_count: int
+    condition_count: int
+    assignment_count: int
+    aggregate_count: int
+    custom_function_count: int
+
+
+@dataclass(frozen=True)
+class UserMetadata:
+    """
+    Lifecycle actor and timestamp metadata for one ruleset version.
+
+    The fields are stored together as a nested Delta struct because they all
+    describe who performed lifecycle actions and when those actions occurred.
+    """
+
+    owner: str | None
+    owner_department: str | None
+    created_by: str
+    created_at: str
+    published_by: str | None
+    published_at: str | None
+    retired_by: str | None
+    retired_at: str | None
 
 
 @dataclass(frozen=True)
@@ -410,17 +448,8 @@ class RulesetVersionRow:
     description: str | None
     payload_json: str
     content_hash: str
-    rule_count: int
-    condition_count: int
-    assignment_count: int
-    aggregate_count: int
-    custom_function_count: int
-    created_by: str
-    created_at: str
-    published_by: str | None
-    published_at: str | None
-    retired_by: str | None
-    retired_at: str | None
+    payload_metadata: PayloadMetadata | Mapping[str, Any]
+    user_metadata: UserMetadata | Mapping[str, Any]
 
 
 @dataclass(frozen=True)

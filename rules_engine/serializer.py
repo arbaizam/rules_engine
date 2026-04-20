@@ -15,8 +15,10 @@ from rules_engine.models import (
     CustomFunctionOperand,
     FunctionRegistryRow,
     Operand,
+    PayloadMetadata,
     Ruleset,
     RulesetVersionRow,
+    UserMetadata,
 )
 from rules_engine.registry import CustomFunctionSpec
 
@@ -53,17 +55,23 @@ class DeltaRowSerializer:
             description=ruleset.description,
             payload_json=payload_json,
             content_hash=self.content_hash_from_payload_json(payload_json),
-            rule_count=len(ruleset.rules),
-            condition_count=self._count_conditions(ruleset),
-            assignment_count=sum(len(rule.assignments) for rule in ruleset.rules),
-            aggregate_count=self._count_operands(ruleset, AggregateOperand),
-            custom_function_count=self._count_operands(ruleset, CustomFunctionOperand),
-            created_by=created_by,
-            created_at=created_at,
-            published_by=published_by,
-            published_at=published_at,
-            retired_by=retired_by,
-            retired_at=retired_at,
+            payload_metadata=PayloadMetadata(
+                rule_count=len(ruleset.rules),
+                condition_count=self._count_conditions(ruleset),
+                assignment_count=sum(len(rule.assignments) for rule in ruleset.rules),
+                aggregate_count=self._count_operands(ruleset, AggregateOperand),
+                custom_function_count=self._count_operands(ruleset, CustomFunctionOperand),
+            ),
+            user_metadata=UserMetadata(
+                owner=ruleset.owner,
+                owner_department=ruleset.owner_department,
+                created_by=created_by,
+                created_at=created_at,
+                published_by=published_by,
+                published_at=published_at,
+                retired_by=retired_by,
+                retired_at=retired_at,
+            ),
         )
 
     def deserialize_ruleset_version(self, row: RulesetVersionRow) -> Ruleset:
@@ -106,14 +114,23 @@ class DeltaRowSerializer:
         return CustomFunctionSpec.from_row(row)
 
     def _count_conditions(self, ruleset: Ruleset) -> int:
+        """
+        Count all conditions in all rule condition trees.
+        """
         return sum(self._count_group_conditions(rule.root_group) for rule in ruleset.rules)
 
     def _count_group_conditions(self, group: ConditionGroup) -> int:
+        """
+        Count conditions in one group and its nested child groups.
+        """
         return len(group.conditions) + sum(
             self._count_group_conditions(child) for child in group.groups
         )
 
     def _count_operands(self, ruleset: Ruleset, operand_type: type) -> int:
+        """
+        Count operands of a target type across conditions and assignments.
+        """
         count = 0
         for rule in ruleset.rules:
             count += self._count_group_operands(rule.root_group, operand_type)
@@ -122,6 +139,9 @@ class DeltaRowSerializer:
         return count
 
     def _count_group_operands(self, group: ConditionGroup, operand_type: type) -> int:
+        """
+        Count operands of a target type within one condition group tree.
+        """
         count = 0
         for condition in group.conditions:
             count += self._count_operand_tree(condition.left, operand_type)
@@ -132,6 +152,9 @@ class DeltaRowSerializer:
         return count
 
     def _count_operand_tree(self, operand: Operand, operand_type: type) -> int:
+        """
+        Count one operand and any operands nested inside aggregate filters.
+        """
         count = 1 if isinstance(operand, operand_type) else 0
         if isinstance(operand, AggregateOperand) and operand.filter is not None:
             for predicate in operand.filter.predicates:
@@ -141,6 +164,9 @@ class DeltaRowSerializer:
         return count
 
     def _payload_json(self, ruleset: Ruleset) -> str:
+        """
+        Serialize the canonical authoring payload used for persistence.
+        """
         payload = YamlRulesetExporter().export_payload(ruleset)
         payload.pop("status", None)
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))

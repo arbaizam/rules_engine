@@ -63,6 +63,8 @@ A `Ruleset` is the top-level metadata object. It has:
 - `ruleset_name`
 - `version`
 - `status`
+- `owner`
+- `owner_department`
 - optional `description`
 - ordered `rules`
 
@@ -593,6 +595,8 @@ ruleset_id: account_rules
 ruleset_name: Account Rules
 version: "1"
 status: draft
+owner: Rules Team
+owner_department: ALM Engineering
 rules:
   - rule_id: trad_account
     rule_name: TRAD Account
@@ -618,6 +622,8 @@ ruleset_id: account_rules
 ruleset_name: Account Rules
 version: "1"
 status: draft
+owner: Rules Team
+owner_department: ALM Engineering
 rules:
   - rule_id: high_value_account
     rule_name: High Value Account
@@ -963,23 +969,194 @@ Publishing metadata does not evaluate business data. It answers: "Is this
 ruleset valid, persisted, auditable, and available to runtime?" Spark DataFrame
 evaluation happens separately through `SparkRulesEngineRuntime`.
 
+### Lifecycle Flow
+
+This diagram shows the full ruleset lifecycle from authoring through runtime
+evaluation and retirement.
+
+```mermaid
+flowchart TD
+    A["Author Ruleset"] --> B{"Authoring Method"}
+
+    B --> B1["YAML Authoring<br/>YamlRulesetCompiler.compile_text(...)"]
+    B --> B2["Python Authoring<br/>Ruleset / Rule / Condition dataclasses"]
+
+    B1 --> C["Canonical Ruleset Dataclass"]
+    B2 --> C["Canonical Ruleset Dataclass"]
+
+    C --> D["Normalize Ruleset<br/>RulesetNormalizer.normalize_ruleset(...)"]
+
+    D --> E["Validate Ruleset<br/>RulesetValidator or SparkRulesetCompatibilityValidator"]
+
+    E --> F{"Validation Has Errors?"}
+
+    F -->|Yes, save_draft called| G["Persist Draft Row Anyway<br/>status = draft<br/>owner / owner_department populated<br/>created_by / created_at populated<br/>published_by / published_at null"]
+    F -->|Yes, publish called| H["Publish Fails<br/>No published metadata created<br/>Caller receives ValidationFailedError"]
+
+    F -->|No| I{"Requested Operation"}
+
+    I -->|save_draft| G
+    I -->|publish| J["Serialize Ruleset For Persistence"]
+
+    G --> G1["ruleset_versions Table<br/>Row is visible as draft<br/>Not runtime-loadable"]
+
+    J --> K["Build payload_json<br/>Canonical ruleset payload<br/>Lifecycle status excluded"]
+
+    K --> L["Compute content_hash<br/>SHA-256 of payload_json bytes"]
+
+    L --> M["Write Draft Row<br/>status = draft<br/>payload_metadata populated<br/>user_metadata populated<br/>content_hash populated"]
+
+    M --> N["Repository Publish Guard"]
+
+    N --> N1{"Target Row Exists?"}
+    N1 -->|No| N2["Publish Fails<br/>RepositoryError"]
+    N1 -->|Yes| N3{"Target Status Is Draft?"}
+
+    N3 -->|No| N4["Publish Fails<br/>Cannot overwrite published/retired version"]
+    N3 -->|Yes| N5{"Another Version Of Same ruleset_name Published?"}
+
+    N5 -->|Yes| N6["Publish Fails<br/>One published version per ruleset_name"]
+    N5 -->|No| O["Update Same Row To Published<br/>status = published<br/>published_by / published_at populated"]
+
+    O --> P["ruleset_versions Table<br/>Published row is runtime-loadable"]
+
+    P --> Q["Runtime Load<br/>repository.load_published(ruleset_name, version)"]
+
+    Q --> R["Filter Metadata<br/>status = published"]
+
+    R --> S["Deserialize payload_json<br/>Reconstruct canonical Ruleset"]
+
+    S --> T["Evaluate DataFrame<br/>SparkRulesEngineRuntime.evaluate_dataframe(...)"]
+
+    T --> U["Output Columns<br/>rules_engine_matched<br/>rules_engine_matched_rule_ids<br/>rules_engine_assign<br/>rules_engine_rule_results<br/>rules_engine_error"]
+
+    P --> V["Retire Ruleset Version<br/>repository.retire(ruleset_id, version, retired_by=...)"]
+
+    V --> W["Update Same Row To Retired<br/>status = retired<br/>retired_by / retired_at populated"]
+
+    W --> X["Retired Row Remains Auditable<br/>No longer loadable by load_published(...)"]
+
+    G1 -.-> Y["Important Distinction<br/>Draft rows exist in Delta<br/>but runtime ignores them"]
+    P -.-> Z["Audit Identity<br/>content_hash proves exact published payload"]
+    Z -.-> Z1["Auditor can recompute:<br/>sha256(payload_json bytes) == content_hash"]
+```
+
+### Lifecycle States
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft: save_draft() or publish() internal draft write
+
+    Draft --> Draft: save_draft() again\nallowed only while status=draft
+    Draft --> Published: publish()\nvalidation passes
+    Draft --> [*]: validation errors remain draft only\nnot runtime-loadable
+
+    Published --> Retired: retire()
+    Published --> Published: overwrite blocked
+    Retired --> Retired: overwrite blocked
+
+    note right of Draft
+        Row exists in ruleset_versions.
+        owner and owner_department are populated.
+        created_by and created_at are populated.
+        Runtime does not load it.
+    end note
+
+    note right of Published
+        Row is runtime-loadable.
+        published_by and published_at are populated.
+        content_hash identifies payload_json.
+    end note
+
+    note right of Retired
+        Row remains for audit.
+        Runtime no longer loads it.
+        retired_by and retired_at are populated.
+    end note
+```
+
+### Table State Transitions
+
+```mermaid
+flowchart LR
+    A["save_draft(ruleset)"] --> B["ruleset_versions row"]
+
+    B --> B1["status = draft"]
+    B --> B2["user_metadata.owner = populated"]
+    B --> B3["user_metadata.owner_department = populated"]
+    B --> B4["user_metadata.created_by = populated"]
+    B --> B5["user_metadata.created_at = populated"]
+    B --> B6["user_metadata.published_by = null"]
+    B --> B7["user_metadata.published_at = null"]
+    B --> B8["payload_json = populated"]
+    B --> B9["payload_metadata = populated"]
+    B --> B10["content_hash = sha256(payload_json)"]
+
+    C["publish(ruleset)"] --> D["save/replace draft row"]
+    D --> E["validation gate"]
+    E --> F["status update"]
+
+    F --> F1["status = published"]
+    F --> F2["user_metadata.published_by = populated"]
+    F --> F3["user_metadata.published_at = populated"]
+    F --> F4["payload_json unchanged"]
+    F --> F5["content_hash unchanged"]
+
+    G["retire(ruleset_id, version)"] --> H["status update"]
+
+    H --> H1["status = retired"]
+    H --> H2["user_metadata.retired_by = populated"]
+    H --> H3["user_metadata.retired_at = populated"]
+    H --> H4["payload_json unchanged"]
+    H --> H5["content_hash unchanged"]
+```
+
+Key lifecycle points:
+
+- `payload_json` is the canonical persisted ruleset content.
+- `content_hash` is SHA-256 of the persisted `payload_json` bytes.
+- `payload_metadata` stores derived size/count metadata for queryability.
+- `user_metadata.owner` and `user_metadata.owner_department` identify business
+  ownership authored in YAML or Python.
+- `user_metadata.created_by` and `user_metadata.created_at` identify the draft
+  metadata write.
+- `user_metadata.published_by` and `user_metadata.published_at` identify promotion to runtime-loadable
+  metadata.
+- `user_metadata.retired_by` and `user_metadata.retired_at` identify removal
+  from runtime eligibility.
+- Draft rows can exist in Delta, but runtime ignores them.
+- Published rows are the only rows loaded by `load_published(...)`.
+- Retired rows remain in Delta for audit but are not runtime-loadable.
+- `publish(...)` can be called directly; it internally writes the draft row
+  first, then promotes that row.
+
 ## Auditability Model
 
 Ruleset metadata rows include:
 
 ```text
-created_by
-created_at
-published_by
-published_at
-retired_by
-retired_at
+payload_metadata.rule_count
+payload_metadata.condition_count
+payload_metadata.assignment_count
+payload_metadata.aggregate_count
+payload_metadata.custom_function_count
+user_metadata.owner
+user_metadata.owner_department
+user_metadata.created_by
+user_metadata.created_at
+user_metadata.published_by
+user_metadata.published_at
+user_metadata.retired_by
+user_metadata.retired_at
 content_hash
 ```
 
-`created_by` and `published_by` are optional. When omitted, persisted metadata
-uses `system`, which is appropriate for locked-down production jobs that run
-through a dedicated cluster or service principal.
+`owner` and `owner_department` are ruleset governance fields authored in YAML
+or Python and persisted under `user_metadata`. `created_by` and `published_by`
+are lifecycle actor fields. They are optional at API call time; when omitted,
+persisted lifecycle actor metadata uses `system`, which is appropriate for
+locked-down production jobs that run through a dedicated cluster or service
+principal.
 
 `content_hash` is a deterministic SHA-256 hash of the persisted
 `payload_json` bytes. Lifecycle status and provenance are excluded from the
@@ -1253,6 +1430,38 @@ Recommended Databricks workflow:
 7. Assert `rules_engine_error` is empty.
 8. Validate output counts and assignments against expected results.
 9. Retire test metadata.
+
+## Logging
+
+The package uses Python's standard `logging` library and does not configure
+global logging handlers. Databricks jobs, notebooks, or deployment wrappers
+should configure log level and destinations according to the environment.
+
+Useful loggers:
+
+- `rules_engine.publish`: draft save, validation result, publish start/failure/success.
+- `rules_engine.repository`: Delta table creation, draft persistence, lifecycle status
+  changes, published metadata loads, and function registry metadata writes.
+- `rules_engine.runtime`: pure-Python/reference evaluation start/end and aggregate
+  cache calculation at debug level.
+- `rules_engine.spark_runtime`: Spark DataFrame evaluation start/end, aggregate
+  precompute columns at debug level, and row-level error detection.
+
+Example notebook/job setup:
+
+```python
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+)
+```
+
+The logging intentionally avoids input row payloads, YAML payload bodies, and
+assignment values. It records identifiers, versions, counts, statuses, table
+names, and content hashes so production job logs are useful without exposing
+business-sensitive row data.
 
 ## Troubleshooting
 

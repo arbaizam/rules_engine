@@ -125,6 +125,8 @@ ruleset_id: account_review_rules
 ruleset_name: Account Review Rules
 version: "1"
 status: draft
+owner: Rules Team
+owner_department: ALM Engineering
 description: Example ruleset used by the developer guide.
 rules:
   - rule_id: high_value_open_account
@@ -411,8 +413,10 @@ table_names
 # MAGIC Published metadata is immutable by `(ruleset_id, version)`. If you rerun
 # MAGIC this cell after publication, retire or overwrite the smoke tables first.
 # MAGIC
-# MAGIC `created_by` and `published_by` are optional. When omitted, persisted
-# MAGIC metadata uses `system`, which fits dedicated production cluster execution.
+# MAGIC `owner` and `owner_department` come from the YAML/Python ruleset metadata.
+# MAGIC `created_by` and `published_by` are optional lifecycle actor fields. When
+# MAGIC omitted, persisted actor metadata uses `system`, which fits dedicated
+# MAGIC production cluster execution.
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
@@ -433,10 +437,11 @@ table_names
 # MAGIC Tables affected by this cell:
 # MAGIC
 # MAGIC - `ruleset_versions`: one authoritative metadata row. After publish,
-# MAGIC   `status` should be `published`, `published_by` should be `system`,
-# MAGIC   `published_at` should be populated, and `payload_json` should contain the
-# MAGIC   full canonical ruleset. Lifecycle status is authoritative in the table row,
-# MAGIC   not duplicated inside the payload.
+# MAGIC   `status` should be `published`, `user_metadata.owner` should reflect the
+# MAGIC   authored owner, `user_metadata.published_by` should be `system`,
+# MAGIC   `user_metadata.published_at` should be populated, and `payload_json`
+# MAGIC   should contain the full canonical ruleset. Lifecycle status is
+# MAGIC   authoritative in the table row, not duplicated inside the payload.
 # MAGIC
 # MAGIC This cell does **not** evaluate input business data. It only promotes rule
 # MAGIC metadata into an auditable, published state. Row evaluation happens in the
@@ -574,11 +579,13 @@ assert result_df.where("rules_engine_matched").count() == 2
 # MAGIC What to inspect:
 # MAGIC
 # MAGIC - `ruleset_versions.status` should be `published`.
-# MAGIC - `ruleset_versions.created_by` should be `system` when actor fields are omitted.
-# MAGIC - `ruleset_versions.published_by` should be `system` after publish.
+# MAGIC - `ruleset_versions.user_metadata.owner` should reflect the authored owner.
+# MAGIC - `ruleset_versions.user_metadata.owner_department` should reflect the authored department.
+# MAGIC - `ruleset_versions.user_metadata.created_by` should be `system` when actor fields are omitted.
+# MAGIC - `ruleset_versions.user_metadata.published_by` should be `system` after publish.
 # MAGIC - `ruleset_versions.content_hash` should be populated.
 # MAGIC - `ruleset_versions.payload_json` should contain the full canonical ruleset.
-# MAGIC - `ruleset_versions.rule_count` and `condition_count` should be populated.
+# MAGIC - `ruleset_versions.payload_metadata.rule_count` and `condition_count` should be populated.
 # MAGIC
 # MAGIC This cell is read-only.
 

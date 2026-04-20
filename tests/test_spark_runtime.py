@@ -60,6 +60,11 @@ def _compile(condition, assign=None):
 
 
 def test_spark_runtime_evaluates_row_rule(spark):
+    """
+    What: Evaluates a row-level rule through Spark DataFrame runtime.
+    Why: Spark output columns must reflect the same matching/assignment contract.
+    Fails when: UDF result struct, output columns, or assignment JSON regress.
+    """
     ruleset = _compile(
         {
             "left": {"field": "account"},
@@ -79,6 +84,11 @@ def test_spark_runtime_evaluates_row_rule(spark):
 
 
 def test_spark_runtime_evaluates_dataset_aggregate(spark):
+    """
+    What: Evaluates a dataset aggregate through Spark precompute plus UDF.
+    Why: Spark must join dataset aggregate results back to every input row.
+    Fails when: Dataset aggregate precompute or cross join behavior changes.
+    """
     ruleset = _compile(
         {
             "left": {
@@ -104,6 +114,11 @@ def test_spark_runtime_evaluates_dataset_aggregate(spark):
 
 
 def test_spark_runtime_evaluates_group_aggregate(spark):
+    """
+    What: Evaluates a group aggregate through Spark precompute plus UDF.
+    Why: Spark must compute and join aggregate values by explicit group keys.
+    Fails when: Group aggregation, join keys, or per-row lookup regresses.
+    """
     ruleset = _compile(
         {
             "left": {
@@ -136,6 +151,11 @@ def test_spark_runtime_evaluates_group_aggregate(spark):
 
 
 def test_spark_runtime_evaluates_filtered_aggregate(spark):
+    """
+    What: Evaluates a Spark dataset aggregate with an aggregate filter.
+    Why: Spark precompute must filter aggregate inputs without filtering output rows.
+    Fails when: Filter expression generation or aggregate input selection regresses.
+    """
     ruleset = _compile(
         {
             "left": {

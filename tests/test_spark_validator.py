@@ -9,6 +9,8 @@ def _validate_aggregate(aggregate_payload):
             "ruleset_name": "Ruleset",
             "version": "1",
             "status": "draft",
+            "owner": "Rules Team",
+            "owner_department": "ALM Engineering",
             "rules": [
                 {
                     "rule_id": "r1",
@@ -34,6 +36,11 @@ def _validate_aggregate(aggregate_payload):
 
 
 def test_spark_validator_rejects_median_and_quantile():
+    """
+    What: Rejects exact median and quantile aggregates for Spark publication.
+    Why: Spark v1 runtime does not provide exact percentile parity with Python.
+    Fails when: Approximate percentile paths become publishable for Spark rulesets.
+    """
     median_result = _validate_aggregate(
         {
             "function": "median",
@@ -63,6 +70,11 @@ def test_spark_validator_rejects_median_and_quantile():
 
 
 def test_spark_validator_rejects_unsupported_aggregate_null_modes():
+    """
+    What: Rejects aggregate null modes that Spark precomputation cannot honor.
+    Why: Spark aggregate columns are computed before row UDF evaluation.
+    Fails when: Runtime-only aggregate null errors can be published.
+    """
     input_result = _validate_aggregate(
         {
             "function": "sum",
@@ -91,6 +103,11 @@ def test_spark_validator_rejects_unsupported_aggregate_null_modes():
 
 
 def test_spark_validator_rejects_first_last_propagate():
+    """
+    What: Rejects FIRST/LAST aggregates with propagate null input mode.
+    Why: Spark order-sensitive aggregate precompute does not support propagate semantics.
+    Fails when: Spark-incompatible FIRST/LAST null behavior passes validation.
+    """
     result = _validate_aggregate(
         {
             "function": "first",
@@ -108,6 +125,11 @@ def test_spark_validator_rejects_first_last_propagate():
 
 
 def test_spark_validator_rejects_unsupported_filter_null_modes():
+    """
+    What: Rejects aggregate filter predicates using Spark-unsupported null error modes.
+    Why: Filter predicates run in Spark expressions, not the Python row error path.
+    Fails when: Unsupported filter null modes are silently coerced in Spark.
+    """
     result = _validate_aggregate(
         {
             "function": "sum",
@@ -136,12 +158,19 @@ def test_spark_validator_rejects_unsupported_filter_null_modes():
 
 
 def test_spark_validator_allows_condition_null_result_error_for_udf_row_path():
+    """
+    What: Allows condition-level null_result_mode=error for ordinary row UDF checks.
+    Why: Non-filter row conditions are evaluated inside the Spark Python row runtime.
+    Fails when: Spark compatibility validation blocks supported row-level error modes.
+    """
     ruleset = YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
             "status": "draft",
+            "owner": "Rules Team",
+            "owner_department": "ALM Engineering",
             "rules": [
                 {
                     "rule_id": "r1",

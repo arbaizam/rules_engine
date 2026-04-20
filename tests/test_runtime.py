@@ -36,6 +36,11 @@ def _compile(condition, assign=None):
 
 
 def test_runtime_evaluates_simple_row_rule_and_assignment():
+    """
+    What: Evaluates a basic row-level rule and assignment in Python runtime.
+    Why: This is the reference behavior used by tests and Spark row UDFs.
+    Fails when: Matching, assignment output, or rule trace generation regresses.
+    """
     ruleset = _compile(
         {
             "left": {"field": "account"},
@@ -59,6 +64,11 @@ def test_runtime_evaluates_simple_row_rule_and_assignment():
 
 
 def test_runtime_supports_canonical_string_operators():
+    """
+    What: Evaluates contains/not_contains/starts_with/ends_with in runtime.
+    Why: Canonical string operators must behave consistently after compilation.
+    Fails when: Runtime string operator dispatch or matching semantics change.
+    """
     payload = {
         "ruleset_id": "rs1",
         "ruleset_name": "Ruleset",
@@ -106,6 +116,11 @@ def test_runtime_supports_canonical_string_operators():
 
 
 def test_runtime_like_uses_sql_wildcard_semantics():
+    """
+    What: Evaluates SQL LIKE percent wildcard behavior in Python runtime.
+    Why: Python and Spark runtimes must agree on LIKE semantics.
+    Fails when: LIKE falls back to equality or mishandles SQL wildcards.
+    """
     ruleset = _compile(
         {
             "left": {"field": "name"},
@@ -122,6 +137,11 @@ def test_runtime_like_uses_sql_wildcard_semantics():
 
 
 def test_runtime_null_result_default_controls_condition_result():
+    """
+    What: Evaluates null_result_mode=default on a null comparison result.
+    Why: Null handling is explicit metadata and controls final condition truth.
+    Fails when: Null defaults are ignored or treated as ordinary nulls.
+    """
     ruleset = _compile(
         {
             "left": {"field": "missing"},
@@ -139,6 +159,11 @@ def test_runtime_null_result_default_controls_condition_result():
 
 
 def test_runtime_executes_custom_function_operand():
+    """
+    What: Resolves and executes a registered custom function operand.
+    Why: Custom logic is allowed only through the registry contract.
+    Fails when: Runtime cannot look up or call registered custom functions.
+    """
     registry = FunctionRegistry()
     registry.register(
         CustomFunctionSpec(
@@ -166,6 +191,11 @@ def test_runtime_executes_custom_function_operand():
 
 
 def test_runtime_evaluates_dataset_aggregate():
+    """
+    What: Evaluates a dataset-scoped aggregate against all rows.
+    Why: Dataset aggregates must apply to the incoming row set exactly as supplied.
+    Fails when: Dataset aggregate caching or row application semantics regress.
+    """
     ruleset = _compile(
         {
             "left": {
@@ -193,6 +223,11 @@ def test_runtime_evaluates_dataset_aggregate():
 
 
 def test_runtime_evaluates_group_aggregate_against_current_row_group():
+    """
+    What: Evaluates a group-scoped aggregate using the current row's group key.
+    Why: Group aggregates must return different values for different groups.
+    Fails when: Group-key resolution or aggregate cache partitioning regresses.
+    """
     ruleset = _compile(
         {
             "left": {
@@ -225,6 +260,11 @@ def test_runtime_evaluates_group_aggregate_against_current_row_group():
 
 
 def test_runtime_evaluates_filtered_aggregate():
+    """
+    What: Evaluates a dataset aggregate with a row-level filter.
+    Why: Filtered aggregates should filter only aggregate inputs, not output rows.
+    Fails when: Filter predicates are ignored or applied to the outer row set.
+    """
     ruleset = _compile(
         {
             "left": {
@@ -267,6 +307,11 @@ def test_runtime_evaluates_filtered_aggregate():
 
 
 def test_runtime_evaluates_order_sensitive_first_aggregate():
+    """
+    What: Evaluates FIRST aggregate with explicit ascending order_by.
+    Why: Order-sensitive aggregates require deterministic ordering.
+    Fails when: FIRST ignores order_by or uses input order accidentally.
+    """
     ruleset = _compile(
         {
             "left": {
@@ -298,6 +343,11 @@ def test_runtime_evaluates_order_sensitive_first_aggregate():
 
 
 def test_runtime_desc_ordering_keeps_nulls_last_for_first_aggregate():
+    """
+    What: Evaluates FIRST with descending order and null order values.
+    Why: Python and Spark runtimes intentionally keep nulls last for ordering.
+    Fails when: Descending sort places nulls first or diverges from Spark.
+    """
     ruleset = _compile(
         {
             "left": {
@@ -330,6 +380,11 @@ def test_runtime_desc_ordering_keeps_nulls_last_for_first_aggregate():
 
 
 def test_spark_runtime_fails_fast_for_exact_median_gap():
+    """
+    What: Calls Spark aggregate support guard for median.
+    Why: Spark exact median/quantile semantics are intentionally unsupported in v1.
+    Fails when: Approximate Spark percentile paths become silently reachable.
+    """
     ruleset = _compile(
         {
             "left": {

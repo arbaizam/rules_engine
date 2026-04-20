@@ -35,6 +35,11 @@ def source_row(
 
 
 def test_all_and_source_rule_translates_correctly():
+    """
+    What: Translates a flat all-AND reconciliation rule into canonical YAML.
+    Why: All-AND chains are the baseline source pattern for recon migration.
+    Fails when: JoinType handling, assignment output, or audit grouping regresses.
+    """
     result = ReconciliationSpecTranslator("match_rule").translate(
         [
             source_row("Rule A", 1, "BalanceType", "TextEquals", "ParAmount", "And"),
@@ -50,6 +55,11 @@ def test_all_and_source_rule_translates_correctly():
 
 
 def test_translator_can_disable_stop_on_match():
+    """
+    What: Verifies translator-level stop_on_match can be disabled.
+    Why: Some callers need metadata to return all matching rules instead of first match.
+    Fails when: The translator ignores the configured multi-match policy.
+    """
     result = ReconciliationSpecTranslator(stop_on_match=False).translate(
         [source_row("Rule A", 1, "Field", "TextEquals", "x", None)]
     )
@@ -58,6 +68,11 @@ def test_translator_can_disable_stop_on_match():
 
 
 def test_mixed_join_chain_translates_left_to_right():
+    """
+    What: Translates a mixed AND/OR chain using confirmed left-to-right semantics.
+    Why: Manual PySpark JoinType logic chains operators from each row to the next row.
+    Fails when: The translator reintroduces precedence assumptions or wrong grouping.
+    """
     result = ReconciliationSpecTranslator().translate(
         [
             source_row("Rule B", 1, "BalanceType", "TextEquals", "Unrealized", "And"),
@@ -75,6 +90,11 @@ def test_mixed_join_chain_translates_left_to_right():
 
 
 def test_group_sequence_translates_with_group_join_operator():
+    """
+    What: Translates grouped source criteria using GroupSequence and GroupJoinOperator.
+    Why: Group metadata resolves source grouping that cannot be inferred from JoinType alone.
+    Fails when: Group ordering, group joins, or audit pattern detection regresses.
+    """
     result = ReconciliationSpecTranslator().translate(
         [
             source_row(
@@ -100,6 +120,11 @@ def test_group_sequence_translates_with_group_join_operator():
 
 
 def test_operator_mapping_for_all_supported_source_operators():
+    """
+    What: Maps every supported source ValueOperator to its canonical operator.
+    Why: The translation utility must preserve source semantics without aliases.
+    Fails when: A supported operator maps incorrectly or stops translating.
+    """
     operators = [
         ("TextEquals", "eq", "x"),
         ("NumericLessThan", "lt", "1"),
@@ -124,6 +149,11 @@ def test_operator_mapping_for_all_supported_source_operators():
 
 
 def test_slug_collision_emits_unique_rule_ids_and_audit_warning():
+    """
+    What: Deduplicates translated rule IDs when source rule names slug-collide.
+    Why: Rule IDs drive audit output and must remain unique after normalization.
+    Fails when: Collision handling creates duplicate IDs or omits audit warnings.
+    """
     result = ReconciliationSpecTranslator().translate(
         [
             source_row("US Account", 1, "Field", "TextEquals", "x", None),
@@ -139,6 +169,11 @@ def test_slug_collision_emits_unique_rule_ids_and_audit_warning():
 
 
 def test_invalid_source_operator_fails_translation():
+    """
+    What: Rejects an unsupported source ValueOperator.
+    Why: The migration utility must fail explicitly instead of guessing semantics.
+    Fails when: Unsupported operators are silently converted or omitted.
+    """
     result = ReconciliationSpecTranslator().translate(
         [source_row("Rule A", 1, "Field", "Unsupported", "x", None)]
     )
@@ -148,6 +183,11 @@ def test_invalid_source_operator_fails_translation():
 
 
 def test_null_join_before_final_criterion_fails_translation():
+    """
+    What: Rejects a non-final source row with a null JoinType.
+    Why: Null JoinType terminates the source chain and later criteria are ambiguous.
+    Fails when: The translator accepts disconnected criteria without audit failure.
+    """
     result = ReconciliationSpecTranslator().translate(
         [
             source_row("Rule A", 1, "A", "TextEquals", "x", None),
@@ -160,6 +200,11 @@ def test_null_join_before_final_criterion_fails_translation():
 
 
 def test_last_group_join_operator_fails_translation():
+    """
+    What: Rejects a final source group that still declares a GroupJoinOperator.
+    Why: A final group has no next group, so the join operator cannot be applied.
+    Fails when: Dangling group joins are ignored instead of reported.
+    """
     result = ReconciliationSpecTranslator().translate(
         [
             source_row(
@@ -180,6 +225,11 @@ def test_last_group_join_operator_fails_translation():
 
 
 def test_output_yaml_aligns_to_engine_authoring_format():
+    """
+    What: Emits YAML text using the rules engine authoring vocabulary.
+    Why: Translated specs must compile as ordinary canonical authoring YAML.
+    Fails when: Writer output drifts from compiler-supported YAML shape.
+    """
     result = ReconciliationSpecTranslator().translate(
         [source_row("Rule A", 1, "Field", "TextEquals", "x", None)]
     )
@@ -192,6 +242,11 @@ def test_output_yaml_aligns_to_engine_authoring_format():
 
 
 def test_audit_artifact_contains_expected_fields():
+    """
+    What: Writes translation audit records with required governance fields.
+    Why: One-time migrations need a durable explanation of warnings and failures.
+    Fails when: Audit serialization drops source identity, counts, warnings, or failures.
+    """
     result = ReconciliationSpecTranslator().translate(
         [source_row("Rule A", 1, "Field", "TextEquals", "x", None)]
     )

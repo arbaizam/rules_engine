@@ -5,6 +5,11 @@ from rules_engine.exporter_yaml import YamlRulesetExporter
 
 
 def test_yaml_export_round_trips_compiled_ruleset():
+    """
+    What: Exports a compiled ruleset to YAML and recompiles it.
+    Why: Governance workflows need stable YAML round-trip authoring support.
+    Fails when: Exported YAML loses metadata, nested groups, aggregates, or assignments.
+    """
     compiler = YamlRulesetCompiler()
     original = compiler.compile_payload(
         {
@@ -13,6 +18,8 @@ def test_yaml_export_round_trips_compiled_ruleset():
             "version": "1",
             "status": "draft",
             "description": "Round-trip fixture",
+            "owner": "Rules Team",
+            "owner_department": "ALM Engineering",
             "rules": [
                 {
                     "rule_id": "r1",
@@ -96,12 +103,20 @@ def test_yaml_export_round_trips_compiled_ruleset():
     )
 
     yaml_text = YamlRulesetExporter().export_text(original)
+    exported = yaml.safe_load(yaml_text)
     reconstructed = compiler.compile_text(yaml_text)
 
+    assert exported["owner"] == "Rules Team"
+    assert exported["owner_department"] == "ALM Engineering"
     assert reconstructed == original
 
 
 def test_yaml_export_uses_canonical_keys():
+    """
+    What: Verifies YAML export emits canonical authoring keys only.
+    Why: Exported YAML must not reintroduce legacy aliases or internal dataclass names.
+    Fails when: Export uses value/assignments aliases or omits canonical group IDs.
+    """
     ruleset = YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "rs1",

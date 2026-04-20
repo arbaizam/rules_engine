@@ -59,6 +59,10 @@ class YamlRulesetExporter:
         }
         if ruleset.description is not None:
             payload["description"] = ruleset.description
+        if ruleset.owner is not None:
+            payload["owner"] = ruleset.owner
+        if ruleset.owner_department is not None:
+            payload["owner_department"] = ruleset.owner_department
         payload["rules"] = [self._export_rule(rule) for rule in ruleset.rules]
         return payload
 
@@ -79,6 +83,9 @@ class YamlRulesetExporter:
         Path(path).write_text(self.export_text(ruleset), encoding="utf-8")
 
     def _export_rule(self, rule: Rule) -> dict[str, Any]:
+        """
+        Export one rule into canonical YAML rule syntax.
+        """
         payload: dict[str, Any] = {
             "rule_id": rule.rule_id,
             "rule_name": rule.rule_name,
@@ -96,6 +103,9 @@ class YamlRulesetExporter:
         return payload
 
     def _export_group(self, group: ConditionGroup) -> dict[str, Any]:
+        """
+        Export a condition group, preserving its logical operator and children.
+        """
         return {
             "condition_group_id": group.condition_group_id,
             group.logical_operator.value: [
@@ -105,6 +115,9 @@ class YamlRulesetExporter:
         }
 
     def _export_condition(self, condition: Condition) -> dict[str, Any]:
+        """
+        Export one condition with explicit tolerance and null behavior fields.
+        """
         payload: dict[str, Any] = {
             "condition_id": condition.condition_id,
             "left": self._export_operand(condition.left),
@@ -121,6 +134,9 @@ class YamlRulesetExporter:
         return payload
 
     def _export_assignment(self, assignment: Assignment) -> dict[str, Any]:
+        """
+        Export one rule assignment in canonical list-entry form.
+        """
         return {
             "assignment_id": assignment.assignment_id,
             "target_field": assignment.target_field,
@@ -128,6 +144,9 @@ class YamlRulesetExporter:
         }
 
     def _export_operand(self, operand: Operand) -> dict[str, Any]:
+        """
+        Export an operand using the canonical operand key for its kind.
+        """
         if isinstance(operand, FieldOperand):
             return {"field": operand.field_name}
         if isinstance(operand, LiteralOperand):
@@ -147,6 +166,9 @@ class YamlRulesetExporter:
         raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
 
     def _export_aggregate(self, aggregate: AggregateOperand) -> dict[str, Any]:
+        """
+        Export an aggregate operand with explicit scope and runtime metadata.
+        """
         payload: dict[str, Any] = {
             "function": aggregate.function.value,
             "field": aggregate.field_name,
@@ -167,6 +189,9 @@ class YamlRulesetExporter:
         return payload
 
     def _export_filter(self, aggregate_filter: AggregateFilter) -> dict[str, Any]:
+        """
+        Export a filtered aggregate predicate group.
+        """
         return {
             aggregate_filter.logical_operator.value: [
                 self._export_filter_predicate(predicate)
@@ -175,6 +200,9 @@ class YamlRulesetExporter:
         }
 
     def _export_filter_predicate(self, predicate: RowFilterPredicate) -> dict[str, Any]:
+        """
+        Export one row-level filtered aggregate predicate.
+        """
         payload: dict[str, Any] = {
             "left": self._export_operand(predicate.left),
             "operator": predicate.operator.value,
@@ -189,15 +217,24 @@ class YamlRulesetExporter:
         return payload
 
     def _export_order_by(self, order_by: OrderBySpec) -> dict[str, str]:
+        """
+        Export one aggregate order-by specification.
+        """
         return {
             "field": order_by.field,
             "direction": order_by.direction,
         }
 
     def _export_decimal(self, value: Decimal) -> str:
+        """
+        Export a decimal as a non-scientific string.
+        """
         return format(value, "f")
 
     def _export_value(self, value: Any) -> Any:
+        """
+        Recursively convert Python values into YAML-safe scalar/list/dict values.
+        """
         if isinstance(value, Decimal):
             return self._export_decimal(value)
         if isinstance(value, tuple):

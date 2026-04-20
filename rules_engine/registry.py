@@ -98,6 +98,9 @@ class FunctionRegistry:
     """
 
     def __init__(self) -> None:
+        """
+        Create an empty in-memory custom function registry.
+        """
         self._specs: dict[str, CustomFunctionSpec] = {}
         self._implementations: dict[str, CustomFunction] = {}
 
@@ -146,4 +149,3 @@ class FunctionRegistry:
         Return whether function metadata is registered.
         """
         return function_name in self._specs
-

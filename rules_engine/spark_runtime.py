@@ -11,6 +11,7 @@ assignments, custom functions, null handling, and tolerance checks.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Mapping
@@ -46,6 +47,9 @@ from rules_engine.repository import RulesetRepository
 from rules_engine.runtime import RulesEngineRuntime
 
 
+logger = logging.getLogger(__name__)
+
+
 RESULT_STRUCT = T.StructType(
     [
         T.StructField("matched", T.BooleanType(), False),
@@ -78,6 +82,9 @@ class _SparkRowNoOpRepository:
     """
 
     def load_published(self, ruleset_name: str, version: str | None = None) -> Ruleset:
+        """
+        Reject metadata loading from inside the Spark row UDF.
+        """
         raise RuntimeError("Spark row UDF cannot load published metadata.")
 
 
@@ -87,6 +94,9 @@ class SparkRulesEngineRuntime:
     """
 
     def __init__(self, repository: RulesetRepository, function_registry: FunctionRegistry) -> None:
+        """
+        Initialize the Spark runtime with metadata and function registries.
+        """
         self._repository = repository
         self._function_registry = function_registry
 
@@ -125,6 +135,15 @@ class SparkRulesEngineRuntime:
             DataFrame with rules engine result columns appended.
         """
         bindings = self._discover_aggregate_bindings(ruleset)
+        logger.info(
+            "Evaluating ruleset in Spark runtime: ruleset_id=%s ruleset_name=%s version=%s rule_count=%s aggregate_binding_count=%s fail_on_error=%s",
+            ruleset.ruleset_id,
+            ruleset.ruleset_name,
+            ruleset.version,
+            len(ruleset.rules),
+            len(bindings),
+            fail_on_error,
+        )
         augmented = self._with_aggregate_columns(df, bindings)
         aggregate_lookup = {
             aggregate_key(binding.operand): binding.column_name
@@ -154,9 +173,18 @@ class SparkRulesEngineRuntime:
         output = output.drop(*[binding.column_name for binding in bindings])
         if fail_on_error:
             self._raise_if_row_errors(output, f"{column_prefix}_error")
+        logger.info(
+            "Spark runtime evaluation DataFrame built: ruleset_id=%s version=%s output_prefix=%s",
+            ruleset.ruleset_id,
+            ruleset.version,
+            column_prefix,
+        )
         return output
 
     def _raise_if_row_errors(self, df: DataFrame, error_column: str) -> None:
+        """
+        Collect a small sample of row-level errors and raise when any exist.
+        """
         error_rows = (
             df.where(F.col(error_column).isNotNull())
             .select(error_column)
@@ -165,6 +193,11 @@ class SparkRulesEngineRuntime:
         )
         if error_rows:
             samples = [row[error_column] for row in error_rows]
+            logger.error(
+                "Spark runtime row-level errors detected: error_column=%s sample_count=%s",
+                error_column,
+                len(samples),
+            )
             raise RuntimeError(
                 "Rules engine Spark evaluation produced row-level errors: "
                 + "; ".join(samples)
@@ -176,6 +209,9 @@ class SparkRulesEngineRuntime:
         aggregate_lookup: dict[str, str],
         source_columns: list[str],
     ):
+        """
+        Build the serializable Python callable used by the Spark UDF.
+        """
         runtime = SparkRowRuntime(
             _SparkRowNoOpRepository(),
             self._function_registry,
@@ -183,6 +219,9 @@ class SparkRulesEngineRuntime:
         )
 
         def evaluate(row: Any) -> dict[str, Any]:
+            """
+            Evaluate one Spark row struct and return the declared result struct.
+            """
             try:
                 row_dict = row.asDict(recursive=True)
                 matched_rule_ids: list[str] = []
@@ -225,6 +264,9 @@ class SparkRulesEngineRuntime:
         return evaluate
 
     def _discover_aggregate_bindings(self, ruleset: Ruleset) -> list[AggregateBinding]:
+        """
+        Discover unique aggregate operands that need Spark precompute columns.
+        """
         operands: dict[str, AggregateOperand] = {}
         for rule in ruleset.rules:
             self._collect_group_aggregates(rule.root_group, operands)
@@ -241,6 +283,9 @@ class SparkRulesEngineRuntime:
         group: ConditionGroup,
         operands: dict[str, AggregateOperand],
     ) -> None:
+        """
+        Recursively collect aggregate operands from a condition group tree.
+        """
         for condition in group.conditions:
             self._collect_operand_aggregate(condition.left, operands)
             if condition.right is not None:
@@ -253,6 +298,9 @@ class SparkRulesEngineRuntime:
         operand: Operand,
         operands: dict[str, AggregateOperand],
     ) -> None:
+        """
+        Add an operand to the aggregate map when it is aggregate-backed.
+        """
         if isinstance(operand, AggregateOperand):
             operands[aggregate_key(operand)] = operand
 
@@ -261,14 +309,27 @@ class SparkRulesEngineRuntime:
         df: DataFrame,
         bindings: list[AggregateBinding],
     ) -> DataFrame:
+        """
+        Add all required aggregate precompute columns to a DataFrame.
+        """
         output = df
         for binding in bindings:
             output = self._with_one_aggregate_column(output, binding)
         return output
 
     def _with_one_aggregate_column(self, df: DataFrame, binding: AggregateBinding) -> DataFrame:
+        """
+        Add one aggregate precompute column for one aggregate binding.
+        """
         operand = binding.operand
         self._validate_spark_supported_aggregate(operand)
+        logger.debug(
+            "Adding Spark aggregate column: column=%s function=%s field=%s scope=%s",
+            binding.column_name,
+            operand.function.value,
+            operand.field_name,
+            operand.scope.value,
+        )
         if operand.function in {AggregateFunction.FIRST, AggregateFunction.LAST}:
             return self._with_order_sensitive_aggregate(df, binding)
 
@@ -289,6 +350,9 @@ class SparkRulesEngineRuntime:
         df: DataFrame,
         binding: AggregateBinding,
     ) -> DataFrame:
+        """
+        Precompute FIRST or LAST aggregates with Spark window functions.
+        """
         operand = binding.operand
         filtered = self._filtered_frame(df, operand)
         if operand.null_input_mode is NullInputMode.IGNORE:
@@ -328,6 +392,9 @@ class SparkRulesEngineRuntime:
         return self._apply_joined_aggregate_default(joined, binding)
 
     def _filtered_frame(self, df: DataFrame, operand: AggregateOperand) -> DataFrame:
+        """
+        Apply an aggregate filter to the DataFrame before aggregation.
+        """
         if operand.filter is None:
             return df
         if not operand.filter.predicates:
@@ -344,6 +411,9 @@ class SparkRulesEngineRuntime:
         return df.where(combined)
 
     def _row_filter_expr(self, predicate: RowFilterPredicate):
+        """
+        Convert one aggregate-filter predicate into a Spark boolean expression.
+        """
         if predicate.null_input_mode is NullInputMode.ERROR:
             raise ValueError(
                 "Spark aggregate filters do not support null_input_mode=error in this pass."
@@ -368,6 +438,9 @@ class SparkRulesEngineRuntime:
         )
 
     def _spark_operand_expr(self, operand: Operand | None):
+        """
+        Convert a row-level operand into a Spark expression.
+        """
         if operand is None:
             return None
         if isinstance(operand, FieldOperand):
@@ -381,6 +454,9 @@ class SparkRulesEngineRuntime:
         raise TypeError(f"Unsupported operand type in Spark expression: {type(operand).__name__}")
 
     def _spark_operand_value(self, operand: Operand | None):
+        """
+        Return a literal value or expression for Spark predicate comparison.
+        """
         if isinstance(operand, LiteralOperand):
             return operand.value
         return self._spark_operand_expr(operand)
@@ -393,6 +469,9 @@ class SparkRulesEngineRuntime:
         tolerance_abs: Decimal,
         null_input_mode: NullInputMode,
     ):
+        """
+        Build a Spark comparison expression for a canonical operator.
+        """
         if operator is ComparisonOperator.IS_NULL:
             return left.isNull()
         if operator is ComparisonOperator.IS_NOT_NULL:
@@ -454,6 +533,9 @@ class SparkRulesEngineRuntime:
         null_result_mode: NullResultMode,
         null_default_value: Any | None,
     ):
+        """
+        Apply Spark-side null-result handling to a predicate expression.
+        """
         if null_result_mode is NullResultMode.ERROR:
             raise ValueError("Spark expression path does not support null_result_mode=error.")
         if null_result_mode is NullResultMode.DEFAULT:
@@ -461,6 +543,9 @@ class SparkRulesEngineRuntime:
         return F.coalesce(expression, F.lit(False))
 
     def _aggregate_expr(self, operand: AggregateOperand):
+        """
+        Build a Spark aggregate expression for a supported aggregate function.
+        """
         value_col = self._aggregate_value_col(operand)
         if operand.function is AggregateFunction.SUM:
             return self._aggregate_result_expr(operand, F.sum(value_col))
@@ -481,6 +566,9 @@ class SparkRulesEngineRuntime:
         raise ValueError(f"Unsupported aggregate function for Spark aggregation: {operand.function.value}")
 
     def _aggregate_value_col(self, operand: AggregateOperand):
+        """
+        Return an aggregate value column with null-input mode applied.
+        """
         value_col = F.col(operand.field_name)
         if operand.null_input_mode is NullInputMode.ERROR:
             return value_col
@@ -491,6 +579,9 @@ class SparkRulesEngineRuntime:
         return value_col
 
     def _aggregate_result_expr(self, operand: AggregateOperand, base_expr):
+        """
+        Apply aggregate null-result behavior to a Spark aggregate expression.
+        """
         expr = base_expr
         if operand.null_input_mode is NullInputMode.PROPAGATE:
             null_count = F.sum(
@@ -502,6 +593,9 @@ class SparkRulesEngineRuntime:
         return expr
 
     def _order_sensitive_value_expr(self, operand: AggregateOperand):
+        """
+        Return the value expression used for FIRST/LAST precompute.
+        """
         value_expr = self._aggregate_value_col(operand)
         if operand.null_result_mode is NullResultMode.DEFAULT:
             return F.coalesce(value_expr, F.lit(operand.null_default_value))
@@ -512,6 +606,9 @@ class SparkRulesEngineRuntime:
         df: DataFrame,
         binding: AggregateBinding,
     ) -> DataFrame:
+        """
+        Apply default null-result handling after joining group aggregates.
+        """
         if binding.operand.null_result_mode is NullResultMode.DEFAULT:
             return df.withColumn(
                 binding.column_name,
@@ -520,6 +617,9 @@ class SparkRulesEngineRuntime:
         return df
 
     def _order_columns(self, operand: AggregateOperand) -> list:
+        """
+        Convert order-by specs into Spark columns with nulls last.
+        """
         columns = []
         for order in operand.order_by:
             column = F.col(order.field)
@@ -527,10 +627,16 @@ class SparkRulesEngineRuntime:
         return columns
 
     def _reverse_order_column(self, order):
+        """
+        Reverse an order-by direction for LAST aggregate calculation.
+        """
         column = F.col(order.field)
         return column.desc_nulls_last() if order.direction == "asc" else column.asc_nulls_last()
 
     def _validate_spark_supported_aggregate(self, operand: AggregateOperand) -> None:
+        """
+        Raise when an aggregate uses a Spark-unsupported feature.
+        """
         if operand.function in {AggregateFunction.MEDIAN, AggregateFunction.QUANTILE}:
             raise ValueError(
                 "Spark aggregate precompute does not support exact median/quantile in this pass."
@@ -564,6 +670,9 @@ class SparkRowRuntime(RulesEngineRuntime):
         function_registry: FunctionRegistry,
         aggregate_lookup: dict[str, str],
     ) -> None:
+        """
+        Initialize the row runtime with aggregate lookup column names.
+        """
         super().__init__(repository, function_registry)
         self._aggregate_lookup = aggregate_lookup
 
@@ -574,6 +683,9 @@ class SparkRowRuntime(RulesEngineRuntime):
         row_index: int,
         aggregate_cache: Any,
     ) -> Any:
+        """
+        Resolve precomputed aggregates from row columns before normal operands.
+        """
         if isinstance(operand, AggregateOperand):
             return row.get(self._aggregate_lookup[aggregate_key(operand)])
         return super()._resolve_operand(operand, row, row_index, aggregate_cache)

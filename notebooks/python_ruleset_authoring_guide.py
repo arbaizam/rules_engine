@@ -103,6 +103,8 @@ ruleset = Ruleset(
     version="1",
     status=RulesetStatus.DRAFT,
     description="Example ruleset authored with Python dataclasses.",
+    owner="Rules Team",
+    owner_department="ALM Engineering",
     rules=(
         Rule(
             rule_id="open_high_value",

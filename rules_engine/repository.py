@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
+import logging
 from typing import Protocol
 
 from pyspark.sql import SparkSession
@@ -23,6 +24,9 @@ from rules_engine.enums import RulesetStatus
 from rules_engine.exceptions import RepositoryError
 from rules_engine.models import FunctionRegistryRow, Ruleset, RulesetVersionRow
 from rules_engine.serializer import DeltaRowSerializer
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -36,7 +40,12 @@ class RulesEngineTableNames:
 
 
 class RulesetRepository(Protocol):
-    """Repository protocol used by publish and runtime services."""
+    """
+    Repository protocol used by publish and runtime services.
+
+    Implementations persist canonical ruleset metadata, expose lifecycle
+    transitions, and load only published rulesets for runtime execution.
+    """
 
     def save_draft(self, ruleset: Ruleset, *, created_by: str | None = None) -> None:
         """Persist draft metadata."""
@@ -62,6 +71,9 @@ class SparkDeltaRulesetRepository:
         table_names: RulesEngineTableNames,
         serializer: DeltaRowSerializer | None = None,
     ) -> None:
+        """
+        Create a Spark/Delta repository for the configured metadata tables.
+        """
         self.spark = spark
         self.table_names = table_names
         self.serializer = serializer or DeltaRowSerializer()
@@ -78,17 +90,35 @@ class SparkDeltaRulesetRepository:
                 StructField("description", StringType(), True),
                 StructField("payload_json", StringType(), False),
                 StructField("content_hash", StringType(), False),
-                StructField("rule_count", IntegerType(), False),
-                StructField("condition_count", IntegerType(), False),
-                StructField("assignment_count", IntegerType(), False),
-                StructField("aggregate_count", IntegerType(), False),
-                StructField("custom_function_count", IntegerType(), False),
-                StructField("created_by", StringType(), False),
-                StructField("created_at", StringType(), False),
-                StructField("published_by", StringType(), True),
-                StructField("published_at", StringType(), True),
-                StructField("retired_by", StringType(), True),
-                StructField("retired_at", StringType(), True),
+                StructField(
+                    "payload_metadata",
+                    StructType(
+                        [
+                            StructField("rule_count", IntegerType(), False),
+                            StructField("condition_count", IntegerType(), False),
+                            StructField("assignment_count", IntegerType(), False),
+                            StructField("aggregate_count", IntegerType(), False),
+                            StructField("custom_function_count", IntegerType(), False),
+                        ]
+                    ),
+                    False,
+                ),
+                StructField(
+                    "user_metadata",
+                    StructType(
+                        [
+                            StructField("owner", StringType(), True),
+                            StructField("owner_department", StringType(), True),
+                            StructField("created_by", StringType(), False),
+                            StructField("created_at", StringType(), False),
+                            StructField("published_by", StringType(), True),
+                            StructField("published_at", StringType(), True),
+                            StructField("retired_by", StringType(), True),
+                            StructField("retired_at", StringType(), True),
+                        ]
+                    ),
+                    False,
+                ),
             ]
         )
 
@@ -118,6 +148,7 @@ class SparkDeltaRulesetRepository:
             (self.table_names.function_registry, self.function_registry_schema),
         ]
         for table_name, schema in specs:
+            logger.info("Creating rules engine metadata table: table=%s mode=%s", table_name, mode)
             self.spark.createDataFrame([], schema=schema).write.format("delta").mode(
                 mode
             ).saveAsTable(table_name)
@@ -132,10 +163,24 @@ class SparkDeltaRulesetRepository:
         """
         existing_status = self._existing_ruleset_status(ruleset.ruleset_id, ruleset.version)
         if existing_status is not None and existing_status != RulesetStatus.DRAFT.value:
+            logger.error(
+                "Rejected draft overwrite for immutable ruleset version: ruleset_id=%s version=%s existing_status=%s",
+                ruleset.ruleset_id,
+                ruleset.version,
+                existing_status,
+            )
             raise RepositoryError(
                 f"Cannot overwrite ruleset version with status={existing_status}: "
                 f"ruleset_id={ruleset.ruleset_id}, version={ruleset.version}"
             )
+        logger.info(
+            "Persisting draft ruleset version: table=%s ruleset_id=%s ruleset_name=%s version=%s existing_status=%s",
+            self.table_names.ruleset_versions,
+            ruleset.ruleset_id,
+            ruleset.ruleset_name,
+            ruleset.version,
+            existing_status,
+        )
         row = self.serializer.serialize_ruleset_version(
             ruleset,
             created_by=self._actor_or_system(created_by),
@@ -147,11 +192,18 @@ class SparkDeltaRulesetRepository:
             [asdict(row)],
             self.ruleset_version_schema,
         )
+        logger.info(
+            "Draft ruleset version persisted: ruleset_id=%s version=%s content_hash=%s",
+            ruleset.ruleset_id,
+            ruleset.version,
+            row.content_hash,
+        )
 
     def publish(self, ruleset_id: str, version: str, *, published_by: str | None = None) -> None:
         """
         Mark a persisted ruleset version as published.
         """
+        logger.info("Promoting ruleset version to published: ruleset_id=%s version=%s", ruleset_id, version)
         self._assert_publish_allowed(ruleset_id, version)
         self._set_status(
             ruleset_id,
@@ -165,6 +217,7 @@ class SparkDeltaRulesetRepository:
         """
         Mark a persisted ruleset version as retired.
         """
+        logger.info("Retiring ruleset version: ruleset_id=%s version=%s", ruleset_id, version)
         self._set_status(
             ruleset_id,
             version,
@@ -183,22 +236,37 @@ class SparkDeltaRulesetRepository:
         )
         if version is not None:
             ruleset_filter = ruleset_filter & (F.col("version") == version)
+        logger.info(
+            "Loading published ruleset: table=%s ruleset_name=%s version=%s",
+            self.table_names.ruleset_versions,
+            ruleset_name,
+            version,
+        )
         rows_df = self.spark.table(self.table_names.ruleset_versions).where(ruleset_filter)
         collected = rows_df.limit(2).collect()
         if not collected:
+            logger.error("Published ruleset not found: ruleset_name=%s version=%s", ruleset_name, version)
             raise RepositoryError(f"Published ruleset not found: {ruleset_name}")
         if len(collected) > 1 and version is None:
+            logger.error("Multiple published ruleset versions found: ruleset_name=%s", ruleset_name)
             raise RepositoryError(
                 f"Multiple published versions found for {ruleset_name}; specify version."
             )
-        return self.serializer.deserialize_ruleset_version(
-            RulesetVersionRow(**collected[0].asDict())
+        row = RulesetVersionRow(**collected[0].asDict(recursive=True))
+        logger.info(
+            "Published ruleset loaded: ruleset_id=%s ruleset_name=%s version=%s content_hash=%s",
+            row.ruleset_id,
+            row.ruleset_name,
+            row.version,
+            row.content_hash,
         )
+        return self.serializer.deserialize_ruleset_version(row)
 
     def save_function_registry_rows(self, rows: list[FunctionRegistryRow]) -> None:
         """
         Upsert function registry metadata rows by function_name.
         """
+        logger.info("Saving function registry rows: table=%s row_count=%s", self.table_names.function_registry, len(rows))
         for row in rows:
             self._delete_from_table(
                 self.table_names.function_registry,
@@ -211,13 +279,26 @@ class SparkDeltaRulesetRepository:
         )
 
     def _write_rows(self, table_name: str, rows: list[dict], schema: StructType) -> None:
+        """
+        Append row dictionaries to a Delta table using the supplied schema.
+
+        Empty row lists are treated as no-ops so callers can pass filtered
+        write sets without guarding every call.
+        """
         if not rows:
             return
+        logger.debug("Appending rows to Delta table: table=%s row_count=%s", table_name, len(rows))
         self.spark.createDataFrame(rows, schema=schema).write.format("delta").mode(
             "append"
         ).saveAsTable(table_name)
 
     def _delete_ruleset_version(self, ruleset_id: str, version: str) -> None:
+        """
+        Delete one draft ruleset version row by immutable identity.
+
+        This helper is used only after callers have verified that the existing
+        row, if present, is still a draft.
+        """
         self._delete_from_table(
             self.table_names.ruleset_versions,
             f"ruleset_id = {self._sql(ruleset_id)} AND version = {self._sql(version)}",
@@ -234,29 +315,30 @@ class SparkDeltaRulesetRepository:
         retired_by: str | None = None,
         retired_at: str | None = None,
     ) -> None:
+        """
+        Update lifecycle status and nested user metadata for one version.
+
+        The method rewrites the full ``user_metadata`` struct instead of
+        assigning nested fields directly. That keeps the SQL compatible with
+        Delta runtimes where partial struct-field updates may differ.
+        """
         row = self._ruleset_row_dict(ruleset_id, version)
         if row is None:
             raise RepositoryError(
                 f"Ruleset version not found: ruleset_id={ruleset_id}, version={version}"
             )
+        user_metadata = row["user_metadata"]
 
         assignments = [
             f"status = {self._sql(status.value)}",
         ]
         if status is RulesetStatus.PUBLISHED:
-            assignments.extend(
-                [
-                    f"published_by = {self._sql(published_by or '')}",
-                    f"published_at = {self._sql(published_at or '')}",
-                ]
-            )
+            user_metadata["published_by"] = published_by
+            user_metadata["published_at"] = published_at
         if status is RulesetStatus.RETIRED:
-            assignments.extend(
-                [
-                    f"retired_by = {self._sql(retired_by or '')}",
-                    f"retired_at = {self._sql(retired_at or '')}",
-                ]
-            )
+            user_metadata["retired_by"] = retired_by
+            user_metadata["retired_at"] = retired_at
+        assignments.append(f"user_metadata = {self._user_metadata_sql(user_metadata)}")
 
         self.spark.sql(
             f"""
@@ -268,23 +350,49 @@ class SparkDeltaRulesetRepository:
         )
         updated = self._ruleset_row_dict(ruleset_id, version)
         if updated is None or updated["status"] != status.value:
+            logger.error(
+                "Ruleset status update verification failed: ruleset_id=%s version=%s expected_status=%s",
+                ruleset_id,
+                version,
+                status.value,
+            )
             raise RepositoryError(
                 f"Status update failed: ruleset_id={ruleset_id}, "
                 f"version={version}, status={status.value}"
             )
+        logger.info(
+            "Ruleset status updated: ruleset_id=%s version=%s status=%s",
+            ruleset_id,
+            version,
+            status.value,
+        )
 
     def _assert_publish_allowed(self, ruleset_id: str, version: str) -> None:
+        """
+        Enforce publish lifecycle invariants before status promotion.
+
+        A version must exist, must still be draft, and no sibling version with
+        the same ruleset_name may already be published.
+        """
         existing = self._ruleset_row_dict(ruleset_id, version)
         if existing is None:
+            logger.error("Publish rejected because ruleset version is missing: ruleset_id=%s version=%s", ruleset_id, version)
             raise RepositoryError(
                 f"Ruleset version not found: ruleset_id={ruleset_id}, version={version}"
             )
         if existing["status"] == RulesetStatus.PUBLISHED.value:
+            logger.error("Publish rejected for already-published version: ruleset_id=%s version=%s", ruleset_id, version)
             raise RepositoryError(
                 f"Cannot overwrite an already published ruleset version: "
                 f"ruleset_id={ruleset_id}, version={version}"
             )
         if existing["status"] != RulesetStatus.DRAFT.value:
+            logger.error(
+                "Publish rejected because version is not draft: ruleset_id=%s version=%s status=%s",
+                ruleset_id,
+                version,
+                existing["status"],
+            )
             raise RepositoryError(
                 f"Only draft ruleset versions can be published: "
                 f"ruleset_id={ruleset_id}, version={version}, status={existing['status']}"
@@ -298,15 +406,30 @@ class SparkDeltaRulesetRepository:
             .count()
         )
         if published_count:
+            logger.error(
+                "Publish rejected because another version is already published: ruleset_name=%s published_count=%s",
+                existing["ruleset_name"],
+                published_count,
+            )
             raise RepositoryError(
                 f"Cannot publish {existing['ruleset_name']} while another version is published."
             )
 
     def _existing_ruleset_status(self, ruleset_id: str, version: str) -> str | None:
+        """
+        Return the persisted status for one version, or None when absent.
+        """
         row = self._ruleset_row_dict(ruleset_id, version)
         return row["status"] if row is not None else None
 
     def _ruleset_row_dict(self, ruleset_id: str, version: str) -> dict | None:
+        """
+        Load one ruleset version row as a recursive Python dictionary.
+
+        Recursive conversion is required because Spark returns nested structs
+        as Row objects by default, while serializer/model construction expects
+        ordinary nested dictionaries.
+        """
         if not self._table_exists(self.table_names.ruleset_versions):
             return None
         rows = (
@@ -315,28 +438,77 @@ class SparkDeltaRulesetRepository:
             .limit(1)
             .collect()
         )
-        return rows[0].asDict() if rows else None
+        return rows[0].asDict(recursive=True) if rows else None
 
     def _delete_from_table(self, table_name: str, predicate: str) -> None:
+        """
+        Delete rows from a table when the table exists.
+
+        Missing tables are ignored so setup/cleanup paths can be idempotent.
+        """
         if self._table_exists(table_name):
             self.spark.sql(f"DELETE FROM {table_name} WHERE {predicate}")
 
     def _table_exists(self, table_name: str) -> bool:
+        """
+        Return whether Spark catalog metadata contains the target table.
+        """
         return bool(self.spark.catalog.tableExists(table_name))
 
     def _sql(self, value: str) -> str:
+        """
+        Return a single-quoted SQL string literal with quotes escaped.
+        """
         return "'" + value.replace("'", "''") + "'"
 
+    def _sql_nullable(self, value: str | None) -> str:
+        """
+        Return a SQL literal for optional string metadata values.
+        """
+        return "NULL" if value is None else self._sql(value)
+
+    def _user_metadata_sql(self, metadata: dict) -> str:
+        """
+        Build a SQL named_struct expression for nested user metadata.
+        """
+        return (
+            "named_struct("
+            f"'owner', {self._sql_nullable(metadata.get('owner'))}, "
+            f"'owner_department', {self._sql_nullable(metadata.get('owner_department'))}, "
+            f"'created_by', {self._sql(metadata['created_by'])}, "
+            f"'created_at', {self._sql(metadata['created_at'])}, "
+            f"'published_by', {self._sql_nullable(metadata.get('published_by'))}, "
+            f"'published_at', {self._sql_nullable(metadata.get('published_at'))}, "
+            f"'retired_by', {self._sql_nullable(metadata.get('retired_by'))}, "
+            f"'retired_at', {self._sql_nullable(metadata.get('retired_at'))}"
+            ")"
+        )
+
     def _utc_now(self) -> str:
+        """
+        Return the current UTC timestamp in ISO-8601 string form.
+        """
         return datetime.now(timezone.utc).isoformat()
 
     def _actor_or_system(self, value: str | None) -> str:
+        """
+        Normalize optional actor metadata to a non-empty string.
+
+        Locked-down production jobs may omit actor arguments; in those cases
+        ``system`` is stored explicitly.
+        """
         if value is None:
             return "system"
         stripped = value.strip()
         return stripped or "system"
 
     def _function_to_spark_dict(self, row: FunctionRegistryRow) -> dict:
+        """
+        Convert a function registry row into the Spark table row shape.
+
+        The in-memory model stores ``arg_contract_payload`` as a dictionary;
+        the Delta table stores the same value as canonical JSON.
+        """
         payload = asdict(row)
         payload["arg_contract_payload_json"] = json.dumps(
             payload.pop("arg_contract_payload"),
