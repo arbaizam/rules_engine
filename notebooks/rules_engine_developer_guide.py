@@ -690,7 +690,11 @@ with TemporaryDirectory() as temp_dir:
     source_rows = read_reconciliation_csv(source_csv)
     translation = ReconciliationSpecTranslator(
         assignment_target_field="translated_match_rule_name"
-    ).translate(source_rows)
+    ).translate(
+        source_rows,
+        owner="Rules Team",
+        owner_department="ALM Engineering",
+    )
 
     write_audit(translation.audit_records, audit_path)
     if any(record.failures for record in translation.audit_records):

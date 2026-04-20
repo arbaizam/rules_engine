@@ -11,6 +11,10 @@ from tools.recon_spec_translation.translator import ReconciliationSpecTranslator
 from tools.recon_spec_translation.writer_yaml import to_yaml
 
 
+OWNER = "Rules Team"
+OWNER_DEPARTMENT = "ALM Engineering"
+
+
 def source_row(
     rule_name,
     sequence,
@@ -44,10 +48,14 @@ def test_all_and_source_rule_translates_correctly():
         [
             source_row("Rule A", 1, "BalanceType", "TextEquals", "ParAmount", "And"),
             source_row("Rule A", 2, "PortfolioType", "TextEquals", "TRAD", None),
-        ]
+        ],
+        owner=OWNER,
+        owner_department=OWNER_DEPARTMENT,
     )
 
     rule = result.payload["rules"][0]
+    assert result.payload["owner"] == OWNER
+    assert result.payload["owner_department"] == OWNER_DEPARTMENT
     assert "all" in rule["when"]
     assert rule["assign"] == {"match_rule": "Rule A"}
     assert rule["stop_on_match"] is True
@@ -61,7 +69,9 @@ def test_translator_can_disable_stop_on_match():
     Fails when: The translator ignores the configured multi-match policy.
     """
     result = ReconciliationSpecTranslator(stop_on_match=False).translate(
-        [source_row("Rule A", 1, "Field", "TextEquals", "x", None)]
+        [source_row("Rule A", 1, "Field", "TextEquals", "x", None)],
+        owner=OWNER,
+        owner_department=OWNER_DEPARTMENT,
     )
 
     assert result.payload["rules"][0]["stop_on_match"] is False
@@ -79,7 +89,9 @@ def test_mixed_join_chain_translates_left_to_right():
             source_row("Rule B", 2, "PortfolioType", "TextEquals", "TRAD", "And"),
             source_row("Rule B", 3, "Holding", "TextContains", "Agency", "Or"),
             source_row("Rule B", 4, "Holding", "TextContains", "Agencies", None),
-        ]
+        ],
+        owner=OWNER,
+        owner_department=OWNER_DEPARTMENT,
     )
 
     items = result.payload["rules"][0]["when"]["any"]
@@ -109,7 +121,9 @@ def test_group_sequence_translates_with_group_join_operator():
             ),
             source_row("Rule C", 1, "BalanceType", "TextEquals", "UGL", "And", group_sequence=2),
             source_row("Rule C", 2, "PortfolioType", "TextEquals", "AFS", None, group_sequence=2),
-        ]
+        ],
+        owner=OWNER,
+        owner_department=OWNER_DEPARTMENT,
     )
 
     groups = result.payload["rules"][0]["when"]["any"]
@@ -139,7 +153,11 @@ def test_operator_mapping_for_all_supported_source_operators():
         for index, (source, _, value) in enumerate(operators, start=1)
     ]
 
-    result = ReconciliationSpecTranslator().translate(rows)
+    result = ReconciliationSpecTranslator().translate(
+        rows,
+        owner=OWNER,
+        owner_department=OWNER_DEPARTMENT,
+    )
 
     actual = [
         rule["when"]["all"][0]["operator"]
@@ -158,7 +176,9 @@ def test_slug_collision_emits_unique_rule_ids_and_audit_warning():
         [
             source_row("US Account", 1, "Field", "TextEquals", "x", None),
             source_row("US-Account", 1, "Field", "TextEquals", "y", None),
-        ]
+        ],
+        owner=OWNER,
+        owner_department=OWNER_DEPARTMENT,
     )
 
     rule_ids = [rule["rule_id"] for rule in result.payload["rules"]]
@@ -175,7 +195,9 @@ def test_invalid_source_operator_fails_translation():
     Fails when: Unsupported operators are silently converted or omitted.
     """
     result = ReconciliationSpecTranslator().translate(
-        [source_row("Rule A", 1, "Field", "Unsupported", "x", None)]
+        [source_row("Rule A", 1, "Field", "Unsupported", "x", None)],
+        owner=OWNER,
+        owner_department=OWNER_DEPARTMENT,
     )
 
     assert result.payload == {}
@@ -192,7 +214,9 @@ def test_null_join_before_final_criterion_fails_translation():
         [
             source_row("Rule A", 1, "A", "TextEquals", "x", None),
             source_row("Rule A", 2, "B", "TextEquals", "x", None),
-        ]
+        ],
+        owner=OWNER,
+        owner_department=OWNER_DEPARTMENT,
     )
 
     assert result.payload == {}
@@ -217,7 +241,9 @@ def test_last_group_join_operator_fails_translation():
                 group_sequence=1,
                 group_join_operator="And",
             ),
-        ]
+        ],
+        owner=OWNER,
+        owner_department=OWNER_DEPARTMENT,
     )
 
     assert result.payload == {}
@@ -231,7 +257,9 @@ def test_output_yaml_aligns_to_engine_authoring_format():
     Fails when: Writer output drifts from compiler-supported YAML shape.
     """
     result = ReconciliationSpecTranslator().translate(
-        [source_row("Rule A", 1, "Field", "TextEquals", "x", None)]
+        [source_row("Rule A", 1, "Field", "TextEquals", "x", None)],
+        owner=OWNER,
+        owner_department=OWNER_DEPARTMENT,
     )
 
     yaml_text = to_yaml(result.payload)
@@ -248,7 +276,9 @@ def test_audit_artifact_contains_expected_fields():
     Fails when: Audit serialization drops source identity, counts, warnings, or failures.
     """
     result = ReconciliationSpecTranslator().translate(
-        [source_row("Rule A", 1, "Field", "TextEquals", "x", None)]
+        [source_row("Rule A", 1, "Field", "TextEquals", "x", None)],
+        owner=OWNER,
+        owner_department=OWNER_DEPARTMENT,
     )
     audit_path = Path("audit_test_output.json")
 

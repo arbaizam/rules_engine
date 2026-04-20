@@ -463,7 +463,9 @@ Detailed sequence:
 5. Map supported source operators to canonical rules engine operators.
 6. Emit assignments to the configured target field.
 7. Emit `stop_on_match: true` by default.
-8. Produce translation audit records.
+8. Emit required top-level `owner` and `owner_department` metadata from the
+   explicit `translate(...)` arguments.
+9. Produce translation audit records.
 
 Side effects:
 
@@ -1234,7 +1236,11 @@ from tools.recon_spec_translation.audit import write_audit
 rows = read_reconciliation_csv("source_spec.csv")
 result = ReconciliationSpecTranslator(
     assignment_target_field="translated_match_rule_name",
-).translate(rows)
+).translate(
+    rows,
+    owner="Rules Team",
+    owner_department="ALM Engineering",
+)
 
 if any(record.failures for record in result.audit_records):
     write_audit(result.audit_records, "translation_audit.json")

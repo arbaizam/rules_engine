@@ -48,6 +48,8 @@ class ReconciliationSpecTranslator:
         self,
         rows: list[SourceCriterion],
         *,
+        owner: str,
+        owner_department: str,
         ruleset_id: str = "translated_reconciliation_rules",
         ruleset_name: str = "Translated Reconciliation Rules",
         version: str = "1.0.0",
@@ -55,6 +57,11 @@ class ReconciliationSpecTranslator:
         """
         Translate source criteria into a rules engine YAML payload.
         """
+        if not owner or not owner.strip():
+            raise ValueError("owner is required for translated ruleset metadata.")
+        if not owner_department or not owner_department.strip():
+            raise ValueError("owner_department is required for translated ruleset metadata.")
+
         rules: list[dict[str, Any]] = []
         audit_records: list[TranslationAuditRecord] = []
         grouped = group_by_match_rule(rows)
@@ -100,6 +107,8 @@ class ReconciliationSpecTranslator:
                 "ruleset_name": ruleset_name,
                 "version": version,
                 "status": "draft",
+                "owner": owner.strip(),
+                "owner_department": owner_department.strip(),
                 "rules": rules,
             },
             audit_records=audit_records,
