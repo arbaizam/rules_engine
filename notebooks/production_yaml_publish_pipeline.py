@@ -10,9 +10,10 @@
 # MAGIC 1. Read one YAML ruleset from a prod-controlled inbound path.
 # MAGIC 2. Compile and normalize the ruleset.
 # MAGIC 3. Validate it with the production Spark compatibility validator.
-# MAGIC 4. Publish it to the production ruleset registry.
-# MAGIC 5. Export the canonical normalized YAML to an archive path.
-# MAGIC 6. Append one publish log row to a Delta table.
+# MAGIC 4. Optionally retire the currently published version for the same ruleset.
+# MAGIC 5. Publish it to the production ruleset registry.
+# MAGIC 6. Export the canonical normalized YAML to an archive path.
+# MAGIC 7. Append one publish log row to a Delta table.
 # MAGIC
 # MAGIC The source YAML should keep `status: draft`. Publication is represented by
 # MAGIC the registry row status, not by changing authored YAML.
@@ -29,6 +30,7 @@ import sys
 import traceback
 
 from pyspark.sql import types as T
+from pyspark.sql import functions as F
 
 repo_root = Path.cwd()
 if str(repo_root) not in sys.path:
@@ -51,6 +53,14 @@ from rules_engine.serializer import DeltaRowSerializer  # noqa: E402
 # MAGIC ## 1. Job Parameters
 # MAGIC
 # MAGIC Set these as Databricks job parameters/widgets.
+# MAGIC
+# MAGIC `retire_existing_published=false` makes the job fail when another version
+# MAGIC of the same `ruleset_name` is already published.
+# MAGIC
+# MAGIC `retire_existing_published=true` retires the currently published version
+# MAGIC before publishing the incoming YAML. With `require_newer_version=true`, the
+# MAGIC incoming version must use numeric dot notation and compare greater than
+# MAGIC the currently published version, for example `2.1.0 > 1.0.0`.
 
 # COMMAND ----------
 
@@ -63,6 +73,8 @@ dbutils.widgets.text("created_by", "prod-rules-pipeline")
 dbutils.widgets.text("published_by", "prod-rules-pipeline")
 dbutils.widgets.dropdown("create_metadata_tables", "false", ["false", "true"])
 dbutils.widgets.dropdown("create_log_table", "true", ["false", "true"])
+dbutils.widgets.dropdown("retire_existing_published", "false", ["false", "true"])
+dbutils.widgets.dropdown("require_newer_version", "true", ["true", "false"])
 
 YAML_PATH = dbutils.widgets.get("yaml_path").strip()
 ARCHIVE_DIR = dbutils.widgets.get("archive_dir").strip()
@@ -73,6 +85,8 @@ CREATED_BY = dbutils.widgets.get("created_by").strip() or "prod-rules-pipeline"
 PUBLISHED_BY = dbutils.widgets.get("published_by").strip() or "prod-rules-pipeline"
 CREATE_METADATA_TABLES = dbutils.widgets.get("create_metadata_tables") == "true"
 CREATE_LOG_TABLE = dbutils.widgets.get("create_log_table") == "true"
+RETIRE_EXISTING_PUBLISHED = dbutils.widgets.get("retire_existing_published") == "true"
+REQUIRE_NEWER_VERSION = dbutils.widgets.get("require_newer_version") == "true"
 
 if not YAML_PATH:
     raise ValueError("Parameter yaml_path is required.")
@@ -133,6 +147,44 @@ def compile_ruleset(path: str):
     return YamlRulesetCompiler().compile_path(path)
 
 
+def parse_numeric_version(version: str) -> tuple[int, ...]:
+    if not re.fullmatch(r"\d+(\.\d+)*", version):
+        raise ValueError(
+            f"Version must be numeric dot notation for automatic retirement: {version}"
+        )
+    return tuple(int(part) for part in version.split("."))
+
+
+def compare_versions(left: str, right: str) -> int:
+    left_parts = parse_numeric_version(left)
+    right_parts = parse_numeric_version(right)
+    max_len = max(len(left_parts), len(right_parts))
+    padded_left = left_parts + (0,) * (max_len - len(left_parts))
+    padded_right = right_parts + (0,) * (max_len - len(right_parts))
+    if padded_left > padded_right:
+        return 1
+    if padded_left < padded_right:
+        return -1
+    return 0
+
+
+def current_published_version(ruleset_name: str) -> dict | None:
+    rows = (
+        spark.table(table_names.ruleset_versions)
+        .where(
+            (F.col("ruleset_name") == ruleset_name)
+            & (F.col("status") == "published")
+        )
+        .limit(2)
+        .collect()
+    )
+    if not rows:
+        return None
+    if len(rows) > 1:
+        raise ValueError(f"Multiple published versions found for {ruleset_name}.")
+    return rows[0].asDict(recursive=True)
+
+
 LOG_SCHEMA = T.StructType(
     [
         T.StructField("pipeline_run_id", T.StringType(), False),
@@ -147,6 +199,10 @@ LOG_SCHEMA = T.StructType(
         T.StructField("original_yaml_archive_path", T.StringType(), True),
         T.StructField("created_by", T.StringType(), False),
         T.StructField("published_by", T.StringType(), False),
+        T.StructField("retire_existing_published", T.BooleanType(), False),
+        T.StructField("require_newer_version", T.BooleanType(), False),
+        T.StructField("retired_ruleset_id", T.StringType(), True),
+        T.StructField("retired_version", T.StringType(), True),
         T.StructField("validation_issue_count", T.IntegerType(), True),
         T.StructField("validation_issues_json", T.StringType(), True),
         T.StructField("error_message", T.StringType(), True),
@@ -233,6 +289,8 @@ canonical_yaml_path = None
 original_yaml_archive_path = None
 validation = None
 failure_logged = False
+retired_ruleset_id = None
+retired_version = None
 
 try:
     ruleset = compile_ruleset(YAML_PATH)
@@ -255,6 +313,10 @@ try:
                 "original_yaml_archive_path": None,
                 "created_by": CREATED_BY,
                 "published_by": PUBLISHED_BY,
+                "retire_existing_published": RETIRE_EXISTING_PUBLISHED,
+                "require_newer_version": REQUIRE_NEWER_VERSION,
+                "retired_ruleset_id": None,
+                "retired_version": None,
                 "validation_issue_count": len(validation.issues),
                 "validation_issues_json": validation_issues_json(validation),
                 "error_message": validation.to_text(),
@@ -263,6 +325,32 @@ try:
         )
         failure_logged = True
         raise ValueError(validation.to_text())
+
+    existing_published = current_published_version(normalized.ruleset_name)
+    if existing_published is not None:
+        existing_version = existing_published["version"]
+        if existing_published["ruleset_id"] == normalized.ruleset_id and existing_version == normalized.version:
+            raise ValueError(
+                f"Ruleset version is already published: "
+                f"ruleset_id={normalized.ruleset_id}, version={normalized.version}"
+            )
+        if not RETIRE_EXISTING_PUBLISHED:
+            raise ValueError(
+                f"Another version is already published for {normalized.ruleset_name}: "
+                f"version={existing_version}. Set retire_existing_published=true to cut over."
+            )
+        if REQUIRE_NEWER_VERSION and compare_versions(normalized.version, existing_version) <= 0:
+            raise ValueError(
+                f"Incoming version {normalized.version} must be greater than "
+                f"existing published version {existing_version}."
+            )
+        repository.retire(
+            existing_published["ruleset_id"],
+            existing_version,
+            retired_by=PUBLISHED_BY,
+        )
+        retired_ruleset_id = existing_published["ruleset_id"]
+        retired_version = existing_version
 
     publish_service.publish(
         normalized,
@@ -303,6 +391,10 @@ try:
             "original_yaml_archive_path": original_yaml_archive_path,
             "created_by": CREATED_BY,
             "published_by": PUBLISHED_BY,
+            "retire_existing_published": RETIRE_EXISTING_PUBLISHED,
+            "require_newer_version": REQUIRE_NEWER_VERSION,
+            "retired_ruleset_id": retired_ruleset_id,
+            "retired_version": retired_version,
             "validation_issue_count": len(validation.issues),
             "validation_issues_json": validation_issues_json(validation),
             "error_message": None,
@@ -334,6 +426,10 @@ except Exception as exc:
                 "original_yaml_archive_path": original_yaml_archive_path,
                 "created_by": CREATED_BY,
                 "published_by": PUBLISHED_BY,
+                "retire_existing_published": RETIRE_EXISTING_PUBLISHED,
+                "require_newer_version": REQUIRE_NEWER_VERSION,
+                "retired_ruleset_id": retired_ruleset_id,
+                "retired_version": retired_version,
                 "validation_issue_count": (
                     len(validation.issues) if validation is not None else None
                 ),
