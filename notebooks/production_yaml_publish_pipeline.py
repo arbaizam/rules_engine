@@ -17,6 +17,12 @@
 # MAGIC
 # MAGIC The source YAML should keep `status: draft`. Publication is represented by
 # MAGIC the registry row status, not by changing authored YAML.
+# MAGIC
+# MAGIC The notebook always uses these tables under the configured `schema`:
+# MAGIC
+# MAGIC - `ruleset_versions`
+# MAGIC - `function_registry`
+# MAGIC - `ruleset_validation_logs`
 
 # COMMAND ----------
 
@@ -54,6 +60,9 @@ from rules_engine.serializer import DeltaRowSerializer  # noqa: E402
 # MAGIC
 # MAGIC Set these as Databricks job parameters/widgets.
 # MAGIC
+# MAGIC `schema` must be the target catalog and schema, for example
+# MAGIC `alme_dev_bronze.rules_engine`.
+# MAGIC
 # MAGIC `retire_existing_published=false` makes the job fail when another version
 # MAGIC of the same `ruleset_name` is already published.
 # MAGIC
@@ -66,9 +75,7 @@ from rules_engine.serializer import DeltaRowSerializer  # noqa: E402
 
 dbutils.widgets.text("yaml_path", "")
 dbutils.widgets.text("archive_dir", "")
-dbutils.widgets.text("database", "YOUR_CATALOG.YOUR_SCHEMA")
-dbutils.widgets.text("table_prefix", "rules_engine")
-dbutils.widgets.text("log_table", "")
+dbutils.widgets.text("schema", "YOUR_CATALOG.YOUR_SCHEMA")
 dbutils.widgets.text("created_by", "prod-rules-pipeline")
 dbutils.widgets.text("published_by", "prod-rules-pipeline")
 dbutils.widgets.dropdown("create_metadata_tables", "false", ["false", "true"])
@@ -78,9 +85,7 @@ dbutils.widgets.dropdown("require_newer_version", "true", ["true", "false"])
 
 YAML_PATH = dbutils.widgets.get("yaml_path").strip()
 ARCHIVE_DIR = dbutils.widgets.get("archive_dir").strip()
-DATABASE = dbutils.widgets.get("database").strip()
-TABLE_PREFIX = dbutils.widgets.get("table_prefix").strip()
-LOG_TABLE = dbutils.widgets.get("log_table").strip()
+SCHEMA = dbutils.widgets.get("schema").strip()
 CREATED_BY = dbutils.widgets.get("created_by").strip() or "prod-rules-pipeline"
 PUBLISHED_BY = dbutils.widgets.get("published_by").strip() or "prod-rules-pipeline"
 CREATE_METADATA_TABLES = dbutils.widgets.get("create_metadata_tables") == "true"
@@ -92,11 +97,12 @@ if not YAML_PATH:
     raise ValueError("Parameter yaml_path is required.")
 if not ARCHIVE_DIR:
     raise ValueError("Parameter archive_dir is required.")
-if not DATABASE or DATABASE == "YOUR_CATALOG.YOUR_SCHEMA":
-    raise ValueError("Parameter database must be set to a real catalog.schema value.")
+if not SCHEMA or SCHEMA == "YOUR_CATALOG.YOUR_SCHEMA":
+    raise ValueError("Parameter schema must be set to a real catalog.schema value.")
 
-if not LOG_TABLE:
-    LOG_TABLE = f"{DATABASE}.{TABLE_PREFIX}_publish_log"
+RULESET_VERSIONS_TABLE = f"{SCHEMA}.ruleset_versions"
+FUNCTION_REGISTRY_TABLE = f"{SCHEMA}.function_registry"
+VALIDATION_LOGS_TABLE = f"{SCHEMA}.ruleset_validation_logs"
 
 # COMMAND ----------
 
@@ -111,10 +117,6 @@ def utc_now() -> str:
 
 def safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_")
-
-
-def table_name(suffix: str) -> str:
-    return f"{DATABASE}.{TABLE_PREFIX}_{suffix}"
 
 
 def path_join(base: str, *parts: str) -> str:
@@ -220,7 +222,7 @@ def ensure_log_table(log_table: str) -> None:
 def append_log(row: dict) -> None:
     spark.createDataFrame([row], schema=LOG_SCHEMA).write.format("delta").mode(
         "append"
-    ).saveAsTable(LOG_TABLE)
+    ).saveAsTable(VALIDATION_LOGS_TABLE)
 
 
 def validation_issues_json(validation) -> str:
@@ -249,11 +251,11 @@ PIPELINE_RUN_ID = safe_name(f"rules-publish-{utc_now()}")
 
 # COMMAND ----------
 
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {DATABASE}")
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
 
 table_names = RulesEngineTableNames(
-    ruleset_versions=table_name("ruleset_versions"),
-    function_registry=table_name("function_registry"),
+    ruleset_versions=RULESET_VERSIONS_TABLE,
+    function_registry=FUNCTION_REGISTRY_TABLE,
 )
 
 repository = SparkDeltaRulesetRepository(spark, table_names)
@@ -262,7 +264,7 @@ if CREATE_METADATA_TABLES:
     repository.create_base_tables(mode="error")
 
 if CREATE_LOG_TABLE:
-    ensure_log_table(LOG_TABLE)
+    ensure_log_table(VALIDATION_LOGS_TABLE)
 
 registry = FunctionRegistry()
 normalizer = RulesetNormalizer()
@@ -461,7 +463,7 @@ display(
 )
 
 display(
-    spark.table(LOG_TABLE).where(f"pipeline_run_id = '{PIPELINE_RUN_ID}'")
+    spark.table(VALIDATION_LOGS_TABLE).where(f"pipeline_run_id = '{PIPELINE_RUN_ID}'")
 )
 
 print(
