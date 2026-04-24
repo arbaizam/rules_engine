@@ -56,6 +56,9 @@ class RulesetRepository(Protocol):
     def retire(self, ruleset_id: str, version: str, *, retired_by: str | None = None) -> None:
         """Mark a persisted ruleset version as retired."""
 
+    def load_draft_for_testing(self, ruleset_id: str, version: str) -> Ruleset:
+        """Load draft metadata by exact identity for non-production testing."""
+
     def load_published(self, ruleset_name: str, version: str | None = None) -> Ruleset:
         """Load published metadata."""
 
@@ -255,6 +258,51 @@ class SparkDeltaRulesetRepository:
         row = RulesetVersionRow(**collected[0].asDict(recursive=True))
         logger.info(
             "Published ruleset loaded: ruleset_id=%s ruleset_name=%s version=%s content_hash=%s",
+            row.ruleset_id,
+            row.ruleset_name,
+            row.version,
+            row.content_hash,
+        )
+        return self.serializer.deserialize_ruleset_version(row)
+
+    def load_draft_for_testing(self, ruleset_id: str, version: str) -> Ruleset:
+        """
+        Load a draft ruleset by exact identity for non-production testing.
+
+        Draft loads intentionally require ruleset_id and version. They never
+        fall back to published metadata and they are not used by runtime facade
+        helpers, which keeps production callers on ``load_published``.
+        """
+        logger.info(
+            "Loading draft ruleset for testing: table=%s ruleset_id=%s version=%s",
+            self.table_names.ruleset_versions,
+            ruleset_id,
+            version,
+        )
+        row_dict = self._ruleset_row_dict(ruleset_id, version)
+        if row_dict is None:
+            logger.error(
+                "Draft ruleset not found for testing: ruleset_id=%s version=%s",
+                ruleset_id,
+                version,
+            )
+            raise RepositoryError(
+                f"Draft ruleset not found: ruleset_id={ruleset_id}, version={version}"
+            )
+        if row_dict["status"] != RulesetStatus.DRAFT.value:
+            logger.error(
+                "Draft testing load rejected for non-draft ruleset: ruleset_id=%s version=%s status=%s",
+                ruleset_id,
+                version,
+                row_dict["status"],
+            )
+            raise RepositoryError(
+                f"Ruleset version is not draft: ruleset_id={ruleset_id}, "
+                f"version={version}, status={row_dict['status']}"
+            )
+        row = RulesetVersionRow(**row_dict)
+        logger.info(
+            "Draft ruleset loaded for testing: ruleset_id=%s ruleset_name=%s version=%s content_hash=%s",
             row.ruleset_id,
             row.ruleset_name,
             row.version,

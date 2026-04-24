@@ -1012,10 +1012,11 @@ evaluation happens separately through `SparkRulesEngineRuntime`.
 This diagram shows the full ruleset lifecycle from authoring through runtime
 evaluation and retirement.
 
-These Mermaid fences use GitHub Markdown syntax. The companion `README.qmd`
-uses Quarto Mermaid cell syntax for Quarto HTML/PDF rendering.
+This Quarto source uses executable Mermaid cells so the diagrams render in
+Quarto HTML/PDF output. The Markdown README keeps GitHub-style Mermaid fences
+for GitHub rendering.
 
-```mermaid
+```{mermaid}
 flowchart TD
     A[Author ruleset] --> B{Authoring method}
     B --> C[YAML compiler]
@@ -1050,7 +1051,7 @@ flowchart TD
 
 ### Lifecycle States
 
-```mermaid
+```{mermaid}
 flowchart LR
     A[Draft]
     B[Published]
@@ -1074,7 +1075,7 @@ flowchart LR
 
 ### Table State Transitions
 
-```mermaid
+```{mermaid}
 flowchart LR
     A[save draft] --> B[ruleset versions row]
     B --> C[status draft]

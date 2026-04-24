@@ -87,6 +87,12 @@ class _SparkRowNoOpRepository:
         """
         raise RuntimeError("Spark row UDF cannot load published metadata.")
 
+    def load_draft_for_testing(self, ruleset_id: str, version: str) -> Ruleset:
+        """
+        Reject metadata loading from inside the Spark row UDF.
+        """
+        raise RuntimeError("Spark row UDF cannot load draft metadata.")
+
 
 class SparkRulesEngineRuntime:
     """
