@@ -395,6 +395,7 @@ def table_name(suffix: str) -> str:
 table_names = RulesEngineTableNames(
     ruleset_versions=table_name("ruleset_versions"),
     function_registry=table_name("function_registry"),
+    ruleset_validation_logs=table_name("ruleset_validation_logs"),
 )
 
 repository = SparkDeltaRulesetRepository(spark, table_names)

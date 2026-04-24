@@ -35,7 +35,6 @@ import re
 import sys
 import traceback
 
-from pyspark.sql import types as T
 from pyspark.sql import functions as F
 
 repo_root = Path.cwd()
@@ -99,10 +98,6 @@ if not ARCHIVE_DIR:
     raise ValueError("Parameter archive_dir is required.")
 if not SCHEMA or SCHEMA == "YOUR_CATALOG.YOUR_SCHEMA":
     raise ValueError("Parameter schema must be set to a real catalog.schema value.")
-
-RULESET_VERSIONS_TABLE = f"{SCHEMA}.ruleset_versions"
-FUNCTION_REGISTRY_TABLE = f"{SCHEMA}.function_registry"
-VALIDATION_LOGS_TABLE = f"{SCHEMA}.ruleset_validation_logs"
 
 # COMMAND ----------
 
@@ -187,42 +182,8 @@ def current_published_version(ruleset_name: str) -> dict | None:
     return rows[0].asDict(recursive=True)
 
 
-LOG_SCHEMA = T.StructType(
-    [
-        T.StructField("pipeline_run_id", T.StringType(), False),
-        T.StructField("event_time", T.StringType(), False),
-        T.StructField("status", T.StringType(), False),
-        T.StructField("ruleset_id", T.StringType(), True),
-        T.StructField("ruleset_name", T.StringType(), True),
-        T.StructField("version", T.StringType(), True),
-        T.StructField("content_hash", T.StringType(), True),
-        T.StructField("source_yaml_path", T.StringType(), False),
-        T.StructField("canonical_yaml_path", T.StringType(), True),
-        T.StructField("original_yaml_archive_path", T.StringType(), True),
-        T.StructField("created_by", T.StringType(), False),
-        T.StructField("published_by", T.StringType(), False),
-        T.StructField("retire_existing_published", T.BooleanType(), False),
-        T.StructField("require_newer_version", T.BooleanType(), False),
-        T.StructField("retired_ruleset_id", T.StringType(), True),
-        T.StructField("retired_version", T.StringType(), True),
-        T.StructField("validation_issue_count", T.IntegerType(), True),
-        T.StructField("validation_issues_json", T.StringType(), True),
-        T.StructField("error_message", T.StringType(), True),
-        T.StructField("error_traceback", T.StringType(), True),
-    ]
-)
-
-
-def ensure_log_table(log_table: str) -> None:
-    spark.createDataFrame([], schema=LOG_SCHEMA).write.format("delta").mode(
-        "ignore"
-    ).saveAsTable(log_table)
-
-
 def append_log(row: dict) -> None:
-    spark.createDataFrame([row], schema=LOG_SCHEMA).write.format("delta").mode(
-        "append"
-    ).saveAsTable(VALIDATION_LOGS_TABLE)
+    repository.append_ruleset_validation_log(row)
 
 
 def validation_issues_json(validation) -> str:
@@ -253,10 +214,7 @@ PIPELINE_RUN_ID = safe_name(f"rules-publish-{utc_now()}")
 
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
 
-table_names = RulesEngineTableNames(
-    ruleset_versions=RULESET_VERSIONS_TABLE,
-    function_registry=FUNCTION_REGISTRY_TABLE,
-)
+table_names = RulesEngineTableNames.from_schema(SCHEMA)
 
 repository = SparkDeltaRulesetRepository(spark, table_names)
 
@@ -264,7 +222,12 @@ if CREATE_METADATA_TABLES:
     repository.create_base_tables(mode="error")
 
 if CREATE_LOG_TABLE:
-    ensure_log_table(VALIDATION_LOGS_TABLE)
+    (
+        spark.createDataFrame([], schema=repository.ruleset_validation_log_schema)
+        .write.format("delta")
+        .mode("ignore")
+        .saveAsTable(table_names.ruleset_validation_logs)
+    )
 
 registry = FunctionRegistry()
 normalizer = RulesetNormalizer()
@@ -293,6 +256,7 @@ validation = None
 failure_logged = False
 retired_ruleset_id = None
 retired_version = None
+log_reason = None
 
 try:
     ruleset = compile_ruleset(YAML_PATH)
@@ -305,7 +269,9 @@ try:
             {
                 "pipeline_run_id": PIPELINE_RUN_ID,
                 "event_time": utc_now(),
+                "operation": "publish",
                 "status": "validation_failed",
+                "reason": "validation failed",
                 "ruleset_id": normalized.ruleset_id,
                 "ruleset_name": normalized.ruleset_name,
                 "version": normalized.version,
@@ -353,6 +319,9 @@ try:
         )
         retired_ruleset_id = existing_published["ruleset_id"]
         retired_version = existing_version
+        log_reason = (
+            "auto-retired existing published version before publishing newer version"
+        )
 
     publish_service.publish(
         normalized,
@@ -383,7 +352,9 @@ try:
         {
             "pipeline_run_id": PIPELINE_RUN_ID,
             "event_time": utc_now(),
+            "operation": "publish",
             "status": "published",
+            "reason": log_reason,
             "ruleset_id": normalized.ruleset_id,
             "ruleset_name": normalized.ruleset_name,
             "version": normalized.version,
@@ -418,7 +389,9 @@ except Exception as exc:
             {
                 "pipeline_run_id": PIPELINE_RUN_ID,
                 "event_time": utc_now(),
+                "operation": "publish",
                 "status": "failed",
+                "reason": "pipeline failed",
                 "ruleset_id": getattr(normalized, "ruleset_id", None),
                 "ruleset_name": getattr(normalized, "ruleset_name", None),
                 "version": getattr(normalized, "version", None),
@@ -463,7 +436,9 @@ display(
 )
 
 display(
-    spark.table(VALIDATION_LOGS_TABLE).where(f"pipeline_run_id = '{PIPELINE_RUN_ID}'")
+    spark.table(table_names.ruleset_validation_logs).where(
+        f"pipeline_run_id = '{PIPELINE_RUN_ID}'"
+    )
 )
 
 print(

@@ -29,6 +29,7 @@ semantic weakening.
 - [Spark Compatibility Validation](#spark-compatibility-validation)
 - [Spark/Delta Repository](#sparkdelta-repository)
 - [Publish Lifecycle](#publish-lifecycle)
+- [Standard Workflows](#standard-workflows)
 - [Auditability Model](#auditability-model)
 - [Reconciliation CSV Translation Utility](#reconciliation-csv-translation-utility)
 - [Databricks Smoke Test](#databricks-smoke-test)
@@ -900,10 +901,7 @@ weaken explicit authoring semantics.
 ```python
 from rules_engine.repository import SparkDeltaRulesetRepository, RulesEngineTableNames
 
-tables = RulesEngineTableNames(
-    ruleset_versions="catalog.schema.ruleset_versions",
-    function_registry="catalog.schema.function_registry",
-)
+tables = RulesEngineTableNames.from_schema("catalog.schema")
 
 repository = SparkDeltaRulesetRepository(spark, tables)
 repository.create_base_tables(mode="error")
@@ -913,6 +911,7 @@ Published metadata is stored in:
 
 - `ruleset_versions`: one authoritative row per ruleset version.
 - `function_registry`: environment-level custom function metadata.
+- `ruleset_validation_logs`: one validation/publish log row per pipeline run.
 
 `ruleset_versions` stores the complete canonical ruleset payload as JSON
 alongside lifecycle status, provenance, content hash, and summary counts.
@@ -1003,10 +1002,152 @@ Tables affected by draft/publish:
 - `ruleset_versions`: authoritative lifecycle/provenance/payload row.
 - `function_registry`: unaffected by draft/publish unless registry metadata is
   saved separately.
+- `ruleset_validation_logs`: validation/publish audit rows written by pipeline
+  jobs.
 
 Publishing metadata does not evaluate business data. It answers: "Is this
 ruleset valid, persisted, auditable, and available to runtime?" Spark DataFrame
 evaluation happens separately through `SparkRulesEngineRuntime`.
+
+## Standard Workflows
+
+### Initial Metadata Setup
+
+Create the standard registry footprint once per target schema:
+
+```python
+from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository
+
+schema = "catalog.schema"
+table_names = RulesEngineTableNames.from_schema(schema)
+repository = SparkDeltaRulesetRepository(spark, table_names)
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+repository.create_base_tables(mode="error")
+```
+
+This creates:
+
+- `catalog.schema.ruleset_versions`
+- `catalog.schema.function_registry`
+- `catalog.schema.ruleset_validation_logs`
+
+Use `mode="overwrite"` only for disposable development or smoke-test schemas.
+
+### Non-Production Draft Testing
+
+Authoring and test environments can persist drafts for repeatable testing:
+
+```python
+validation = publish_service.save_draft(ruleset, created_by="author")
+if validation.has_errors():
+    raise ValueError(validation.to_text())
+
+draft = repository.load_draft_for_testing(
+    ruleset_id=ruleset.ruleset_id,
+    version=ruleset.version,
+)
+```
+
+Draft loads require exact `(ruleset_id, version)`. They do not resolve latest
+drafts and do not fall back to published metadata.
+
+### Production YAML Publish Pipeline
+
+The production pipeline is implemented in:
+
+```text
+notebooks/production_yaml_publish_pipeline.py
+```
+
+The pipeline expects a trusted YAML artifact in a production-controlled path.
+The YAML should keep `status: draft`; publication is represented by the
+registry row lifecycle state.
+
+Required job parameters:
+
+- `schema`: target catalog/schema, for example `alme_dev_bronze.rules_engine`.
+- `yaml_path`: source YAML path.
+- `archive_dir`: archive destination for source and canonical YAML copies.
+- `created_by`: actor stored on draft persistence.
+- `published_by`: actor stored on publication and automatic retirement.
+
+Optional job parameters:
+
+- `create_metadata_tables`: create the three registry tables when `true`.
+- `create_log_table`: create `ruleset_validation_logs` when `true`.
+- `retire_existing_published`: retire the currently published version before
+  publishing a newer version.
+- `require_newer_version`: require numeric dot-notation version ordering during
+  automatic retirement.
+
+The pipeline sequence is:
+
+1. Compile YAML.
+2. Normalize ruleset metadata.
+3. Validate with `SparkRulesetCompatibilityValidator`.
+4. Optionally retire the existing published version for the same `ruleset_name`.
+5. Publish the incoming ruleset.
+6. Export canonical YAML and copy the source YAML to the archive path.
+7. Append a row to `ruleset_validation_logs`.
+
+### New Version Cutover
+
+By default, publishing fails if another version of the same `ruleset_name` is
+already published.
+
+Set:
+
+```text
+retire_existing_published = true
+require_newer_version = true
+```
+
+to make the pipeline retire the currently published version and publish the
+incoming version in one run. Versions must use numeric dot notation:
+
+```text
+1 < 1.0.1 < 1.1.0 < 2.0.0 < 2.1.0
+```
+
+Tags and date-like versions such as `v1.0.0`, `pilot`, or `2024-Q4` are rejected
+for automatic retirement. If `2.1.0` is published and `1.0.0` is dropped, the
+pipeline fails and leaves `2.1.0` published.
+
+### Validation And Publish Logs
+
+`ruleset_validation_logs` is the standard pipeline log table. It records one row
+per publish pipeline run.
+
+Key fields:
+
+- `operation`: `publish` for the production YAML publish pipeline.
+- `status`: `published`, `validation_failed`, or `failed`.
+- `reason`: human-readable reason such as `validation failed`,
+  `pipeline failed`, or automatic retirement context.
+- `ruleset_id`, `ruleset_name`, `version`, `content_hash`.
+- `retired_ruleset_id`, `retired_version` when automatic cutover retires an
+  existing version.
+- `validation_issue_count` and `validation_issues_json`.
+- `source_yaml_path`, `canonical_yaml_path`, and `original_yaml_archive_path`.
+
+### Standalone Retirement
+
+Use standalone retirement when a published ruleset should be removed from
+runtime eligibility without replacing it:
+
+```python
+repository.retire(
+    ruleset_id="account_rules",
+    version="1.0.0",
+    retired_by="operator",
+)
+```
+
+Retirement changes the persisted row to `status = retired`, stamps
+`retired_by` and `retired_at`, and makes the version unavailable through
+`load_published(...)`. Drafts normally do not need retirement; they can be
+overwritten while they remain drafts.
 
 ### Lifecycle Flow
 

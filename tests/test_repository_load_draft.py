@@ -48,6 +48,7 @@ class RowBackedRepository(SparkDeltaRulesetRepository):
             RulesEngineTableNames(
                 ruleset_versions="ruleset_versions",
                 function_registry="function_registry",
+                ruleset_validation_logs="ruleset_validation_logs",
             ),
         )
         self._row = row

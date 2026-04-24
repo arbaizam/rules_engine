@@ -48,6 +48,7 @@ def build_table_names() -> RulesEngineTableNames:
     return RulesEngineTableNames(
         ruleset_versions=table_name("ruleset_versions"),
         function_registry=table_name("function_registry"),
+        ruleset_validation_logs=table_name("ruleset_validation_logs"),
     )
 
 
