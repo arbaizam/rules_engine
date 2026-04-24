@@ -367,6 +367,7 @@ Purpose:
 Side effects:
 
 - Creates or overwrites Delta tables depending on `mode`.
+- Defaults to `mode="error"`, which fails if a target table already exists.
 - Use `mode="overwrite"` only for non-production setup or controlled smoke
   tests.
 
@@ -905,7 +906,7 @@ tables = RulesEngineTableNames(
 )
 
 repository = SparkDeltaRulesetRepository(spark, tables)
-repository.create_base_tables()
+repository.create_base_tables(mode="error")
 ```
 
 Published metadata is stored in:

@@ -142,7 +142,7 @@ class SparkDeltaRulesetRepository:
             ]
         )
 
-    def create_base_tables(self, mode: str = "errorifexists") -> None:
+    def create_base_tables(self, mode: str = "error") -> None:
         """
         Create empty metadata tables using explicit schemas.
         """
