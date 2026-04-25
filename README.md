@@ -1136,6 +1136,20 @@ Key fields:
 Use standalone retirement when a published ruleset should be removed from
 runtime eligibility without replacing it:
 
+```text
+notebooks/retire_ruleset_pipeline.py
+```
+
+Required job parameters:
+
+- `schema`: target catalog/schema, for example `alme_dev_bronze.rules_engine`.
+- `ruleset_id`: ruleset identity to retire.
+- `version`: version to retire.
+- `retired_by`: actor stored on the lifecycle row.
+- `reason`: required audit reason written to `ruleset_validation_logs`.
+
+The notebook calls:
+
 ```python
 repository.retire(
     ruleset_id="account_rules",
@@ -1146,8 +1160,9 @@ repository.retire(
 
 Retirement changes the persisted row to `status = retired`, stamps
 `retired_by` and `retired_at`, and makes the version unavailable through
-`load_published(...)`. Drafts normally do not need retirement; they can be
-overwritten while they remain drafts.
+`load_published(...)`. It also writes a log row with `operation = retire`,
+`status = retired`, and the supplied `reason`. Drafts normally do not need
+retirement; they can be overwritten while they remain drafts.
 
 ### Lifecycle Flow
 

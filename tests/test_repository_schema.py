@@ -116,3 +116,14 @@ def test_ruleset_validation_log_schema_contains_publish_pipeline_fields():
         "error_message",
         "error_traceback",
     } <= fields
+
+
+def test_ruleset_validation_log_schema_allows_partial_failure_rows():
+    """
+    What: Verifies validation log fields are nullable for failure-path logging.
+    Why: Pipeline failure logs may be written before a ruleset is parsed.
+    Fails when: Spark rejects failure logs because optional context is missing.
+    """
+    schema = _repository().ruleset_validation_log_schema
+
+    assert all(field.nullable for field in schema.fields)
