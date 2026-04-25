@@ -156,6 +156,9 @@ notebooks/
   rules_engine_developer_guide.py
   rules_engine_quickstart.py
   python_ruleset_authoring_guide.py
+  custom_function_authoring_guide.py
+  production_yaml_publish_pipeline.py
+  retire_ruleset_pipeline.py
 
 rule_sets/
   account_key_cap_mkt.yaml
@@ -766,6 +769,12 @@ dataclasses.
 Custom functions are executable code referenced by metadata. The repository
 can persist the function specification, but it does not persist executable
 Python callables.
+
+For a notebook-style user guide, see:
+
+```text
+notebooks/custom_function_authoring_guide.py
+```
 
 ```python
 from rules_engine import CustomFunctionSpec, FunctionRegistry
