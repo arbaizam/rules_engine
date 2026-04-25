@@ -14,7 +14,6 @@ from enum import Enum
 class RulesetStatus(str, Enum):
     """Lifecycle states supported by ruleset metadata."""
 
-    DRAFT = "draft"
     PUBLISHED = "published"
     RETIRED = "retired"
 
@@ -102,9 +101,7 @@ class AggregateFunction(str, Enum):
 class ValidationSeverity(str, Enum):
     """Validation issue severities."""
 
-    INFO = "INFO"
     ERROR = "ERROR"
-    WARNING = "WARNING"
 
 
 class ObjectType(str, Enum):

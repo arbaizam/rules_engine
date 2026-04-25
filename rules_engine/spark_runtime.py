@@ -45,6 +45,10 @@ from rules_engine.models import (
 from rules_engine.registry import FunctionRegistry
 from rules_engine.repository import RulesetRepository
 from rules_engine.runtime import RulesEngineRuntime
+from rules_engine.spark_constraints import (
+    spark_aggregate_compatibility_errors,
+    spark_filter_predicate_compatibility_errors,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -86,12 +90,6 @@ class _SparkRowNoOpRepository:
         Reject metadata loading from inside the Spark row UDF.
         """
         raise RuntimeError("Spark row UDF cannot load published metadata.")
-
-    def load_draft_for_testing(self, ruleset_id: str, version: str) -> Ruleset:
-        """
-        Reject metadata loading from inside the Spark row UDF.
-        """
-        raise RuntimeError("Spark row UDF cannot load draft metadata.")
 
 
 class SparkRulesEngineRuntime:
@@ -420,14 +418,8 @@ class SparkRulesEngineRuntime:
         """
         Convert one aggregate-filter predicate into a Spark boolean expression.
         """
-        if predicate.null_input_mode is NullInputMode.ERROR:
-            raise ValueError(
-                "Spark aggregate filters do not support null_input_mode=error in this pass."
-            )
-        if predicate.null_result_mode is NullResultMode.ERROR:
-            raise ValueError(
-                "Spark aggregate filters do not support null_result_mode=error in this pass."
-            )
+        for _, message in spark_filter_predicate_compatibility_errors(predicate):
+            raise ValueError(message)
         left = self._spark_operand_expr(predicate.left)
         right = self._spark_operand_value(predicate.right) if predicate.right is not None else None
         expression = self._spark_compare_expr(
@@ -643,25 +635,8 @@ class SparkRulesEngineRuntime:
         """
         Raise when an aggregate uses a Spark-unsupported feature.
         """
-        if operand.function in {AggregateFunction.MEDIAN, AggregateFunction.QUANTILE}:
-            raise ValueError(
-                "Spark aggregate precompute does not support exact median/quantile in this pass."
-            )
-        if operand.null_input_mode is NullInputMode.ERROR:
-            raise ValueError(
-                "Spark aggregate precompute does not support null_input_mode=error in this pass."
-            )
-        if operand.null_result_mode is NullResultMode.ERROR:
-            raise ValueError(
-                "Spark aggregate precompute does not support null_result_mode=error in this pass."
-            )
-        if (
-            operand.function in {AggregateFunction.FIRST, AggregateFunction.LAST}
-            and operand.null_input_mode is NullInputMode.PROPAGATE
-        ):
-            raise ValueError(
-                "Spark first/last aggregate precompute does not support null_input_mode=propagate in this pass."
-            )
+        for _, message in spark_aggregate_compatibility_errors(operand):
+            raise ValueError(message)
 
 
 

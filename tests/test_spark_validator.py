@@ -8,7 +8,7 @@ def _validate_aggregate(aggregate_payload):
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "draft",
+            "status": "published",
             "owner": "Rules Team",
             "owner_department": "ALM Engineering",
             "rules": [
@@ -168,7 +168,7 @@ def test_spark_validator_allows_condition_null_result_error_for_udf_row_path():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "draft",
+            "status": "published",
             "owner": "Rules Team",
             "owner_department": "ALM Engineering",
             "rules": [

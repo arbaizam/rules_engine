@@ -135,7 +135,6 @@ ruleset_yaml = """
 ruleset_id: custom_function_example
 ruleset_name: Custom Function Example
 version: "1.0.0"
-status: draft
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
@@ -192,9 +191,6 @@ print(validation.to_text())
 
 class NotebookRepository:
     def load_published(self, ruleset_name, version=None):
-        raise NotImplementedError("This guide passes the ruleset directly.")
-
-    def load_draft_for_testing(self, ruleset_id, version):
         raise NotImplementedError("This guide passes the ruleset directly.")
 
 

@@ -10,7 +10,7 @@ def _base_payload(condition):
         "ruleset_id": "rs1",
         "ruleset_name": "Ruleset",
         "version": "1",
-        "status": "draft",
+        "status": "published",
         "owner": "Rules Team",
         "owner_department": "ALM Engineering",
         "rules": [
@@ -341,7 +341,7 @@ def test_duplicate_condition_ids_fail_validation():
         "ruleset_id": "rs1",
         "ruleset_name": "Ruleset",
         "version": "1",
-        "status": "draft",
+        "status": "published",
         "owner": "Rules Team",
         "owner_department": "ALM Engineering",
         "rules": [
@@ -378,3 +378,55 @@ def test_duplicate_condition_ids_fail_validation():
     result = RulesetValidator().validate(ruleset)
 
     assert any(issue.check_name == "CONDITION_ID_DUPLICATE" for issue in result.issues)
+
+
+def test_duplicate_condition_group_ids_fail_validation():
+    """
+    What: Validates that condition_group_id values are unique within a ruleset.
+    Why: Duplicate group IDs make audit diagnostics ambiguous for code-authored rulesets.
+    Fails when: Nested condition groups can reuse the same identifier.
+    """
+    payload = {
+        "ruleset_id": "rs1",
+        "ruleset_name": "Ruleset",
+        "version": "1",
+        "owner": "Rules Team",
+        "owner_department": "ALM Engineering",
+        "rules": [
+            {
+                "rule_id": "r1",
+                "rule_name": "Rule 1",
+                "rule_order": 1,
+                "when": {
+                    "condition_group_id": "duplicate_group",
+                    "all": [
+                        {
+                            "left": {"field": "account"},
+                            "operator": "eq",
+                            "right": {"literal": "A"},
+                            "null_input_mode": "propagate",
+                            "null_result_mode": "null",
+                        },
+                        {
+                            "condition_group_id": "duplicate_group",
+                            "any": [
+                                {
+                                    "left": {"field": "status"},
+                                    "operator": "eq",
+                                    "right": {"literal": "OPEN"},
+                                    "null_input_mode": "propagate",
+                                    "null_result_mode": "null",
+                                }
+                            ],
+                        },
+                    ],
+                },
+                "assign": {"bucket": "A"},
+            }
+        ],
+    }
+
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+    result = RulesetValidator().validate(ruleset)
+
+    assert any(issue.check_name == "CONDITION_GROUP_ID_DUPLICATE" for issue in result.issues)

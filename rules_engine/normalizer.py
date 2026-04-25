@@ -105,9 +105,9 @@ class RulesetNormalizer:
                 args=dict(operand.args),
             )
         if isinstance(operand, FieldOperand):
-            return FieldOperand(field_name=operand.field_name)
+            return operand
         if isinstance(operand, LiteralOperand):
-            return LiteralOperand(value=operand.value, value_type=operand.value_type)
+            return operand
         return operand
 
     def _normalize_aggregate_filter(

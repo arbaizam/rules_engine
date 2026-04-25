@@ -101,7 +101,7 @@ ruleset = Ruleset(
     ruleset_id="python_account_review",
     ruleset_name="Python Account Review",
     version="1",
-    status=RulesetStatus.DRAFT,
+    status=RulesetStatus.PUBLISHED,
     description="Example ruleset authored with Python dataclasses.",
     owner="Rules Team",
     owner_department="ALM Engineering",
@@ -227,6 +227,6 @@ output_rows
 # MAGIC %md
 # MAGIC ## 7. Next Step
 # MAGIC
-# MAGIC For production use, compile/validate the exported YAML, save it as draft,
-# MAGIC publish it to the `ruleset_versions` Delta table, and run the Spark runtime
-# MAGIC against the published metadata.
+# MAGIC For production use, compile/validate the exported YAML, publish it to the
+# MAGIC `ruleset_versions` Delta table, and run the Spark runtime against the
+# MAGIC published metadata.

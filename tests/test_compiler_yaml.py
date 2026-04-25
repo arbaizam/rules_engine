@@ -1,7 +1,7 @@
 import pytest
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.enums import AggregateFunction, ComparisonOperator
+from rules_engine.enums import AggregateFunction, ComparisonOperator, RulesetStatus
 from rules_engine.exceptions import CompilationError
 
 
@@ -16,7 +16,6 @@ def test_valid_simple_row_rule_compiles_and_validates():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "draft",
             "owner": "Rules Team",
             "owner_department": "ALM Engineering",
             "rules": [
@@ -42,6 +41,7 @@ def test_valid_simple_row_rule_compiles_and_validates():
     )
 
     condition = ruleset.rules[0].root_group.conditions[0]
+    assert ruleset.status is RulesetStatus.PUBLISHED
     assert ruleset.owner == "Rules Team"
     assert ruleset.owner_department == "ALM Engineering"
     assert condition.operator is ComparisonOperator.EQ
@@ -59,7 +59,7 @@ def test_valid_group_aggregate_rule_compiles():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "draft",
+            "status": "published",
             "rules": [
                 {
                     "rule_name": "Group aggregate",
@@ -117,7 +117,7 @@ def test_valid_dataset_aggregate_rule_compiles():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "draft",
+            "status": "published",
             "rules": [
                 {
                     "rule_name": "Dataset aggregate",
@@ -161,7 +161,7 @@ def test_canonical_string_operators_compile():
         "ruleset_id": "rs1",
         "ruleset_name": "Ruleset",
         "version": "1",
-        "status": "draft",
+        "status": "published",
         "rules": [
             {
                 "rule_name": "Strings",
@@ -207,7 +207,7 @@ def test_value_operand_alias_is_rejected():
         "ruleset_id": "rs1",
         "ruleset_name": "Ruleset",
         "version": "1",
-        "status": "draft",
+        "status": "published",
         "rules": [
             {
                 "rule_name": "Alias",
@@ -241,7 +241,7 @@ def test_assignments_rule_alias_is_rejected():
         "ruleset_id": "rs1",
         "ruleset_name": "Ruleset",
         "version": "1",
-        "status": "draft",
+        "status": "published",
         "rules": [
             {
                 "rule_name": "Alias",
@@ -275,7 +275,7 @@ def test_aggregate_field_name_alias_is_rejected():
         "ruleset_id": "rs1",
         "ruleset_name": "Ruleset",
         "version": "1",
-        "status": "draft",
+        "status": "published",
         "rules": [
             {
                 "rule_name": "Alias",

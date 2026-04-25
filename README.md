@@ -63,21 +63,20 @@ A `Ruleset` is the top-level metadata object. It has:
 - `ruleset_id`
 - `ruleset_name`
 - `version`
-- `status`
 - `owner`
 - `owner_department`
 - optional `description`
 - ordered `rules`
 
-Lifecycle statuses are exactly:
+Persisted lifecycle statuses are exactly:
 
 ```text
-draft
 published
 retired
 ```
 
-Runtime execution should use published metadata.
+Authored YAML does not need a lifecycle status. The compiler defaults authored
+rulesets to `published`; the repository stores and updates lifecycle status.
 
 ### Rule
 
@@ -189,6 +188,8 @@ Purpose:
 - Parse a YAML string into the canonical `Ruleset` dataclass model.
 - Reject malformed YAML and unsupported enum values.
 - Preserve canonical vocabulary only.
+- Accept either a top-level ruleset mapping or a wrapper mapping under
+  `ruleset:`.
 
 Side effects:
 
@@ -291,65 +292,26 @@ Side effects:
 - Writes one file.
 - Does not publish metadata and does not evaluate data.
 
-### `PublishService.save_draft(ruleset, created_by=None)`
+### `PublishService.publish(ruleset, published_by=None)`
 
 Purpose:
 
-- Normalize, validate, and save draft metadata.
-- Draft validation errors are returned to the caller but do not block saving.
-  This preserves work-in-progress metadata while keeping `publish()` as the
-  hard validation gate.
+- Validate and persist a published ruleset version.
 
 Detailed sequence:
 
-1. Require `ruleset.status == draft`.
+1. Require the compiled ruleset lifecycle to be `published`.
 2. Normalize the ruleset.
-3. Validate the normalized ruleset.
-4. Return validation issues to the caller.
-5. Save one `ruleset_versions` row with `status = draft`, even if validation
-   has errors.
-6. Replace an existing draft row for the same `(ruleset_id, version)`.
-
-Delta tables affected:
-
-- `ruleset_versions`
-
-Side effects:
-
-- Writes draft metadata.
-- May write invalid draft metadata. Invalid drafts remain unpublishable until
-  corrected.
-- Does not make the ruleset loadable by `load_published()` unless it is later
-  published.
-- Does not evaluate business data.
-
-Actor behavior:
-
-- `created_by` is optional.
-- If omitted, metadata uses `system`.
-
-### `PublishService.publish(ruleset, created_by=None, published_by=None)`
-
-Purpose:
-
-- Validate and promote a draft ruleset version to published metadata.
-
-Detailed sequence:
-
-1. Require `ruleset.status == draft`.
-2. Normalize the ruleset again.
-3. Validate the normalized ruleset again as a publish-time gate.
+3. Validate the normalized ruleset as a publish-time gate.
 4. Stop if validation has errors.
-5. Save the normalized ruleset as draft metadata.
-6. Verify the persisted target version exists and is still draft.
-7. Verify another version of the same `ruleset_name` is not already published.
-8. Update the `ruleset_versions` row to `status = published`.
-9. Stamp `published_by` and `published_at`.
+5. Verify the exact `(ruleset_id, version)` does not already exist.
+6. Verify another version of the same `ruleset_name` is not already published.
+7. Write one `ruleset_versions` row with `status = published`.
+8. Stamp `published_by` and `published_at`.
 
 Delta tables affected:
 
-- writes/replaces one draft row in `ruleset_versions`,
-- updates that same row to `published`.
+- writes one published row in `ruleset_versions`.
 
 Side effects:
 
@@ -359,7 +321,7 @@ Side effects:
 
 Actor behavior:
 
-- `created_by` and `published_by` are optional.
+- `published_by` is optional.
 - If omitted, metadata uses `system`.
 
 ### `SparkDeltaRulesetRepository.create_base_tables(mode)`
@@ -393,28 +355,6 @@ Side effects:
 - Reads Delta metadata tables.
 - Does not write metadata.
 - Does not evaluate business data.
-
-### `SparkDeltaRulesetRepository.load_draft_for_testing(ruleset_id, version)`
-
-Purpose:
-
-- Load draft metadata from Delta by exact identity for non-production testing.
-
-Detailed sequence:
-
-1. Query `ruleset_versions` for exact `ruleset_id` and `version`.
-2. Require the persisted row to have `status = draft`.
-3. Read the canonical JSON payload from the matching row.
-4. Compile the payload back into canonical dataclasses.
-
-Side effects:
-
-- Reads Delta metadata tables.
-- Does not write metadata.
-- Does not evaluate business data.
-- Does not load `published` or `retired` metadata.
-- Does not resolve by `ruleset_name`, choose a latest draft, or fall back to
-  published metadata.
 
 ### `SparkDeltaRulesetRepository.retire(ruleset_id, version, retired_by=None)`
 
@@ -623,7 +563,6 @@ Important aggregate rules:
 ruleset_id: account_rules
 ruleset_name: Account Rules
 version: "1"
-status: draft
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
@@ -650,7 +589,6 @@ rules:
 ruleset_id: account_rules
 ruleset_name: Account Rules
 version: "1"
-status: draft
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
@@ -945,71 +883,34 @@ publish_service = PublishService(
     normalizer=RulesetNormalizer(),
 )
 
-validation = publish_service.save_draft(ruleset)
-if validation.has_errors():
-    raise ValueError(validation.to_text())
-
 publish_service.publish(ruleset)
 ```
 
 Lifecycle rules:
 
-- `save_draft` requires `ruleset.status == draft`.
-- `save_draft` saves draft metadata even when validation returns errors.
-- callers must inspect the returned `ValidationResult`.
-- `publish` requires `ruleset.status == draft`.
-- publish validates before status change.
+- persisted ruleset versions are either `published` or `retired`.
+- `publish` requires the compiled ruleset lifecycle to be `published`.
+- publish validates before writing metadata.
 - published rows are immutable by `(ruleset_id, version)`.
-- `save_draft` cannot overwrite published or retired metadata.
 - only one version of a given `ruleset_name` may be published at a time.
 - `retire` changes a persisted ruleset version to `retired`.
 - `load_published` loads only `published` metadata.
-- `load_draft_for_testing` loads only exact `(ruleset_id, version)` draft metadata.
 - production jobs should use published-only table/view access and `load_published`.
-
-What `save_draft(ruleset)` does:
-
-1. Normalizes the ruleset so publish/runtime metadata is explicit.
-2. Validates the normalized ruleset.
-3. Returns the validation result to the caller.
-4. Persists one `ruleset_versions` row with `status = draft`, even when the
-   validation result contains errors.
-5. Replaces a prior draft row for the same `(ruleset_id, version)`.
-
-Saving an invalid draft is allowed so authors can checkpoint incomplete work.
-Publishing is the hard gate: `publish(ruleset)` fails before status change if
-the configured validator reports any errors.
-
-What `load_draft_for_testing(ruleset_id, version)` does:
-
-1. Looks up exactly one persisted ruleset version by `ruleset_id` and `version`.
-2. Requires the persisted row to have `status = draft`.
-3. Reconstructs the canonical `Ruleset` from the persisted payload.
-4. Fails for missing, `published`, or `retired` rows.
-
-Draft testing loads do not resolve by `ruleset_name`, do not choose the latest
-draft, and do not fall back to published metadata. Keep production callers on
-`load_published(...)`; for additional environment protection, bind production
-jobs to a published-only view over `ruleset_versions`.
 
 What `publish(ruleset)` does:
 
-1. Normalizes the ruleset again.
-2. Validates the normalized ruleset again as a publish-time gate.
+1. Normalizes the ruleset.
+2. Validates the normalized ruleset as a publish-time gate.
 3. Fails before publishing if validation has errors.
-4. Saves the normalized ruleset as draft metadata.
-5. Verifies the target version exists and is still `draft`.
-6. Verifies no other version of the same `ruleset_name` is published.
-7. Updates the same `ruleset_versions` row to `status = published`.
-8. Stamps `published_by` and `published_at`.
+4. Verifies the exact `(ruleset_id, version)` does not already exist.
+5. Verifies no other version of the same `ruleset_name` is published.
+6. Writes one `ruleset_versions` row with `status = published`.
+7. Stamps `published_by` and `published_at`.
 
-The double validation is deliberate. A previous draft save is not treated as
-proof that the ruleset object being published is unchanged.
-
-Tables affected by draft/publish:
+Tables affected by publish:
 
 - `ruleset_versions`: authoritative lifecycle/provenance/payload row.
-- `function_registry`: unaffected by draft/publish unless registry metadata is
+- `function_registry`: unaffected by publish unless registry metadata is
   saved separately.
 - `ruleset_validation_logs`: validation/publish audit rows written by pipeline
   jobs.
@@ -1043,24 +944,6 @@ This creates:
 
 Use `mode="overwrite"` only for disposable development or smoke-test schemas.
 
-### Non-Production Draft Testing
-
-Authoring and test environments can persist drafts for repeatable testing:
-
-```python
-validation = publish_service.save_draft(ruleset, created_by="author")
-if validation.has_errors():
-    raise ValueError(validation.to_text())
-
-draft = repository.load_draft_for_testing(
-    ruleset_id=ruleset.ruleset_id,
-    version=ruleset.version,
-)
-```
-
-Draft loads require exact `(ruleset_id, version)`. They do not resolve latest
-drafts and do not fall back to published metadata.
-
 ### Production YAML Publish Pipeline
 
 The production pipeline is implemented in:
@@ -1070,15 +953,14 @@ notebooks/production_yaml_publish_pipeline.py
 ```
 
 The pipeline expects a trusted YAML artifact in a production-controlled path.
-The YAML should keep `status: draft`; publication is represented by the
-registry row lifecycle state.
+Authored YAML does not need a `status` field; publication is represented by
+the registry row lifecycle status.
 
 Required job parameters:
 
-- `schema`: target catalog/schema, for example `alme_dev_bronze.rules_engine`.
+- `schema`: target catalog/schema, for example `catalog.schema`.
 - `yaml_path`: source YAML path.
 - `archive_dir`: archive destination for source and canonical YAML copies.
-- `created_by`: actor stored on draft persistence.
 - `published_by`: actor stored on publication and automatic retirement.
 
 Optional job parameters:
@@ -1151,7 +1033,7 @@ notebooks/retire_ruleset_pipeline.py
 
 Required job parameters:
 
-- `schema`: target catalog/schema, for example `alme_dev_bronze.rules_engine`.
+- `schema`: target catalog/schema, for example `catalog.schema`.
 - `ruleset_id`: ruleset identity to retire.
 - `version`: version to retire.
 - `retired_by`: actor stored on the lifecycle row.
@@ -1170,8 +1052,7 @@ repository.retire(
 Retirement changes the persisted row to `status = retired`, stamps
 `retired_by` and `retired_at`, and makes the version unavailable through
 `load_published(...)`. It also writes a log row with `operation = retire`,
-`status = retired`, and the supplied `reason`. Drafts normally do not need
-retirement; they can be overwritten while they remain drafts.
+`status = retired`, and the supplied `reason`.
 
 ### Lifecycle Flow
 
@@ -1191,127 +1072,94 @@ flowchart TD
     E --> F[Normalize ruleset]
     F --> G[Validate ruleset]
     G --> H{Validation has errors}
-    H -->|yes and save draft| I[Persist draft row]
-    H -->|yes and publish| J[Publish fails]
-    H -->|no| K{Requested operation}
-    K -->|save draft| I
-    K -->|publish| L[Serialize payload]
-    L --> M[Compute content hash]
-    M --> N[Write draft row]
-    N --> O[Run publish guards]
-    O --> P{Publish allowed}
-    P -->|no| Q[Publish fails]
-    P -->|yes| R[Update row to published]
-    R --> S[Load published ruleset]
-    S --> T[Evaluate DataFrame]
-    R --> U[Retire version]
-    U --> V[Update row to retired]
-    I -.-> W[Load draft for testing]
-    W --> W1{Exact ruleset id and version}
-    W1 -->|yes| W2[Test evaluation]
-    W1 -->|no| W3[Load fails]
-    R -.-> X[Published rows are production loadable]
-    V -.-> Y[Retired rows remain audit only]
+    H -->|yes| I[Publish fails]
+    H -->|no| J[Serialize payload]
+    J --> K[Compute content hash]
+    K --> L[Run publish guards]
+    L --> M{Publish allowed}
+    M -->|no| N[Publish fails]
+    M -->|yes| O[Write published row]
+    O --> P[Load published ruleset]
+    P --> Q[Evaluate DataFrame]
+    O --> R[Retire version]
+    R --> S[Update row to retired]
+    O -.-> T[Published rows are production loadable]
+    S -.-> U[Retired rows remain audit only]
 ```
 
 ### Lifecycle States
 
 ```mermaid
 flowchart LR
-    A[Draft]
-    B[Published]
-    C[Retired]
-    D[Draft testing]
-    E[Production runtime]
-    F[Audit only]
-    G[Exact id and version required]
+    A[Published]
+    B[Retired]
+    C[Production runtime]
+    D[Audit only]
 
-    A -->|save draft again| A
-    A -->|publish succeeds| B
-    B -->|retire| C
+    A -->|retire| B
+    A -->|overwrite blocked| A
     B -->|overwrite blocked| B
-    C -->|overwrite blocked| C
 
-    A -.-> D
-    D --> G
-    B -.-> E
-    C -.-> F
+    A -.-> C
+    B -.-> D
 ```
 
 ### Table State Transitions
 
 ```mermaid
 flowchart LR
-    A[save draft] --> B[ruleset versions row]
-    B --> C[status draft]
-    B --> D[created metadata populated]
-    B --> E[published metadata empty]
-    B --> F[payload populated]
-    B --> G[content hash populated]
-    B --> U[load draft for testing]
-    U --> V[requires exact id and version]
-    V --> W[status must be draft]
+    A[publish] --> B[validation gate]
+    B --> C[ruleset versions row]
+    C --> D[status published]
+    C --> E[created metadata populated]
+    C --> F[published metadata populated]
+    C --> G[payload populated]
+    C --> H[content hash populated]
 
-    H[publish] --> I[validation gate]
-    I --> J[status update]
-    J --> K[status published]
-    J --> L[published metadata populated]
+    I[retire] --> J[status update]
+    J --> K[status retired]
+    J --> L[retired metadata populated]
     J --> M[payload unchanged]
     J --> N[content hash unchanged]
-
-    O[retire] --> P[status update]
-    P --> Q[status retired]
-    P --> R[retired metadata populated]
-    P --> S[payload unchanged]
-    P --> T[content hash unchanged]
 ```
 
 Key lifecycle points:
 
 - `payload_json` is the canonical persisted ruleset content.
 - `content_hash` is SHA-256 of the persisted `payload_json` bytes.
-- `payload_metadata` stores derived size/count metadata for queryability.
-- `user_metadata.owner` and `user_metadata.owner_department` identify business
-  ownership authored in YAML or Python.
-- `user_metadata.created_by` and `user_metadata.created_at` identify the draft
-  metadata write.
-- `user_metadata.published_by` and `user_metadata.published_at` identify promotion to runtime-loadable
-  metadata.
-- `user_metadata.retired_by` and `user_metadata.retired_at` identify removal
-  from runtime eligibility.
-- Draft rows can exist in Delta, but runtime ignores them.
+- `rule_count`, `condition_count`, `assignment_count`, `aggregate_count`, and
+  `custom_function_count` store derived size/count metadata for queryability.
+- `owner` and `owner_department` identify business ownership authored in YAML
+  or Python.
+- `published_by` and `published_at` identify publication to runtime-loadable metadata.
+- `retired_by` and `retired_at` identify removal from runtime eligibility.
 - Published rows are the only rows loaded by `load_published(...)`.
 - Retired rows remain in Delta for audit but are not runtime-loadable.
-- `publish(...)` can be called directly; it internally writes the draft row
-  first, then promotes that row.
 
 ## Auditability Model
 
 Ruleset metadata rows include:
 
 ```text
-payload_metadata.rule_count
-payload_metadata.condition_count
-payload_metadata.assignment_count
-payload_metadata.aggregate_count
-payload_metadata.custom_function_count
-user_metadata.owner
-user_metadata.owner_department
-user_metadata.created_by
-user_metadata.created_at
-user_metadata.published_by
-user_metadata.published_at
-user_metadata.retired_by
-user_metadata.retired_at
+rule_count
+condition_count
+assignment_count
+aggregate_count
+custom_function_count
+owner
+owner_department
+published_by
+published_at
+retired_by
+retired_at
 content_hash
 ```
 
 `owner` and `owner_department` are ruleset governance fields authored in YAML
-or Python and persisted under `user_metadata`. `created_by` and `published_by`
-are lifecycle actor fields. They are optional at API call time; when omitted,
-persisted lifecycle actor metadata uses `system`, which is appropriate for
-locked-down production jobs that run through a dedicated cluster or service
-principal.
+or Python and persisted as top-level columns. `published_by` is an optional
+lifecycle actor field. When omitted, persisted actor metadata uses
+`system`, which is appropriate for locked-down production jobs that run through
+a dedicated cluster or service principal.
 
 `content_hash` is a deterministic SHA-256 hash of the persisted
 `payload_json` bytes. Lifecycle status and provenance are excluded from the
@@ -1486,7 +1334,7 @@ runtime. By default, it writes the generated example YAML to `rule_sets/`.
 Run the default local suite:
 
 ```powershell
-& 'C:\Users\aarba\.conda\envs\GeneralEnv\python.exe' -m pytest -q tests -p no:cacheprovider --basetemp pytest-cache-files-local
+python -m pytest -q tests -p no:cacheprovider --basetemp pytest-cache-files-local
 ```
 
 Spark tests are skipped by default because local Spark startup can be
@@ -1494,10 +1342,16 @@ environment-sensitive. To run them:
 
 ```powershell
 $env:RULES_ENGINE_RUN_SPARK_TESTS = "1"
-& 'C:\Users\aarba\.conda\envs\GeneralEnv\python.exe' -m pytest -q tests
+python -m pytest -q tests
 ```
 
 Run Spark tests in Databricks before relying on Spark execution in production.
+For a local environment that needs Spark-backed repository or runtime modules,
+install the Spark extra:
+
+```powershell
+python -m pip install ".[spark]"
+```
 
 ## Packaging And Asset Bundles
 
@@ -1528,12 +1382,15 @@ databricks/smoke_test_rules_engine.py
 The production wheel includes the `rules_engine` package only. Repository
 utilities under `tools/` are intentionally excluded from the wheel because they
 are migration/support tooling, not runtime dependencies.
+PySpark is an optional package extra because Databricks provides Spark on the
+cluster. Pure-Python compiler, validation, serialization, and runtime usage only
+requires the base package dependencies.
 
 Build the wheel locally:
 
 ```powershell
-& 'C:\Users\aarba\.conda\envs\GeneralEnv\python.exe' -m pip install build
-& 'C:\Users\aarba\.conda\envs\GeneralEnv\python.exe' -m build --wheel
+python -m pip install build
+python -m build --wheel
 ```
 
 Validate and deploy the bundle from the repo root after configuring Databricks
@@ -1583,7 +1440,7 @@ Recommended Databricks workflow:
 1. Install or copy the package.
 2. Configure table names in the target catalog/schema.
 3. Run the smoke test against non-production tables.
-4. Publish a representative draft ruleset.
+4. Publish a representative ruleset.
 5. Load published metadata.
 6. Evaluate a representative DataFrame.
 7. Assert `rules_engine_error` is empty.
@@ -1598,8 +1455,8 @@ should configure log level and destinations according to the environment.
 
 Useful loggers:
 
-- `rules_engine.publish`: draft save, validation result, publish start/failure/success.
-- `rules_engine.repository`: Delta table creation, draft persistence, lifecycle status
+- `rules_engine.publish`: validation result and publish start/failure/success.
+- `rules_engine.repository`: Delta table creation, lifecycle status
   changes, published metadata loads, and function registry metadata writes.
 - `rules_engine.runtime`: pure-Python/reference evaluation start/end and aggregate
   cache calculation at debug level.
@@ -1662,15 +1519,15 @@ handles `rules_engine_error`.
 
 Check:
 
-- the ruleset was published, not only saved as draft,
+- the ruleset was published,
 - the name and version match,
 - another version was not left published,
 - the version was not retired.
 
-### Save Draft Fails
+### Publish Fails Because Version Already Exists
 
-`save_draft` cannot overwrite a published or retired version. Increment the
-version or retire/publish through the intended lifecycle.
+Published and retired versions are immutable. Increment the version or retire
+the currently published version before publishing a replacement.
 
 ## Known Limitations
 
@@ -1678,9 +1535,6 @@ version or retire/publish through the intended lifecycle.
   published version before publishing a replacement version.
 - v1 does not guarantee concurrent publish safety. Run publication from a
   controlled promotion workflow, not competing interactive jobs.
-- `save_draft` uses a replace-style draft write. Use it for controlled
-  authoring/checkpoint workflows; do not treat it as a concurrent production
-  promotion transaction.
 - Spark runtime uses a Python UDF for final rule evaluation.
 - Spark runtime does not yet compile every row predicate into native Spark
   expressions.

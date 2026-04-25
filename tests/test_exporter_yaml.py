@@ -16,7 +16,7 @@ def test_yaml_export_round_trips_compiled_ruleset():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "draft",
+            "status": "published",
             "description": "Round-trip fixture",
             "owner": "Rules Team",
             "owner_department": "ALM Engineering",
@@ -108,6 +108,7 @@ def test_yaml_export_round_trips_compiled_ruleset():
 
     assert exported["owner"] == "Rules Team"
     assert exported["owner_department"] == "ALM Engineering"
+    assert "status" not in exported
     assert reconstructed == original
 
 
@@ -122,7 +123,7 @@ def test_yaml_export_uses_canonical_keys():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "draft",
+            "status": "published",
             "rules": [
                 {
                     "rule_id": "r1",

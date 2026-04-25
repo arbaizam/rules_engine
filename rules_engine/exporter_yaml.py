@@ -55,7 +55,6 @@ class YamlRulesetExporter:
             "ruleset_id": ruleset.ruleset_id,
             "ruleset_name": ruleset.ruleset_name,
             "version": ruleset.version,
-            "status": ruleset.status.value,
         }
         if ruleset.description is not None:
             payload["description"] = ruleset.description

@@ -1,27 +1,6 @@
-import re
-
 import pytest
 
-
-def parse_numeric_version(version: str) -> tuple[int, ...]:
-    if not re.fullmatch(r"\d+(\.\d+)*", version):
-        raise ValueError(
-            f"Version must be numeric dot notation for automatic retirement: {version}"
-        )
-    return tuple(int(part) for part in version.split("."))
-
-
-def compare_versions(left: str, right: str) -> int:
-    left_parts = parse_numeric_version(left)
-    right_parts = parse_numeric_version(right)
-    max_len = max(len(left_parts), len(right_parts))
-    padded_left = left_parts + (0,) * (max_len - len(left_parts))
-    padded_right = right_parts + (0,) * (max_len - len(right_parts))
-    if padded_left > padded_right:
-        return 1
-    if padded_left < padded_right:
-        return -1
-    return 0
+from rules_engine.versioning import compare_versions, parse_numeric_version
 
 
 def test_compare_versions_orders_numeric_dot_versions():

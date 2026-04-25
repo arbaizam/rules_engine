@@ -66,7 +66,7 @@ class RulesetValidator:
         """
         result = ValidationResult()
         self.populate_result(ruleset, result)
-        return result.finalize()
+        return result
 
     def populate_result(self, ruleset: Ruleset, result: ValidationResult) -> None:
         """
@@ -116,6 +116,7 @@ class RulesetValidator:
         seen_rule_orders: set[int] = set()
         seen_rule_ids: set[str] = set()
         seen_condition_ids: set[str] = set()
+        seen_condition_group_ids: set[str] = set()
         for rule in ruleset.rules:
             if rule.rule_id in seen_rule_ids:
                 self._add(
@@ -135,20 +136,26 @@ class RulesetValidator:
                     rule.rule_id,
                 )
             seen_rule_orders.add(rule.rule_order)
-            self._validate_rule(rule, result, seen_condition_ids)
+            self._validate_rule(rule, result, seen_condition_ids, seen_condition_group_ids)
 
     def _validate_rule(
         self,
         rule: Rule,
         result: ValidationResult,
         seen_condition_ids: set[str],
+        seen_condition_group_ids: set[str],
     ) -> None:
         """
         Validate one rule and its condition tree and assignments.
         """
         if not rule.rule_name:
             self._add(result, "RULE_NAME_REQUIRED", "rule_name is required.", ObjectType.RULE, rule.rule_id)
-        self._validate_condition_group(rule.root_group, result, seen_condition_ids)
+        self._validate_condition_group(
+            rule.root_group,
+            result,
+            seen_condition_ids,
+            seen_condition_group_ids,
+        )
         if not rule.assignments:
             self._add(
                 result,
@@ -175,6 +182,7 @@ class RulesetValidator:
         group: ConditionGroup,
         result: ValidationResult,
         seen_condition_ids: set[str],
+        seen_condition_group_ids: set[str],
     ) -> None:
         """
         Validate one condition group and recursively validate child groups.
@@ -187,6 +195,15 @@ class RulesetValidator:
                 ObjectType.CONDITION_GROUP,
                 "",
             )
+        elif group.condition_group_id in seen_condition_group_ids:
+            self._add(
+                result,
+                "CONDITION_GROUP_ID_DUPLICATE",
+                f"Duplicate condition_group_id detected: {group.condition_group_id}",
+                ObjectType.CONDITION_GROUP,
+                group.condition_group_id,
+            )
+        seen_condition_group_ids.add(group.condition_group_id)
         if not group.conditions and not group.groups:
             self._add(
                 result,
@@ -207,7 +224,12 @@ class RulesetValidator:
             seen_condition_ids.add(condition.condition_id)
             self._validate_condition(condition, result)
         for nested_group in group.groups:
-            self._validate_condition_group(nested_group, result, seen_condition_ids)
+            self._validate_condition_group(
+                nested_group,
+                result,
+                seen_condition_ids,
+                seen_condition_group_ids,
+            )
 
     def _validate_condition(self, condition: Condition, result: ValidationResult) -> None:
         """

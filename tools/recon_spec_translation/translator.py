@@ -106,7 +106,6 @@ class ReconciliationSpecTranslator:
                 "ruleset_id": ruleset_id,
                 "ruleset_name": ruleset_name,
                 "version": version,
-                "status": "draft",
                 "owner": owner.strip(),
                 "owner_department": owner_department.strip(),
                 "rules": rules,

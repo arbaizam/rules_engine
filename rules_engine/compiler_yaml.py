@@ -86,7 +86,10 @@ class YamlRulesetCompiler:
         ruleset_id = self._require_str(payload, "ruleset_id")
         ruleset_name = self._require_str(payload, "ruleset_name")
         version = self._require_str(payload, "version")
-        status = self._enum(RulesetStatus, self._require_str(payload, "status"), "status")
+        status_value = payload.get("status", RulesetStatus.PUBLISHED.value)
+        if not isinstance(status_value, str) or not status_value:
+            raise CompilationError("status must be a non-empty string when provided.")
+        status = self._enum(RulesetStatus, status_value, "status")
 
         raw_rules = payload.get("rules")
         if not isinstance(raw_rules, list):

@@ -13,14 +13,10 @@ from rules_engine.models import (
     AggregateOperand,
     ConditionGroup,
     CustomFunctionOperand,
-    FunctionRegistryRow,
     Operand,
-    PayloadMetadata,
     Ruleset,
     RulesetVersionRow,
-    UserMetadata,
 )
-from rules_engine.registry import CustomFunctionSpec
 
 
 class DeltaRowSerializer:
@@ -32,8 +28,6 @@ class DeltaRowSerializer:
         self,
         ruleset: Ruleset,
         *,
-        created_by: str = "system",
-        created_at: str = "unknown",
         published_by: str | None = None,
         published_at: str | None = None,
         retired_by: str | None = None,
@@ -55,23 +49,17 @@ class DeltaRowSerializer:
             description=ruleset.description,
             payload_json=payload_json,
             content_hash=self.content_hash_from_payload_json(payload_json),
-            payload_metadata=PayloadMetadata(
-                rule_count=len(ruleset.rules),
-                condition_count=self._count_conditions(ruleset),
-                assignment_count=sum(len(rule.assignments) for rule in ruleset.rules),
-                aggregate_count=self._count_operands(ruleset, AggregateOperand),
-                custom_function_count=self._count_operands(ruleset, CustomFunctionOperand),
-            ),
-            user_metadata=UserMetadata(
-                owner=ruleset.owner,
-                owner_department=ruleset.owner_department,
-                created_by=created_by,
-                created_at=created_at,
-                published_by=published_by,
-                published_at=published_at,
-                retired_by=retired_by,
-                retired_at=retired_at,
-            ),
+            rule_count=len(ruleset.rules),
+            condition_count=self._count_conditions(ruleset),
+            assignment_count=sum(len(rule.assignments) for rule in ruleset.rules),
+            aggregate_count=self._count_operands(ruleset, AggregateOperand),
+            custom_function_count=self._count_operands(ruleset, CustomFunctionOperand),
+            owner=ruleset.owner,
+            owner_department=ruleset.owner_department,
+            published_by=published_by,
+            published_at=published_at,
+            retired_by=retired_by,
+            retired_at=retired_at,
         )
 
     def deserialize_ruleset_version(self, row: RulesetVersionRow) -> Ruleset:
@@ -88,7 +76,7 @@ class DeltaRowSerializer:
 
         Lifecycle provenance and status are intentionally excluded. The hash
         changes when rule semantics or authoring metadata change, not when a
-        draft is saved or published by a different operator.
+        ruleset is published by a different operator.
         """
         return self.content_hash_from_payload_json(self._payload_json(ruleset))
 
@@ -100,18 +88,6 @@ class DeltaRowSerializer:
         ``payload_json`` column stored in Delta.
         """
         return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
-
-    def serialize_function_spec(self, spec: CustomFunctionSpec) -> FunctionRegistryRow:
-        """
-        Serialize a custom function spec to a registry row.
-        """
-        return spec.to_row()
-
-    def deserialize_function_spec(self, row: FunctionRegistryRow) -> CustomFunctionSpec:
-        """
-        Reconstruct a custom function spec from a registry row.
-        """
-        return CustomFunctionSpec.from_row(row)
 
     def _count_conditions(self, ruleset: Ruleset) -> int:
         """

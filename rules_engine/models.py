@@ -71,7 +71,7 @@ class ValidationResult:
     Notes
     -----
     ``passed`` is derived from the current issue list so callers cannot observe
-    a stale pass/fail flag before a validator finalizes the result.
+    stale pass/fail state.
     """
 
     issues: list[ValidationIssue] = field(default_factory=list)
@@ -136,17 +136,6 @@ class ValidationResult:
             True when one or more issues have severity ``ERROR``.
         """
         return any(issue.severity is ValidationSeverity.ERROR for issue in self.issues)
-
-    def finalize(self) -> "ValidationResult":
-        """
-        Return this result for validators that use an explicit finalize step.
-
-        Returns
-        -------
-        ValidationResult
-            The same object. ``passed`` is derived dynamically.
-        """
-        return self
 
     def to_text(self) -> str:
         """
@@ -402,42 +391,6 @@ class Ruleset:
 
 
 @dataclass(frozen=True)
-class PayloadMetadata:
-    """
-    Summary metadata derived from a canonical ruleset payload.
-
-    These values are stored together as a nested Delta struct so operational
-    queries can inspect ruleset size and complexity without parsing
-    ``payload_json``.
-    """
-
-    rule_count: int
-    condition_count: int
-    assignment_count: int
-    aggregate_count: int
-    custom_function_count: int
-
-
-@dataclass(frozen=True)
-class UserMetadata:
-    """
-    Lifecycle actor and timestamp metadata for one ruleset version.
-
-    The fields are stored together as a nested Delta struct because they all
-    describe who performed lifecycle actions and when those actions occurred.
-    """
-
-    owner: str | None
-    owner_department: str | None
-    created_by: str
-    created_at: str
-    published_by: str | None
-    published_at: str | None
-    retired_by: str | None
-    retired_at: str | None
-
-
-@dataclass(frozen=True)
 class RulesetVersionRow:
     """Authoritative ruleset version table row."""
 
@@ -448,8 +401,17 @@ class RulesetVersionRow:
     description: str | None
     payload_json: str
     content_hash: str
-    payload_metadata: PayloadMetadata | Mapping[str, Any]
-    user_metadata: UserMetadata | Mapping[str, Any]
+    rule_count: int
+    condition_count: int
+    assignment_count: int
+    aggregate_count: int
+    custom_function_count: int
+    owner: str | None
+    owner_department: str | None
+    published_by: str | None
+    published_at: str | None
+    retired_by: str | None
+    retired_at: str | None
 
 
 @dataclass(frozen=True)

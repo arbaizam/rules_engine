@@ -15,9 +15,6 @@
 # MAGIC 6. Export the canonical normalized YAML to an archive path.
 # MAGIC 7. Append one publish log row to a Delta table.
 # MAGIC
-# MAGIC The source YAML should keep `status: draft`. Publication is represented by
-# MAGIC the registry row status, not by changing authored YAML.
-# MAGIC
 # MAGIC The notebook always uses these tables under the configured `schema`:
 # MAGIC
 # MAGIC - `ruleset_versions`
@@ -31,7 +28,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import re
 import sys
 import traceback
 
@@ -51,6 +47,7 @@ from rules_engine import (  # noqa: E402
 )
 from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository  # noqa: E402
 from rules_engine.serializer import DeltaRowSerializer  # noqa: E402
+from rules_engine.versioning import compare_versions  # noqa: E402
 
 # COMMAND ----------
 
@@ -60,7 +57,7 @@ from rules_engine.serializer import DeltaRowSerializer  # noqa: E402
 # MAGIC Set these as Databricks job parameters/widgets.
 # MAGIC
 # MAGIC `schema` must be the target catalog and schema, for example
-# MAGIC `alme_dev_bronze.rules_engine`.
+# MAGIC `catalog.schema`.
 # MAGIC
 # MAGIC `retire_existing_published=false` makes the job fail when another version
 # MAGIC of the same `ruleset_name` is already published.
@@ -75,7 +72,6 @@ from rules_engine.serializer import DeltaRowSerializer  # noqa: E402
 dbutils.widgets.text("yaml_path", "")
 dbutils.widgets.text("archive_dir", "")
 dbutils.widgets.text("schema", "YOUR_CATALOG.YOUR_SCHEMA")
-dbutils.widgets.text("created_by", "prod-rules-pipeline")
 dbutils.widgets.text("published_by", "prod-rules-pipeline")
 dbutils.widgets.dropdown("create_metadata_tables", "false", ["false", "true"])
 dbutils.widgets.dropdown("create_log_table", "true", ["false", "true"])
@@ -85,7 +81,6 @@ dbutils.widgets.dropdown("require_newer_version", "true", ["true", "false"])
 YAML_PATH = dbutils.widgets.get("yaml_path").strip()
 ARCHIVE_DIR = dbutils.widgets.get("archive_dir").strip()
 SCHEMA = dbutils.widgets.get("schema").strip()
-CREATED_BY = dbutils.widgets.get("created_by").strip() or "prod-rules-pipeline"
 PUBLISHED_BY = dbutils.widgets.get("published_by").strip() or "prod-rules-pipeline"
 CREATE_METADATA_TABLES = dbutils.widgets.get("create_metadata_tables") == "true"
 CREATE_LOG_TABLE = dbutils.widgets.get("create_log_table") == "true"
@@ -142,27 +137,6 @@ def compile_ruleset(path: str):
     if path.startswith("dbfs:/"):
         return YamlRulesetCompiler().compile_text(dbutils.fs.head(path, 10 * 1024 * 1024))
     return YamlRulesetCompiler().compile_path(path)
-
-
-def parse_numeric_version(version: str) -> tuple[int, ...]:
-    if not re.fullmatch(r"\d+(\.\d+)*", version):
-        raise ValueError(
-            f"Version must be numeric dot notation for automatic retirement: {version}"
-        )
-    return tuple(int(part) for part in version.split("."))
-
-
-def compare_versions(left: str, right: str) -> int:
-    left_parts = parse_numeric_version(left)
-    right_parts = parse_numeric_version(right)
-    max_len = max(len(left_parts), len(right_parts))
-    padded_left = left_parts + (0,) * (max_len - len(left_parts))
-    padded_right = right_parts + (0,) * (max_len - len(right_parts))
-    if padded_left > padded_right:
-        return 1
-    if padded_left < padded_right:
-        return -1
-    return 0
 
 
 def current_published_version(ruleset_name: str) -> dict | None:
@@ -279,7 +253,6 @@ try:
                 "source_yaml_path": YAML_PATH,
                 "canonical_yaml_path": None,
                 "original_yaml_archive_path": None,
-                "created_by": CREATED_BY,
                 "published_by": PUBLISHED_BY,
                 "retire_existing_published": RETIRE_EXISTING_PUBLISHED,
                 "require_newer_version": REQUIRE_NEWER_VERSION,
@@ -325,7 +298,6 @@ try:
 
     publish_service.publish(
         normalized,
-        created_by=CREATED_BY,
         published_by=PUBLISHED_BY,
     )
 
@@ -362,7 +334,6 @@ try:
             "source_yaml_path": YAML_PATH,
             "canonical_yaml_path": canonical_yaml_path,
             "original_yaml_archive_path": original_yaml_archive_path,
-            "created_by": CREATED_BY,
             "published_by": PUBLISHED_BY,
             "retire_existing_published": RETIRE_EXISTING_PUBLISHED,
             "require_newer_version": REQUIRE_NEWER_VERSION,
@@ -399,7 +370,6 @@ except Exception as exc:
                 "source_yaml_path": YAML_PATH,
                 "canonical_yaml_path": canonical_yaml_path,
                 "original_yaml_archive_path": original_yaml_archive_path,
-                "created_by": CREATED_BY,
                 "published_by": PUBLISHED_BY,
                 "retire_existing_published": RETIRE_EXISTING_PUBLISHED,
                 "require_newer_version": REQUIRE_NEWER_VERSION,

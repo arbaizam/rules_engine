@@ -8,13 +8,7 @@ metadata but intentionally unsupported by the current Spark execution path.
 
 from __future__ import annotations
 
-from rules_engine.enums import (
-    AggregateFunction,
-    NullInputMode,
-    NullResultMode,
-    ObjectType,
-    ValidationSeverity,
-)
+from rules_engine.enums import ObjectType, ValidationSeverity
 from rules_engine.models import (
     AggregateOperand,
     Condition,
@@ -22,6 +16,10 @@ from rules_engine.models import (
     Operand,
     Ruleset,
     ValidationResult,
+)
+from rules_engine.spark_constraints import (
+    spark_aggregate_compatibility_errors,
+    spark_filter_predicate_compatibility_errors,
 )
 from rules_engine.validator import RulesetValidator
 
@@ -39,7 +37,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         self.populate_result(ruleset, result)
         for rule in ruleset.rules:
             self._validate_group_for_spark(rule.root_group, result)
-        return result.finalize()
+        return result
 
     def _validate_group_for_spark(self, group: ConditionGroup, result) -> None:
         """
@@ -74,53 +72,12 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         """
         Add Spark compatibility errors for unsupported aggregate features.
         """
-        if operand.function in {AggregateFunction.MEDIAN, AggregateFunction.QUANTILE}:
-            self._add_spark_error(
-                result,
-                "SPARK_EXACT_PERCENTILE_UNSUPPORTED",
-                "Spark runtime does not support exact median or quantile in this pass.",
-                condition_id,
-            )
-        if operand.null_input_mode is NullInputMode.ERROR:
-            self._add_spark_error(
-                result,
-                "SPARK_AGGREGATE_NULL_INPUT_ERROR_UNSUPPORTED",
-                "Spark runtime does not support aggregate null_input_mode=error.",
-                condition_id,
-            )
-        if operand.null_result_mode is NullResultMode.ERROR:
-            self._add_spark_error(
-                result,
-                "SPARK_AGGREGATE_NULL_RESULT_ERROR_UNSUPPORTED",
-                "Spark runtime does not support aggregate null_result_mode=error.",
-                condition_id,
-            )
-        if (
-            operand.function in {AggregateFunction.FIRST, AggregateFunction.LAST}
-            and operand.null_input_mode is NullInputMode.PROPAGATE
-        ):
-            self._add_spark_error(
-                result,
-                "SPARK_FIRST_LAST_PROPAGATE_UNSUPPORTED",
-                "Spark runtime does not support first/last with null_input_mode=propagate.",
-                condition_id,
-            )
+        for check_name, message in spark_aggregate_compatibility_errors(operand):
+            self._add_spark_error(result, check_name, message, condition_id)
         if operand.filter is not None:
             for predicate in operand.filter.predicates:
-                if predicate.null_input_mode is NullInputMode.ERROR:
-                    self._add_spark_error(
-                        result,
-                        "SPARK_FILTER_NULL_INPUT_ERROR_UNSUPPORTED",
-                        "Spark aggregate filters do not support null_input_mode=error.",
-                        condition_id,
-                    )
-                if predicate.null_result_mode is NullResultMode.ERROR:
-                    self._add_spark_error(
-                        result,
-                        "SPARK_FILTER_NULL_RESULT_ERROR_UNSUPPORTED",
-                        "Spark aggregate filters do not support null_result_mode=error.",
-                        condition_id,
-                    )
+                for check_name, message in spark_filter_predicate_compatibility_errors(predicate):
+                    self._add_spark_error(result, check_name, message, condition_id)
 
     def _add_spark_error(self, result, check_name: str, message: str, condition_id: str) -> None:
         """

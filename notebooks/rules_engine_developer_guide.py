@@ -95,7 +95,7 @@ from tools.recon_spec_translation.writer_yaml import write_yaml
 # MAGIC What this cell does:
 # MAGIC
 # MAGIC - Creates a canonical YAML document as a Python string.
-# MAGIC - Defines one draft ruleset named `Account Review Rules`.
+# MAGIC - Defines one published ruleset named `Account Review Rules`.
 # MAGIC - Defines one rule evaluated by `rule_order = 1`.
 # MAGIC - Uses an `all` condition group, meaning every condition must pass.
 # MAGIC - Adds explicit condition IDs so metadata and diagnostics are readable.
@@ -124,7 +124,6 @@ ruleset_yaml = """
 ruleset_id: account_review_rules
 ruleset_name: Account Review Rules
 version: "1"
-status: draft
 owner: Rules Team
 owner_department: ALM Engineering
 description: Example ruleset used by the developer guide.
@@ -378,7 +377,9 @@ if spark_validation.has_errors():
 
 # COMMAND ----------
 
-DATABASE = "alme_dev_bronze.rules_engine_guide"
+CATALOG = "main"
+SCHEMA = "rules_engine_guide"
+DATABASE = f"{CATALOG}.{SCHEMA}"
 TABLE_PREFIX = "test"
 
 cleanup_sql = f"DROP SCHEMA IF EXISTS {DATABASE} CASCADE"
@@ -406,42 +407,35 @@ table_names
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 8. Save Draft And Publish
+# MAGIC ## 8. Publish Metadata
 # MAGIC
-# MAGIC `PublishService` orchestrates normalization, validation, draft save, and
-# MAGIC publish status update.
+# MAGIC `PublishService` orchestrates normalization, validation, and direct
+# MAGIC publication.
 # MAGIC
 # MAGIC Published metadata is immutable by `(ruleset_id, version)`. If you rerun
 # MAGIC this cell after publication, retire or overwrite the smoke tables first.
 # MAGIC
 # MAGIC `owner` and `owner_department` come from the YAML/Python ruleset metadata.
-# MAGIC `created_by` and `published_by` are optional lifecycle actor fields. When
-# MAGIC omitted, persisted actor metadata uses `system`, which fits dedicated
-# MAGIC production cluster execution.
+# MAGIC `published_by` is an optional lifecycle actor field. When omitted,
+# MAGIC persisted actor metadata uses `system`, which fits dedicated production
+# MAGIC cluster execution.
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
 # MAGIC 1. Builds a `PublishService` by wiring together the repository, validator,
 # MAGIC    and normalizer.
-# MAGIC 2. Calls `save_draft(ruleset)`.
+# MAGIC 2. Calls `publish(ruleset)`.
 # MAGIC 3. Normalizes the ruleset so persistence-ready fields are explicit.
 # MAGIC 4. Runs semantic validation plus Spark compatibility validation.
-# MAGIC 5. Writes one draft row into `ruleset_versions`.
-# MAGIC 6. Calls `publish(ruleset)`.
-# MAGIC 7. Re-normalizes and re-validates the ruleset as a publish-time gate.
-# MAGIC 8. Rewrites the draft row for this version, because it is still `draft`.
-# MAGIC 9. Updates the same `ruleset_versions` row to `status = published`.
-# MAGIC
-# MAGIC `save_draft` and `publish` both validate intentionally. A prior draft save
-# MAGIC is not treated as proof that the object being published is unchanged.
+# MAGIC 5. Writes one published row into `ruleset_versions`.
 # MAGIC
 # MAGIC Tables affected by this cell:
 # MAGIC
 # MAGIC - `ruleset_versions`: one authoritative metadata row. After publish,
-# MAGIC   `status` should be `published`, `user_metadata.owner` should reflect the
-# MAGIC   authored owner, `user_metadata.published_by` should be `system`,
-# MAGIC   `user_metadata.published_at` should be populated, and `payload_json`
-# MAGIC   should contain the full canonical ruleset. Lifecycle status is
+# MAGIC   `status` should be `published`, `owner` should reflect the authored
+# MAGIC   owner, `published_by` should be `system`, `published_at` should be
+# MAGIC   populated, and `payload_json` should contain the full canonical ruleset.
+# MAGIC   Lifecycle status is
 # MAGIC   authoritative in the table row, not duplicated inside the payload.
 # MAGIC
 # MAGIC This cell does **not** evaluate input business data. It only promotes rule
@@ -455,12 +449,6 @@ publish_service = PublishService(
     validator=SparkRulesetCompatibilityValidator(FunctionRegistry()),
     normalizer=RulesetNormalizer(),
 )
-
-draft_validation = publish_service.save_draft(ruleset)
-print(draft_validation.to_text())
-
-if draft_validation.has_errors():
-    raise ValueError(draft_validation.to_text())
 
 publish_service.publish(ruleset)
 
@@ -580,13 +568,12 @@ assert result_df.where("rules_engine_matched").count() == 2
 # MAGIC What to inspect:
 # MAGIC
 # MAGIC - `ruleset_versions.status` should be `published`.
-# MAGIC - `ruleset_versions.user_metadata.owner` should reflect the authored owner.
-# MAGIC - `ruleset_versions.user_metadata.owner_department` should reflect the authored department.
-# MAGIC - `ruleset_versions.user_metadata.created_by` should be `system` when actor fields are omitted.
-# MAGIC - `ruleset_versions.user_metadata.published_by` should be `system` after publish.
+# MAGIC - `ruleset_versions.owner` should reflect the authored owner.
+# MAGIC - `ruleset_versions.owner_department` should reflect the authored department.
+# MAGIC - `ruleset_versions.published_by` should be `system` after publish.
 # MAGIC - `ruleset_versions.content_hash` should be populated.
 # MAGIC - `ruleset_versions.payload_json` should contain the full canonical ruleset.
-# MAGIC - `ruleset_versions.payload_metadata.rule_count` and `condition_count` should be populated.
+# MAGIC - `ruleset_versions.rule_count` and `condition_count` should be populated.
 # MAGIC
 # MAGIC This cell is read-only.
 

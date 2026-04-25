@@ -53,13 +53,13 @@ def build_table_names() -> RulesEngineTableNames:
 
 
 def build_ruleset():
-    """Create one small Spark-compatible draft ruleset."""
+    """Create one small Spark-compatible published ruleset."""
     return YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "smoke_ruleset",
             "ruleset_name": "Smoke Ruleset",
             "version": "1",
-            "status": "draft",
+            "status": "published",
             "owner": "Rules Team",
             "owner_department": "ALM Engineering",
             "rules": [

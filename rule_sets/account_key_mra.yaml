@@ -1,7 +1,6 @@
 ruleset_id: account_key_mra
 ruleset_name: Account Key MRA
 version: 1.0.0
-status: draft
 owner: Rules Team
 owner_department: ALM Engineering
 description: Translated from PySpark when-chain for account_key_mra.
