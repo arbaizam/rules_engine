@@ -308,7 +308,10 @@ class YamlRulesetCompiler:
             fn_payload = self._require_mapping(payload, "custom_function")
             return CustomFunctionOperand(
                 function_name=self._require_str(fn_payload, "name"),
-                args=dict(self._optional_mapping(fn_payload, "args")),
+                args={
+                    str(arg_name): self._compile_custom_function_arg(arg_value)
+                    for arg_name, arg_value in self._optional_mapping(fn_payload, "args").items()
+                },
             )
         aggregate_payload = self._require_mapping(payload, "aggregate")
         return self._compile_aggregate(aggregate_payload)
@@ -361,6 +364,20 @@ class YamlRulesetCompiler:
             ),
             null_default_value=payload.get("null_default_value"),
         )
+
+    def _compile_custom_function_arg(self, value: Any) -> Any:
+        """
+        Compile operand-shaped custom function args and preserve literals.
+        """
+        if isinstance(value, Mapping):
+            operand_keys = {
+                key
+                for key in ("field", "literal", "aggregate", "custom_function")
+                if key in value
+            }
+            if operand_keys:
+                return self._compile_operand(value)
+        return value
 
     def _compile_aggregate_filter(self, payload: Any) -> AggregateFilter:
         """

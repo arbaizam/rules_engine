@@ -273,8 +273,32 @@ class RulesEngineRuntime:
             return aggregate_cache.resolve(operand, row_index)
         if isinstance(operand, CustomFunctionOperand):
             implementation = self._function_registry.get_implementation(operand.function_name)
-            return implementation(**dict(operand.args))
+            return implementation(
+                **{
+                    key: self._resolve_custom_function_arg(
+                        value,
+                        row,
+                        row_index,
+                        aggregate_cache,
+                    )
+                    for key, value in operand.args.items()
+                }
+            )
         raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+
+    def _resolve_custom_function_arg(
+        self,
+        value: Any,
+        row: Mapping[str, Any],
+        row_index: int,
+        aggregate_cache: "AggregateContext",
+    ) -> Any:
+        """
+        Resolve operand-valued custom function args against the current row.
+        """
+        if isinstance(value, (FieldOperand, LiteralOperand, AggregateOperand, CustomFunctionOperand)):
+            return self._resolve_operand(value, row, row_index, aggregate_cache)
+        return value
 
     def _compare_values(
         self,

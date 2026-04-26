@@ -585,6 +585,14 @@ class RulesetValidator:
                     "actual": sorted(actual),
                 },
             )
+        for arg_name, arg_value in operand.args.items():
+            if isinstance(arg_value, Operand):
+                self._validate_operand(
+                    arg_value,
+                    result,
+                    f"{object_id}.{operand.function_name}.{arg_name}",
+                    in_assignment=in_assignment,
+                )
 
     def _valid_quantile(self, value: Any) -> bool:
         """

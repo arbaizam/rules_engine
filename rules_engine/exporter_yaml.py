@@ -157,7 +157,10 @@ class YamlRulesetExporter:
             return {
                 "custom_function": {
                     "name": operand.function_name,
-                    "args": self._export_value(dict(operand.args)),
+                    "args": {
+                        str(key): self._export_arg_value(value)
+                        for key, value in operand.args.items()
+                    },
                 }
             }
         if isinstance(operand, AggregateOperand):
@@ -250,3 +253,11 @@ class YamlRulesetExporter:
                 f"Dataclass values are not YAML-authoring literals: {type(value).__name__}"
             )
         return value
+
+    def _export_arg_value(self, value: Any) -> Any:
+        """
+        Export custom-function args, preserving nested operand references.
+        """
+        if isinstance(value, (FieldOperand, LiteralOperand, CustomFunctionOperand, AggregateOperand)):
+            return self._export_operand(value)
+        return self._export_value(value)

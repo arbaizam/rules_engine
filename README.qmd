@@ -715,9 +715,9 @@ notebooks/custom_function_authoring_guide.py
 ```
 
 ```python
-from rules_engine import CustomFunctionSpec, FunctionRegistry
+from rules_engine import CustomFunctionSpec, FunctionRegistry, register_standard_functions
 
-registry = FunctionRegistry()
+registry = register_standard_functions(FunctionRegistry())
 registry.register(
     CustomFunctionSpec(
         function_name="score",
@@ -729,6 +729,28 @@ registry.register(
     ),
     implementation=lambda **kwargs: kwargs["x"] + kwargs["y"],
 )
+```
+
+The package includes a reusable `rules_engine.standard_functions` module for
+common rule helpers such as `substring`, `left`, `right`, `trim`, `upper`,
+`lower`, `normalize_whitespace`, `length`, `regex_extract`, `regex_replace`,
+`contains_any`, `default_if_null`, `null_if`, and `to_number`.
+
+Custom function arguments may be literal values or operand-shaped values. This
+allows common row-derived functions such as:
+
+```yaml
+left:
+  custom_function:
+    name: substring
+    args:
+      value: { field: account_code }
+      start: 2
+      length: 3
+operator: eq
+right: { literal: BCD }
+null_input_mode: propagate
+null_result_mode: "null"
 ```
 
 Validation checks:

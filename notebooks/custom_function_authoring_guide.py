@@ -26,6 +26,8 @@ from rules_engine import (  # noqa: E402
     RulesetValidator,
     SparkRulesetCompatibilityValidator,
     YamlRulesetCompiler,
+    register_standard_functions,
+    standard_function_rows,
 )
 from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository  # noqa: E402
 
@@ -76,7 +78,7 @@ def risk_bucket(risk_score):
 
 # COMMAND ----------
 
-registry = FunctionRegistry()
+registry = register_standard_functions(FunctionRegistry())
 
 registry.register(
     CustomFunctionSpec(
@@ -125,9 +127,14 @@ registry.register(
 # MAGIC     arg_name: literal_value
 # MAGIC ```
 # MAGIC
-# MAGIC Arguments are literal metadata values, not row-field references. If a value
-# MAGIC must come from the input row, model it as a normal field condition or extend
-# MAGIC the rules engine contract deliberately.
+# MAGIC Arguments may be literal metadata values or operand-shaped values:
+# MAGIC
+# MAGIC ```yaml
+# MAGIC value: { field: account_code }
+# MAGIC ```
+# MAGIC
+# MAGIC For common transformations such as substring, trim, regex extraction, or
+# MAGIC casing, use `rules_engine.standard_functions.register_standard_functions`.
 
 # COMMAND ----------
 
@@ -215,7 +222,8 @@ output_rows
 # MAGIC table_names = RulesEngineTableNames.from_schema(schema)
 # MAGIC repository = SparkDeltaRulesetRepository(spark, table_names)
 # MAGIC repository.save_function_registry_rows(
-# MAGIC     [
+# MAGIC     standard_function_rows()
+# MAGIC     + [
 # MAGIC         registry.get_spec("score_account").to_row(),
 # MAGIC         registry.get_spec("risk_bucket").to_row(),
 # MAGIC     ]

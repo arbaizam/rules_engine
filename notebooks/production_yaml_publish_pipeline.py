@@ -44,6 +44,7 @@ from rules_engine import (  # noqa: E402
     SparkRulesetCompatibilityValidator,
     YamlRulesetCompiler,
     YamlRulesetExporter,
+    register_standard_functions,
 )
 from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository  # noqa: E402
 from rules_engine.serializer import DeltaRowSerializer  # noqa: E402
@@ -203,7 +204,7 @@ if CREATE_LOG_TABLE:
         .saveAsTable(table_names.ruleset_validation_logs)
     )
 
-registry = FunctionRegistry()
+registry = register_standard_functions(FunctionRegistry())
 normalizer = RulesetNormalizer()
 validator = SparkRulesetCompatibilityValidator(registry)
 publish_service = PublishService(

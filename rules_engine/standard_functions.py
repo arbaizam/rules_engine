@@ -1,0 +1,345 @@
+"""
+Reusable custom functions for common ruleset authoring needs.
+
+The functions are plain Python callables and can be registered into a
+``FunctionRegistry`` for runtime use. They intentionally return ``None`` for
+``None`` inputs unless the function is explicitly about defaulting.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal, InvalidOperation
+import re
+from typing import Any
+
+from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
+
+
+STANDARD_FUNCTION_VERSION = "1.0.0"
+
+
+def substring(value: Any, start: int, length: int | None = None) -> str | None:
+    """
+    Return a SQL-style substring using a 1-based start position.
+    """
+    if value is None:
+        return None
+    text = str(value)
+    start_index = max(int(start) - 1, 0)
+    if length is None:
+        return text[start_index:]
+    return text[start_index : start_index + max(int(length), 0)]
+
+
+def left(value: Any, length: int) -> str | None:
+    """
+    Return the leftmost ``length`` characters.
+    """
+    if value is None:
+        return None
+    return str(value)[: max(int(length), 0)]
+
+
+def right(value: Any, length: int) -> str | None:
+    """
+    Return the rightmost ``length`` characters.
+    """
+    if value is None:
+        return None
+    count = max(int(length), 0)
+    if count == 0:
+        return ""
+    return str(value)[-count:]
+
+
+def trim(value: Any) -> str | None:
+    """
+    Strip leading and trailing whitespace.
+    """
+    return None if value is None else str(value).strip()
+
+
+def upper(value: Any) -> str | None:
+    """
+    Convert a value to uppercase text.
+    """
+    return None if value is None else str(value).upper()
+
+
+def lower(value: Any) -> str | None:
+    """
+    Convert a value to lowercase text.
+    """
+    return None if value is None else str(value).lower()
+
+
+def normalize_whitespace(value: Any) -> str | None:
+    """
+    Trim text and collapse internal whitespace to a single space.
+    """
+    if value is None:
+        return None
+    return re.sub(r"\s+", " ", str(value).strip())
+
+
+def length(value: Any) -> int | None:
+    """
+    Return string length.
+    """
+    return None if value is None else len(str(value))
+
+
+def regex_extract(value: Any, pattern: str, group: int = 1) -> str | None:
+    """
+    Return one regex capture group, or ``None`` when there is no match.
+    """
+    if value is None:
+        return None
+    match = re.search(pattern, str(value))
+    if match is None:
+        return None
+    return match.group(int(group))
+
+
+def regex_replace(value: Any, pattern: str, replacement: str) -> str | None:
+    """
+    Replace regex matches in text.
+    """
+    if value is None:
+        return None
+    return re.sub(pattern, replacement, str(value))
+
+
+def contains_any(value: Any, candidates: list[Any] | tuple[Any, ...]) -> bool | None:
+    """
+    Return whether text contains any candidate value.
+    """
+    if value is None:
+        return None
+    text = str(value)
+    return any(str(candidate) in text for candidate in candidates)
+
+
+def default_if_null(value: Any, default: Any) -> Any:
+    """
+    Return ``default`` when value is ``None``.
+    """
+    return default if value is None else value
+
+
+def null_if(value: Any, compare_to: Any) -> Any | None:
+    """
+    Return ``None`` when value equals ``compare_to``.
+    """
+    return None if value == compare_to else value
+
+
+def to_number(value: Any) -> Decimal | None:
+    """
+    Convert a value to ``Decimal``; return ``None`` for null or blank values.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return Decimal(text)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"Cannot convert value to number: {value!r}") from exc
+
+
+STANDARD_FUNCTION_SPECS = (
+    CustomFunctionSpec(
+        function_name="substring",
+        implementation_reference="rules_engine.standard_functions.substring",
+        arg_names=("value", "start", "length"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="string",
+        description="SQL-style 1-based substring extraction.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="left",
+        implementation_reference="rules_engine.standard_functions.left",
+        arg_names=("value", "length"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="string",
+        description="Leftmost characters from a text value.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="right",
+        implementation_reference="rules_engine.standard_functions.right",
+        arg_names=("value", "length"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="string",
+        description="Rightmost characters from a text value.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="trim",
+        implementation_reference="rules_engine.standard_functions.trim",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="string",
+        description="Trim leading and trailing whitespace.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="upper",
+        implementation_reference="rules_engine.standard_functions.upper",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="string",
+        description="Uppercase text conversion.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="lower",
+        implementation_reference="rules_engine.standard_functions.lower",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="string",
+        description="Lowercase text conversion.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="normalize_whitespace",
+        implementation_reference="rules_engine.standard_functions.normalize_whitespace",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="string",
+        description="Trim and collapse repeated whitespace.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="length",
+        implementation_reference="rules_engine.standard_functions.length",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="integer",
+        description="String length.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="regex_extract",
+        implementation_reference="rules_engine.standard_functions.regex_extract",
+        arg_names=("value", "pattern", "group"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="string",
+        description="Extract a regex capture group from text.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="regex_replace",
+        implementation_reference="rules_engine.standard_functions.regex_replace",
+        arg_names=("value", "pattern", "replacement"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="string",
+        description="Replace regex matches in text.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="contains_any",
+        implementation_reference="rules_engine.standard_functions.contains_any",
+        arg_names=("value", "candidates"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=False,
+        return_type_hint="boolean",
+        description="Check whether text contains any candidate string.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="default_if_null",
+        implementation_reference="rules_engine.standard_functions.default_if_null",
+        arg_names=("value", "default"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="any",
+        description="Replace null values with a default.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="null_if",
+        implementation_reference="rules_engine.standard_functions.null_if",
+        arg_names=("value", "compare_to"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="any",
+        description="Return null when a value equals a comparison value.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="to_number",
+        implementation_reference="rules_engine.standard_functions.to_number",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="number",
+        description="Convert text or numeric input to Decimal.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+)
+
+
+STANDARD_FUNCTION_IMPLEMENTATIONS = {
+    "substring": lambda **kwargs: substring(
+        kwargs["value"],
+        kwargs["start"],
+        kwargs["length"],
+    ),
+    "left": lambda **kwargs: left(kwargs["value"], kwargs["length"]),
+    "right": lambda **kwargs: right(kwargs["value"], kwargs["length"]),
+    "trim": lambda **kwargs: trim(kwargs["value"]),
+    "upper": lambda **kwargs: upper(kwargs["value"]),
+    "lower": lambda **kwargs: lower(kwargs["value"]),
+    "normalize_whitespace": lambda **kwargs: normalize_whitespace(kwargs["value"]),
+    "length": lambda **kwargs: length(kwargs["value"]),
+    "regex_extract": lambda **kwargs: regex_extract(
+        kwargs["value"],
+        kwargs["pattern"],
+        kwargs["group"],
+    ),
+    "regex_replace": lambda **kwargs: regex_replace(
+        kwargs["value"],
+        kwargs["pattern"],
+        kwargs["replacement"],
+    ),
+    "contains_any": lambda **kwargs: contains_any(
+        kwargs["value"],
+        kwargs["candidates"],
+    ),
+    "default_if_null": lambda **kwargs: default_if_null(
+        kwargs["value"],
+        kwargs["default"],
+    ),
+    "null_if": lambda **kwargs: null_if(kwargs["value"], kwargs["compare_to"]),
+    "to_number": lambda **kwargs: to_number(kwargs["value"]),
+}
+
+
+def register_standard_functions(registry: FunctionRegistry) -> FunctionRegistry:
+    """
+    Register all standard functions and return the supplied registry.
+    """
+    for spec in STANDARD_FUNCTION_SPECS:
+        registry.register(spec, STANDARD_FUNCTION_IMPLEMENTATIONS[spec.function_name])
+    return registry
+
+
+def standard_function_rows():
+    """
+    Return persisted metadata rows for the standard function specs.
+    """
+    return [spec.to_row() for spec in STANDARD_FUNCTION_SPECS]
