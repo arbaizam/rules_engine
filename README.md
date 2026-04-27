@@ -709,6 +709,11 @@ Custom functions are executable code referenced by metadata. The repository
 can persist the function specification, but it does not persist executable
 Python callables.
 
+The `function_registry` Delta table is governance and audit metadata. Runtime
+jobs still register approved implementations in code, typically by calling
+`register_standard_functions(...)` and registering any environment-specific
+custom functions during job startup.
+
 For a notebook-style user guide, see:
 
 ```text
@@ -927,6 +932,15 @@ Runtime loading reads one published row and reconstructs the canonical
 dataclasses from that payload. This avoids multi-table tree reconstruction and
 keeps publication easier to audit.
 
+Repository operations are designed for Databricks Unity Catalog and Hive
+metastore-backed Delta tables. The repository checks table existence through
+Spark's catalog API, so validate that behavior in any non-standard catalog
+before production rollout.
+
+The repository emits SQL for lifecycle updates. Production clusters should use
+the modern Spark default `spark.sql.parser.escapedStringLiterals=false`; legacy
+escaped-string parsing is not part of the supported v1 operating profile.
+
 ## Publish Lifecycle
 
 Publishing is coordinated through `PublishService`.
@@ -977,6 +991,21 @@ Tables affected by publish:
 Publishing metadata does not evaluate business data. It answers: "Is this
 ruleset valid, persisted, auditable, and available to runtime?" Spark DataFrame
 evaluation happens separately through `SparkRulesEngineRuntime`.
+
+Operate publication as a single-publisher workflow. The package enforces the
+one-published-version invariant before writing, but it does not implement a
+distributed lock across concurrent publish jobs. Production promotion should
+run through one controlled pipeline, or through an external lock if multiple
+publishers are introduced later.
+
+Schema evolution is operator-owned. Before adding or changing columns in
+`ruleset_versions`, deploy the package version and run an explicit Delta table
+migration, then publish new metadata. The v1 package does not automatically
+merge schema changes into the ruleset table on append.
+
+The `ruleset_versions` table is append-and-retire by design. Retained metadata
+is the audit history, so production owners should apply their normal Delta
+maintenance policy, such as scheduled `OPTIMIZE` and policy-approved `VACUUM`.
 
 ## Standard Workflows
 
@@ -1348,6 +1377,10 @@ The smoke test:
 8. Retires the ruleset.
 9. Verifies the retired version is no longer loadable as published.
 
+Because the smoke test calls `create_base_tables(mode="overwrite")`, it refuses
+to run unless the configured database/table-prefix target contains `smoke`,
+`test`, or `deleteme`.
+
 ## Databricks System Test
 
 For an automated promotion gate, run:
@@ -1461,6 +1494,10 @@ are migration/support tooling, not runtime dependencies.
 PySpark is an optional package extra because Databricks provides Spark on the
 cluster. Pure-Python compiler, validation, serialization, and runtime usage only
 requires the base package dependencies.
+
+The wheel build is constrained by `pyproject.toml` to packages matching
+`rules_engine*`. Generated folders such as `build/`, `dist/`, egg-info, and
+Python caches are ignored by git and are not intended deployment inputs.
 
 Build the wheel locally:
 
@@ -1607,6 +1644,24 @@ Check:
 - another version was not left published,
 - the version was not retired.
 
+If `load_published(name)` reports multiple published versions, inspect the
+published rows and retire the version that should no longer serve runtime
+traffic:
+
+```sql
+SELECT ruleset_id, ruleset_name, version, published_by, published_at
+FROM catalog.schema.ruleset_versions
+WHERE ruleset_name = '<ruleset name>'
+  AND status = 'published'
+ORDER BY published_at DESC
+```
+
+Then retire the stale row:
+
+```python
+service.retire("<ruleset_id>", "<version>", retired_by="operator")
+```
+
 ### Publish Fails Because Version Already Exists
 
 Published and retired versions are immutable. Increment the version or retire
@@ -1618,7 +1673,15 @@ the currently published version before publishing a replacement.
   published version before publishing a replacement version.
 - v1 does not guarantee concurrent publish safety. Run publication from a
   controlled promotion workflow, not competing interactive jobs.
+- v1 expects an explicit schema migration before `ruleset_versions` columns are
+  added or changed.
+- v1 supports Databricks Unity Catalog and Hive metastore-backed Delta tables.
+- v1 assumes `spark.sql.parser.escapedStringLiterals=false`, the modern Spark
+  default.
 - Spark runtime uses a Python UDF for final rule evaluation.
+- Spark runtime emits `assign` and `rule_results` as JSON strings. Downstream
+  Spark consumers should parse them with `from_json()` if they need nested
+  access.
 - Spark runtime does not yet compile every row predicate into native Spark
   expressions.
 - Spark aggregate precompute fails fast for explicit modes listed in

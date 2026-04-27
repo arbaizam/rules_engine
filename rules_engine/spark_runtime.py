@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import traceback
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Mapping
@@ -262,7 +263,7 @@ class SparkRulesEngineRuntime:
                     "matched_rule_ids": [],
                     "assign": None,
                     "rule_results": "[]",
-                    "error": str(exc),
+                    "error": f"{exc}\n{traceback.format_exc()}",
                 }
 
         return evaluate

@@ -36,6 +36,18 @@ TABLE_PREFIX = os.getenv(
     "RULES_ENGINE_SMOKE_TABLE_PREFIX",
     "rules_engine_smoke_test_deleteme",
 )
+DISPOSABLE_TARGET_MARKERS = ("smoke", "test", "deleteme")
+
+
+def assert_disposable_smoke_target(database: str, table_prefix: str) -> None:
+    """Refuse to overwrite tables unless the target is visibly disposable."""
+    target = f"{database}.{table_prefix}".lower()
+    if not any(marker in target for marker in DISPOSABLE_TARGET_MARKERS):
+        raise ValueError(
+            "Smoke test target must include one of "
+            f"{DISPOSABLE_TARGET_MARKERS!r}: database={database!r}, "
+            f"table_prefix={table_prefix!r}"
+        )
 
 
 def table_name(name: str) -> str:
@@ -58,7 +70,6 @@ def build_ruleset():
             "ruleset_id": "smoke_ruleset",
             "ruleset_name": "Smoke Ruleset",
             "version": "1",
-            "status": "published",
             "owner": "Rules Team",
             "owner_department": "ALM Engineering",
             "rules": [
@@ -102,6 +113,7 @@ def build_ruleset():
 
 def run_smoke_test(spark_session) -> None:
     """Run the full Databricks smoke workflow."""
+    assert_disposable_smoke_target(DATABASE, TABLE_PREFIX)
     table_names = build_table_names()
     repository = SparkDeltaRulesetRepository(spark_session, table_names)
     repository.create_base_tables(mode="overwrite")
