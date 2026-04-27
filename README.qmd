@@ -1309,6 +1309,20 @@ The smoke test:
 8. Retires the ruleset.
 9. Verifies the retired version is no longer loadable as published.
 
+## Databricks System Test
+
+For an automated promotion gate, run:
+
+```text
+databricks/system_test_rules_engine.py
+```
+
+The system test creates a unique schema in the configured catalog, creates the
+package-owned Delta tables, registers standard functions, saves function
+registry metadata, publishes a ruleset that uses `substring`, evaluates Spark
+runtime output, retires the ruleset, verifies it is no longer loadable, and
+drops the schema in a `finally` block.
+
 ## Supplemental Notebook
 
 The notebook source file is:
@@ -1397,7 +1411,9 @@ The repo includes:
 pyproject.toml
 databricks.yml
 resources/rules_engine_smoke_test.job.yml
+resources/rules_engine_system_test.job.yml
 databricks/smoke_test_rules_engine.py
+databricks/system_test_rules_engine.py
 ```
 
 The production wheel includes the `rules_engine` package only. Repository
@@ -1421,12 +1437,16 @@ CLI authentication:
 databricks bundle validate --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
 databricks bundle deploy --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
 databricks bundle run rules_engine_smoke_test --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
+databricks bundle run rules_engine_system_test --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
 ```
 
 The smoke-test script creates/overwrites its own smoke-test Delta metadata
 tables, publishes a small ruleset, evaluates a Spark DataFrame, verifies that
 two rows match, retires the ruleset, and confirms retired metadata is no longer
 loadable as published.
+
+The system-test script uses a unique disposable schema and drops it after the
+test, so it is better suited as a repeatable CI/promotion gate.
 
 For Azure DevOps, keep the same sequence in the pipeline:
 
@@ -1437,6 +1457,7 @@ build wheel
 databricks bundle validate
 databricks bundle deploy
 databricks bundle run rules_engine_smoke_test
+databricks bundle run rules_engine_system_test
 ```
 
 Production deployment should use a service principal or your organization's
@@ -1453,20 +1474,22 @@ Recommended local workflow:
 5. Run default test suite.
 6. Run Spark tests in Databricks or Spark-enabled CI.
 7. Run `databricks/smoke_test_rules_engine.py`.
-8. Review generated Delta metadata rows.
-9. Promote package artifact or source to the target environment.
+8. Run `databricks/system_test_rules_engine.py`.
+9. Review generated Delta metadata rows.
+10. Promote package artifact or source to the target environment.
 
 Recommended Databricks workflow:
 
 1. Install or copy the package.
 2. Configure table names in the target catalog/schema.
 3. Run the smoke test against non-production tables.
-4. Publish a representative ruleset.
-5. Load published metadata.
-6. Evaluate a representative DataFrame.
-7. Assert `rules_engine_error` is empty.
-8. Validate output counts and assignments against expected results.
-9. Retire test metadata.
+4. Run the system test against a disposable schema.
+5. Publish a representative ruleset.
+6. Load published metadata.
+7. Evaluate a representative DataFrame.
+8. Assert `rules_engine_error` is empty.
+9. Validate output counts and assignments against expected results.
+10. Retire test metadata.
 
 ## Logging
 
