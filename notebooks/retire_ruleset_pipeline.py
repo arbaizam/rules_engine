@@ -22,6 +22,8 @@ import re
 import sys
 import traceback
 
+from pyspark.sql import types as T
+
 repo_root = Path.cwd()
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
@@ -76,20 +78,52 @@ def safe_name(value: str) -> str:
 
 
 def append_log(row: dict) -> None:
-    repository.append_ruleset_validation_log(row)
+    (
+        spark.createDataFrame([row], schema=LOG_SCHEMA)
+        .write.format("delta")
+        .option("mergeSchema", "true")
+        .mode("append")
+        .saveAsTable(LOG_TABLE)
+    )
 
 
 PIPELINE_RUN_ID = safe_name(f"rules-retire-{utc_now()}")
+LOG_TABLE = f"{SCHEMA}.ruleset_validation_logs"
+LOG_SCHEMA = T.StructType(
+    [
+        T.StructField("pipeline_run_id", T.StringType(), True),
+        T.StructField("event_time", T.StringType(), True),
+        T.StructField("operation", T.StringType(), True),
+        T.StructField("status", T.StringType(), True),
+        T.StructField("reason", T.StringType(), True),
+        T.StructField("ruleset_id", T.StringType(), True),
+        T.StructField("ruleset_name", T.StringType(), True),
+        T.StructField("version", T.StringType(), True),
+        T.StructField("content_hash", T.StringType(), True),
+        T.StructField("source_yaml_path", T.StringType(), True),
+        T.StructField("canonical_yaml_path", T.StringType(), True),
+        T.StructField("original_yaml_archive_path", T.StringType(), True),
+        T.StructField("published_by", T.StringType(), True),
+        T.StructField("retire_existing_published", T.BooleanType(), True),
+        T.StructField("require_newer_version", T.BooleanType(), True),
+        T.StructField("retired_ruleset_id", T.StringType(), True),
+        T.StructField("retired_version", T.StringType(), True),
+        T.StructField("validation_issue_count", T.IntegerType(), True),
+        T.StructField("validation_issues_json", T.StringType(), True),
+        T.StructField("error_message", T.StringType(), True),
+        T.StructField("error_traceback", T.StringType(), True),
+    ]
+)
 
 table_names = RulesEngineTableNames.from_schema(SCHEMA)
 repository = SparkDeltaRulesetRepository(spark, table_names)
 
 if CREATE_LOG_TABLE:
     (
-        spark.createDataFrame([], schema=repository.ruleset_validation_log_schema)
+        spark.createDataFrame([], schema=LOG_SCHEMA)
         .write.format("delta")
         .mode("ignore")
-        .saveAsTable(table_names.ruleset_validation_logs)
+        .saveAsTable(LOG_TABLE)
     )
 
 # COMMAND ----------
@@ -239,7 +273,7 @@ display(
 )
 
 display(
-    spark.table(table_names.ruleset_validation_logs).where(
+    spark.table(LOG_TABLE).where(
         f"pipeline_run_id = '{PIPELINE_RUN_ID}'"
     )
 )

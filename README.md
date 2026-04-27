@@ -880,7 +880,6 @@ Published metadata is stored in:
 
 - `ruleset_versions`: one authoritative row per ruleset version.
 - `function_registry`: environment-level custom function metadata.
-- `ruleset_validation_logs`: one validation/publish log row per pipeline run.
 
 `ruleset_versions` stores the complete canonical ruleset payload as JSON
 alongside lifecycle status, provenance, content hash, and summary counts.
@@ -934,8 +933,6 @@ Tables affected by publish:
 - `ruleset_versions`: authoritative lifecycle/provenance/payload row.
 - `function_registry`: unaffected by publish unless registry metadata is
   saved separately.
-- `ruleset_validation_logs`: validation/publish audit rows written by pipeline
-  jobs.
 
 Publishing metadata does not evaluate business data. It answers: "Is this
 ruleset valid, persisted, auditable, and available to runtime?" Spark DataFrame
@@ -962,7 +959,6 @@ This creates:
 
 - `catalog.schema.ruleset_versions`
 - `catalog.schema.function_registry`
-- `catalog.schema.ruleset_validation_logs`
 
 Use `mode="overwrite"` only for disposable development or smoke-test schemas.
 
@@ -987,8 +983,8 @@ Required job parameters:
 
 Optional job parameters:
 
-- `create_metadata_tables`: create the three registry tables when `true`.
-- `create_log_table`: create `ruleset_validation_logs` when `true`.
+- `create_metadata_tables`: create the two package registry tables when `true`.
+- `create_log_table`: create the notebook-owned `ruleset_validation_logs` table when `true`.
 - `retire_existing_published`: retire the currently published version before
   publishing a newer version.
 - `require_newer_version`: require numeric dot-notation version ordering during
@@ -1002,7 +998,7 @@ The pipeline sequence is:
 4. Optionally retire the existing published version for the same `ruleset_name`.
 5. Publish the incoming ruleset.
 6. Export canonical YAML and copy the source YAML to the archive path.
-7. Append a row to `ruleset_validation_logs`.
+7. Append a row to the notebook-owned `ruleset_validation_logs` table.
 
 ### New Version Cutover
 
@@ -1029,8 +1025,10 @@ pipeline fails and leaves `2.1.0` published.
 
 ### Validation And Publish Logs
 
-`ruleset_validation_logs` is the standard pipeline log table. It records one row
-per publish pipeline run.
+Logging is no longer part of the rules engine package. The production and
+retirement notebooks include a local `ruleset_validation_logs` schema for teams
+that want those jobs to write audit rows, but package setup creates only
+`ruleset_versions` and `function_registry`.
 
 Key fields:
 
@@ -1059,7 +1057,7 @@ Required job parameters:
 - `ruleset_id`: ruleset identity to retire.
 - `version`: version to retire.
 - `retired_by`: actor stored on the lifecycle row.
-- `reason`: required audit reason written to `ruleset_validation_logs`.
+- `reason`: required audit reason written to the notebook-owned log table.
 
 The notebook calls:
 

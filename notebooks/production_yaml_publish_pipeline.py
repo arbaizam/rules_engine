@@ -15,11 +15,13 @@
 # MAGIC 6. Export the canonical normalized YAML to an archive path.
 # MAGIC 7. Append one publish log row to a Delta table.
 # MAGIC
-# MAGIC The notebook always uses these tables under the configured `schema`:
+# MAGIC The rules engine package uses these tables under the configured `schema`:
 # MAGIC
 # MAGIC - `ruleset_versions`
 # MAGIC - `function_registry`
-# MAGIC - `ruleset_validation_logs`
+# MAGIC
+# MAGIC Logging is owned by this notebook, not by the rules engine package. When
+# MAGIC enabled, this notebook writes to `<schema>.ruleset_validation_logs`.
 
 # COMMAND ----------
 
@@ -28,10 +30,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import sys
 import traceback
 
 from pyspark.sql import functions as F
+from pyspark.sql import types as T
 
 repo_root = Path.cwd()
 if str(repo_root) not in sys.path:
@@ -158,7 +162,13 @@ def current_published_version(ruleset_name: str) -> dict | None:
 
 
 def append_log(row: dict) -> None:
-    repository.append_ruleset_validation_log(row)
+    (
+        spark.createDataFrame([row], schema=LOG_SCHEMA)
+        .write.format("delta")
+        .option("mergeSchema", "true")
+        .mode("append")
+        .saveAsTable(LOG_TABLE)
+    )
 
 
 def validation_issues_json(validation) -> str:
@@ -179,6 +189,32 @@ def validation_issues_json(validation) -> str:
 
 
 PIPELINE_RUN_ID = safe_name(f"rules-publish-{utc_now()}")
+LOG_TABLE = f"{SCHEMA}.ruleset_validation_logs"
+LOG_SCHEMA = T.StructType(
+    [
+        T.StructField("pipeline_run_id", T.StringType(), True),
+        T.StructField("event_time", T.StringType(), True),
+        T.StructField("operation", T.StringType(), True),
+        T.StructField("status", T.StringType(), True),
+        T.StructField("reason", T.StringType(), True),
+        T.StructField("ruleset_id", T.StringType(), True),
+        T.StructField("ruleset_name", T.StringType(), True),
+        T.StructField("version", T.StringType(), True),
+        T.StructField("content_hash", T.StringType(), True),
+        T.StructField("source_yaml_path", T.StringType(), True),
+        T.StructField("canonical_yaml_path", T.StringType(), True),
+        T.StructField("original_yaml_archive_path", T.StringType(), True),
+        T.StructField("published_by", T.StringType(), True),
+        T.StructField("retire_existing_published", T.BooleanType(), True),
+        T.StructField("require_newer_version", T.BooleanType(), True),
+        T.StructField("retired_ruleset_id", T.StringType(), True),
+        T.StructField("retired_version", T.StringType(), True),
+        T.StructField("validation_issue_count", T.IntegerType(), True),
+        T.StructField("validation_issues_json", T.StringType(), True),
+        T.StructField("error_message", T.StringType(), True),
+        T.StructField("error_traceback", T.StringType(), True),
+    ]
+)
 
 # COMMAND ----------
 
@@ -198,10 +234,10 @@ if CREATE_METADATA_TABLES:
 
 if CREATE_LOG_TABLE:
     (
-        spark.createDataFrame([], schema=repository.ruleset_validation_log_schema)
+        spark.createDataFrame([], schema=LOG_SCHEMA)
         .write.format("delta")
         .mode("ignore")
-        .saveAsTable(table_names.ruleset_validation_logs)
+        .saveAsTable(LOG_TABLE)
     )
 
 registry = register_standard_functions(FunctionRegistry())
@@ -407,7 +443,7 @@ display(
 )
 
 display(
-    spark.table(table_names.ruleset_validation_logs).where(
+    spark.table(LOG_TABLE).where(
         f"pipeline_run_id = '{PIPELINE_RUN_ID}'"
     )
 )

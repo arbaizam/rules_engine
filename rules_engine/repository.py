@@ -38,7 +38,6 @@ class RulesEngineTableNames:
 
     ruleset_versions: str
     function_registry: str
-    ruleset_validation_logs: str
 
     @classmethod
     def from_schema(cls, schema: str) -> "RulesEngineTableNames":
@@ -48,7 +47,6 @@ class RulesEngineTableNames:
         return cls(
             ruleset_versions=f"{schema}.ruleset_versions",
             function_registry=f"{schema}.function_registry",
-            ruleset_validation_logs=f"{schema}.ruleset_validation_logs",
         )
 
 
@@ -73,10 +71,6 @@ class RulesetRepository(Protocol):
 
     def load_published(self, ruleset_name: str, version: str | None = None) -> Ruleset:
         """Load published metadata."""
-
-    def append_ruleset_validation_log(self, row: dict) -> None:
-        """Append one caller-owned validation/publish log row."""
-
 
 class SparkDeltaRulesetRepository:
     """
@@ -139,35 +133,6 @@ class SparkDeltaRulesetRepository:
             ]
         )
 
-    @property
-    def ruleset_validation_log_schema(self) -> StructType:
-        """Return the ruleset validation/publish log table schema."""
-        return StructType(
-            [
-                StructField("pipeline_run_id", StringType(), True),
-                StructField("event_time", StringType(), True),
-                StructField("operation", StringType(), True),
-                StructField("status", StringType(), True),
-                StructField("reason", StringType(), True),
-                StructField("ruleset_id", StringType(), True),
-                StructField("ruleset_name", StringType(), True),
-                StructField("version", StringType(), True),
-                StructField("content_hash", StringType(), True),
-                StructField("source_yaml_path", StringType(), True),
-                StructField("canonical_yaml_path", StringType(), True),
-                StructField("original_yaml_archive_path", StringType(), True),
-                StructField("published_by", StringType(), True),
-                StructField("retire_existing_published", BooleanType(), True),
-                StructField("require_newer_version", BooleanType(), True),
-                StructField("retired_ruleset_id", StringType(), True),
-                StructField("retired_version", StringType(), True),
-                StructField("validation_issue_count", IntegerType(), True),
-                StructField("validation_issues_json", StringType(), True),
-                StructField("error_message", StringType(), True),
-                StructField("error_traceback", StringType(), True),
-            ]
-        )
-
     def create_base_tables(self, mode: str = "error") -> None:
         """
         Create empty metadata tables using explicit schemas.
@@ -175,32 +140,12 @@ class SparkDeltaRulesetRepository:
         specs = [
             (self.table_names.ruleset_versions, self.ruleset_version_schema),
             (self.table_names.function_registry, self.function_registry_schema),
-            (
-                self.table_names.ruleset_validation_logs,
-                self.ruleset_validation_log_schema,
-            ),
         ]
         for table_name, schema in specs:
             logger.info("Creating rules engine metadata table: table=%s mode=%s", table_name, mode)
             self.spark.createDataFrame([], schema=schema).write.format("delta").mode(
                 mode
             ).saveAsTable(table_name)
-
-    def append_ruleset_validation_log(self, row: dict) -> None:
-        """
-        Append one caller-owned validation/publish log row.
-
-        PublishService does not write pipeline logs directly; orchestration
-        code owns when validation, failure, publish, and retire events are
-        recorded.
-        """
-        (
-            self.spark.createDataFrame([row], schema=self.ruleset_validation_log_schema)
-            .write.format("delta")
-            .option("mergeSchema", "true")
-            .mode("append")
-            .saveAsTable(self.table_names.ruleset_validation_logs)
-        )
 
     def save_published(
         self,
