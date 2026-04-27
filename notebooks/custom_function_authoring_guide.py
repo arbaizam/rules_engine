@@ -23,13 +23,13 @@ from rules_engine import (  # noqa: E402
     CustomFunctionSpec,
     FunctionRegistry,
     RulesEngineRuntime,
+    RulesEngineService,
     RulesetValidator,
     SparkRulesetCompatibilityValidator,
     YamlRulesetCompiler,
     register_standard_functions,
     standard_function_rows,
 )
-from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository  # noqa: E402
 
 # COMMAND ----------
 
@@ -219,9 +219,8 @@ output_rows
 # MAGIC
 # MAGIC ```python
 # MAGIC schema = "catalog.schema"
-# MAGIC table_names = RulesEngineTableNames.from_schema(schema)
-# MAGIC repository = SparkDeltaRulesetRepository(spark, table_names)
-# MAGIC repository.save_function_registry_rows(
+# MAGIC service = RulesEngineService.from_schema(spark, schema)
+# MAGIC service.save_function_registry_rows(
 # MAGIC     standard_function_rows()
 # MAGIC     + [
 # MAGIC         registry.get_spec("score_account").to_row(),

@@ -27,6 +27,7 @@ semantic weakening.
 - [Pure-Python Runtime](#pure-python-runtime)
 - [Spark Runtime](#spark-runtime)
 - [Spark Compatibility Validation](#spark-compatibility-validation)
+- [Rules Engine Service](#rules-engine-service)
 - [Spark/Delta Repository](#sparkdelta-repository)
 - [Publish Lifecycle](#publish-lifecycle)
 - [Standard Workflows](#standard-workflows)
@@ -862,6 +863,45 @@ path:
 
 These are errors by design. The runtime should not approximate or silently
 weaken explicit authoring semantics.
+
+## Rules Engine Service
+
+`RulesEngineService` is the recommended public facade for Databricks notebooks
+and jobs that use the standard repository, validator, registry, and Spark
+runtime wiring.
+
+```python
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(
+    spark=spark,
+    schema="catalog.schema",
+)
+
+service.create_tables(mode="ignore")
+service.save_standard_function_registry()
+
+ruleset = service.publish_yaml_path(
+    "/Volumes/catalog/schema/rules/account_rules.yaml",
+    published_by="rules-pipeline",
+)
+
+result_df = service.evaluate_dataframe(
+    input_df,
+    ruleset_name=ruleset.ruleset_name,
+    version=ruleset.version,
+)
+
+service.retire(
+    ruleset.ruleset_id,
+    ruleset.version,
+    retired_by="rules-pipeline",
+)
+```
+
+The service does not own external logging, archive/drop-zone orchestration, or
+implicit table creation. Lower-level modules remain public for advanced
+workflows.
 
 ## Spark/Delta Repository
 

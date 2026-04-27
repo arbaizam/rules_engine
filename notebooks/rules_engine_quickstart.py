@@ -24,19 +24,28 @@ if str(repo_root) not in sys.path:
 from pyspark.sql import functions as F
 
 from rules_engine import (
-    FunctionRegistry,
-    PublishService,
-    RulesetNormalizer,
-    SparkRulesEngineRuntime,
-    SparkRulesetCompatibilityValidator,
-    YamlRulesetCompiler,
+    RulesEngineService,
 )
-from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1. Compile And Validate
+# MAGIC ## 1. Configure Service
+# MAGIC
+# MAGIC Update `DATABASE` to a scratch schema where you can create or overwrite
+# MAGIC rules engine metadata tables.
+
+# COMMAND ----------
+
+DATABASE = "YOUR_CATALOG.YOUR_SCHEMA"
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {DATABASE}")
+service = RulesEngineService.from_schema(spark, DATABASE)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 2. Compile And Validate
 
 # COMMAND ----------
 
@@ -68,10 +77,8 @@ rules:
       review_bucket: high_value_open
 """
 
-ruleset = YamlRulesetCompiler().compile_text(ruleset_yaml)
-registry = FunctionRegistry()
-validator = SparkRulesetCompatibilityValidator(registry)
-validation = validator.validate(ruleset)
+ruleset = service.compile_yaml_text(ruleset_yaml)
+validation = service.validator.validate(ruleset)
 print(validation.to_text())
 
 if validation.has_errors():
@@ -80,54 +87,28 @@ if validation.has_errors():
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. Create Metadata Tables
-# MAGIC
-# MAGIC Update `DATABASE` to a scratch schema you are allowed to drop and recreate.
+# MAGIC ## 3. Create Metadata Tables
 
 # COMMAND ----------
 
-DATABASE = "YOUR_CATALOG.YOUR_SCHEMA"
-TABLE_PREFIX = "quickstart"
-
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {DATABASE}")
-
-
-def table_name(suffix: str) -> str:
-    return f"{DATABASE}.{TABLE_PREFIX}_{suffix}"
-
-
-table_names = RulesEngineTableNames(
-    ruleset_versions=table_name("ruleset_versions"),
-    function_registry=table_name("function_registry"),
-)
-
-repository = SparkDeltaRulesetRepository(spark, table_names)
-repository.create_base_tables(mode="overwrite")
+service.create_tables(mode="overwrite")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Publish
+# MAGIC ## 4. Publish
 
 # COMMAND ----------
 
-publish_service = PublishService(
-    repository=repository,
-    validator=validator,
-    normalizer=RulesetNormalizer(),
-)
-
-publish_service.publish(ruleset)
-display(spark.table(table_names.ruleset_versions))
+service.publish(ruleset)
+display(spark.table(service.table_names.ruleset_versions))
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Load And Evaluate
+# MAGIC ## 5. Load And Evaluate
 
 # COMMAND ----------
-
-published_ruleset = repository.load_published("Quickstart Account Review", version="1")
 
 input_df = spark.createDataFrame(
     [
@@ -137,9 +118,10 @@ input_df = spark.createDataFrame(
     ]
 )
 
-result_df = SparkRulesEngineRuntime(repository, registry).evaluate_dataframe(
+result_df = service.evaluate_dataframe(
     input_df,
-    published_ruleset,
+    ruleset_name="Quickstart Account Review",
+    version="1",
     fail_on_error=True,
 )
 
@@ -148,7 +130,7 @@ display(result_df.orderBy("account"))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 5. Sanity Check
+# MAGIC ## 6. Sanity Check
 
 # COMMAND ----------
 

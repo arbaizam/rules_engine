@@ -19,6 +19,7 @@ from rules_engine.validator import RulesetValidator
 
 _LAZY_EXPORTS = {
     "PublishService": ("rules_engine.publish", "PublishService"),
+    "RulesEngineService": ("rules_engine.service", "RulesEngineService"),
     "SparkRulesEngineRuntime": ("rules_engine.spark_runtime", "SparkRulesEngineRuntime"),
     "SparkRulesetCompatibilityValidator": (
         "rules_engine.spark_validator",
@@ -46,6 +47,7 @@ __all__ = [
     "FunctionRegistry",
     "PublishService",
     "RulesEngineRuntime",
+    "RulesEngineService",
     "Ruleset",
     "RulesetNormalizer",
     "RulesetValidator",

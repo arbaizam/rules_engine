@@ -227,6 +227,19 @@ output_rows
 # MAGIC %md
 # MAGIC ## 7. Next Step
 # MAGIC
-# MAGIC For production use, compile/validate the exported YAML, publish it to the
-# MAGIC `ruleset_versions` Delta table, and run the Spark runtime against the
-# MAGIC published metadata.
+# MAGIC For Databricks use, hand the exported YAML to `RulesEngineService` so the
+# MAGIC standard facade compiles, validates, publishes, and evaluates through the
+# MAGIC configured Delta metadata tables:
+# MAGIC
+# MAGIC ```python
+# MAGIC from rules_engine import RulesEngineService
+# MAGIC
+# MAGIC service = RulesEngineService.from_schema(spark, "catalog.schema")
+# MAGIC service.create_tables(mode="ignore")
+# MAGIC published_ruleset = service.publish_yaml_path(output_path, published_by="rules-pipeline")
+# MAGIC result_df = service.evaluate_dataframe(
+# MAGIC     input_df,
+# MAGIC     ruleset_name=published_ruleset.ruleset_name,
+# MAGIC     version=published_ruleset.version,
+# MAGIC )
+# MAGIC ```

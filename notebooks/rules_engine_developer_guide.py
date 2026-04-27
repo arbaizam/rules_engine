@@ -55,17 +55,15 @@ from tempfile import TemporaryDirectory
 
 from rules_engine import (
     FunctionRegistry,
-    PublishService,
     RulesEngineRuntime,
     RulesetNormalizer,
+    RulesEngineService,
     RulesetValidator,
-    SparkRulesEngineRuntime,
     SparkRulesetCompatibilityValidator,
     YamlRulesetCompiler,
     YamlRulesetExporter,
 )
 from rules_engine.exceptions import RepositoryError
-from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository
 from tools.recon_spec_translation.audit import write_audit
 from tools.recon_spec_translation.reader_csv import read_reconciliation_csv
 from tools.recon_spec_translation.translator import ReconciliationSpecTranslator
@@ -354,7 +352,8 @@ if spark_validation.has_errors():
 # MAGIC ## 7. Configure Delta Metadata Tables
 # MAGIC
 # MAGIC Choose a catalog/schema/table naming convention that fits your environment.
-# MAGIC This example uses a dedicated guide schema and a short table prefix.
+# MAGIC This example uses a dedicated guide schema with the standard rules engine
+# MAGIC table names.
 # MAGIC
 # MAGIC The next cell drops and recreates the guide schema for a clean run. Do not
 # MAGIC point `DATABASE` at production metadata.
@@ -364,9 +363,8 @@ if spark_validation.has_errors():
 # MAGIC 1. Sets the target catalog/schema path for guide metadata tables.
 # MAGIC 2. Drops the guide schema with `CASCADE` so reruns start cleanly.
 # MAGIC 3. Recreates the schema.
-# MAGIC 4. Builds fully qualified metadata table names.
-# MAGIC 5. Instantiates `SparkDeltaRulesetRepository`.
-# MAGIC 6. Creates empty Delta tables with explicit schemas.
+# MAGIC 4. Builds the standard service facade.
+# MAGIC 5. Creates empty Delta tables with explicit schemas.
 # MAGIC
 # MAGIC Tables created:
 # MAGIC
@@ -380,7 +378,6 @@ if spark_validation.has_errors():
 CATALOG = "main"
 SCHEMA = "rules_engine_guide"
 DATABASE = f"{CATALOG}.{SCHEMA}"
-TABLE_PREFIX = "test"
 
 cleanup_sql = f"DROP SCHEMA IF EXISTS {DATABASE} CASCADE"
 spark.sql(cleanup_sql)
@@ -388,18 +385,9 @@ spark.sql(cleanup_sql)
 create_sql = f"CREATE SCHEMA IF NOT EXISTS {DATABASE}"
 spark.sql(create_sql)
 
-
-def table_name(suffix: str) -> str:
-    return f"{DATABASE}.{TABLE_PREFIX}_{suffix}"
-
-
-table_names = RulesEngineTableNames(
-    ruleset_versions=table_name("ruleset_versions"),
-    function_registry=table_name("function_registry"),
-)
-
-repository = SparkDeltaRulesetRepository(spark, table_names)
-repository.create_base_tables(mode="overwrite")
+service = RulesEngineService.from_schema(spark, DATABASE)
+service.create_tables(mode="overwrite")
+table_names = service.table_names
 
 table_names
 
@@ -408,8 +396,8 @@ table_names
 # MAGIC %md
 # MAGIC ## 8. Publish Metadata
 # MAGIC
-# MAGIC `PublishService` orchestrates normalization, validation, and direct
-# MAGIC publication.
+# MAGIC `RulesEngineService` orchestrates normalization, validation, and direct
+# MAGIC publication through the standard public facade.
 # MAGIC
 # MAGIC Published metadata is immutable by `(ruleset_id, version)`. If you rerun
 # MAGIC this cell after publication, retire or overwrite the smoke tables first.
@@ -421,9 +409,8 @@ table_names
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
-# MAGIC 1. Builds a `PublishService` by wiring together the repository, validator,
-# MAGIC    and normalizer.
-# MAGIC 2. Calls `publish(ruleset)`.
+# MAGIC 1. Uses the configured `RulesEngineService`.
+# MAGIC 2. Calls `service.publish(ruleset)`.
 # MAGIC 3. Normalizes the ruleset so persistence-ready fields are explicit.
 # MAGIC 4. Runs semantic validation plus Spark compatibility validation.
 # MAGIC 5. Writes one published row into `ruleset_versions`.
@@ -443,13 +430,7 @@ table_names
 
 # COMMAND ----------
 
-publish_service = PublishService(
-    repository=repository,
-    validator=SparkRulesetCompatibilityValidator(FunctionRegistry()),
-    normalizer=RulesetNormalizer(),
-)
-
-publish_service.publish(ruleset)
+service.publish(ruleset)
 
 display(spark.table(table_names.ruleset_versions))
 
@@ -486,13 +467,11 @@ display(spark.table(table_names.ruleset_versions))
 
 # COMMAND ----------
 
-published_ruleset = repository.load_published("Account Review Rules", version="1")
-
 input_df = spark.createDataFrame(input_rows)
-spark_runtime = SparkRulesEngineRuntime(repository, FunctionRegistry())
-result_df = spark_runtime.evaluate_dataframe(
+result_df = service.evaluate_dataframe(
     input_df,
-    published_ruleset,
+    ruleset_name="Account Review Rules",
+    version="1",
     fail_on_error=True,
 )
 
