@@ -305,10 +305,9 @@ Detailed sequence:
 2. Normalize the ruleset.
 3. Validate the normalized ruleset as a publish-time gate.
 4. Stop if validation has errors.
-5. Verify the exact `(ruleset_id, version)` does not already exist.
-6. Verify another version of the same `ruleset_name` is not already published.
-7. Write one `ruleset_versions` row with `status = published`.
-8. Stamp `published_by` and `published_at`.
+5. Verify the exact `(ruleset_name, version)` does not already exist.
+6. Write one `ruleset_versions` row with `status = published`.
+7. Stamp `published_by` and `published_at`.
 
 Delta tables affected:
 
@@ -329,7 +328,8 @@ Actor behavior:
 
 Purpose:
 
-- Create empty Spark/Delta metadata tables with explicit schemas.
+- Create empty Spark/Delta metadata tables with explicit DDL that preserves
+  `NOT NULL` column metadata.
 
 Side effects:
 
@@ -910,7 +910,9 @@ workflows.
 
 ## Spark/Delta Repository
 
-`SparkDeltaRulesetRepository` writes metadata using explicit Spark schemas.
+`SparkDeltaRulesetRepository` creates metadata tables using explicit Delta DDL
+so required columns retain `NOT NULL` metadata. Row inserts still use explicit
+Spark schemas.
 
 ```python
 from rules_engine.repository import SparkDeltaRulesetRepository, RulesEngineTableNames
@@ -966,8 +968,8 @@ Lifecycle rules:
 - persisted ruleset versions are either `published` or `retired`.
 - `publish` requires the compiled ruleset lifecycle to be `published`.
 - publish validates before writing metadata.
-- published rows are immutable by `(ruleset_id, version)`.
-- only one version of a given `ruleset_name` may be published at a time.
+- published rows are immutable by `(ruleset_name, version)`.
+- multiple versions of the same `ruleset_name` may be published at a time.
 - `retire` changes a persisted ruleset version to `retired`.
 - `load_published` loads only `published` metadata.
 - production jobs should use published-only table/view access and `load_published`.
@@ -977,10 +979,9 @@ What `publish(ruleset)` does:
 1. Normalizes the ruleset.
 2. Validates the normalized ruleset as a publish-time gate.
 3. Fails before publishing if validation has errors.
-4. Verifies the exact `(ruleset_id, version)` does not already exist.
-5. Verifies no other version of the same `ruleset_name` is published.
-6. Writes one `ruleset_versions` row with `status = published`.
-7. Stamps `published_by` and `published_at`.
+4. Verifies the exact `(ruleset_name, version)` does not already exist.
+5. Writes one `ruleset_versions` row with `status = published`.
+6. Stamps `published_by` and `published_at`.
 
 Tables affected by publish:
 
@@ -993,10 +994,10 @@ ruleset valid, persisted, auditable, and available to runtime?" Spark DataFrame
 evaluation happens separately through `SparkRulesEngineRuntime`.
 
 Operate publication as a single-publisher workflow. The package enforces the
-one-published-version invariant before writing, but it does not implement a
-distributed lock across concurrent publish jobs. Production promotion should
-run through one controlled pipeline, or through an external lock if multiple
-publishers are introduced later.
+duplicate `(ruleset_name, version)` boundary before writing, but it does not
+implement a distributed lock across concurrent publish jobs. Production
+promotion should run through one controlled pipeline, or through an external
+lock if multiple publishers are introduced later.
 
 Schema evolution is operator-owned. Before adding or changing columns in
 `ruleset_versions`, deploy the package version and run an explicit Delta table
@@ -1071,8 +1072,10 @@ The pipeline sequence is:
 
 ### New Version Cutover
 
-By default, publishing fails if another version of the same `ruleset_name` is
-already published.
+By default, publishing a new `version` for the same `ruleset_name` leaves any
+other published versions in place. Runtime calls that load by name only will
+fail when multiple published versions match; pass `version` explicitly or
+retire versions that should no longer serve runtime traffic.
 
 Set:
 
@@ -1642,7 +1645,6 @@ Check:
 
 - the ruleset was published,
 - the name and version match,
-- another version was not left published,
 - the version was not retired.
 
 If `load_published(name)` reports multiple published versions, inspect the
@@ -1665,13 +1667,13 @@ service.retire("<ruleset_id>", "<version>", retired_by="operator")
 
 ### Publish Fails Because Version Already Exists
 
-Published and retired versions are immutable. Increment the version or retire
-the currently published version before publishing a replacement.
+Published and retired `(ruleset_name, version)` pairs are immutable. Increment
+the version before publishing a replacement under the same ruleset name.
 
 ## Known Limitations
 
-- v1 supports one published version per `ruleset_name`. Retire the currently
-  published version before publishing a replacement version.
+- v1 allows multiple published versions per `ruleset_name`, but callers must
+  pass `version` when loading by name would be ambiguous.
 - v1 does not guarantee concurrent publish safety. Run publication from a
   controlled promotion workflow, not competing interactive jobs.
 - v1 expects an explicit schema migration before `ruleset_versions` columns are

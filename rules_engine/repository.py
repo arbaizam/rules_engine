@@ -135,17 +135,86 @@ class SparkDeltaRulesetRepository:
 
     def create_base_tables(self, mode: str = "error") -> None:
         """
-        Create empty metadata tables using explicit schemas.
+        Create empty metadata tables using explicit Delta DDL.
         """
         specs = [
-            (self.table_names.ruleset_versions, self.ruleset_version_schema),
-            (self.table_names.function_registry, self.function_registry_schema),
+            (self.table_names.ruleset_versions, self._ruleset_version_ddl_columns()),
+            (self.table_names.function_registry, self._function_registry_ddl_columns()),
         ]
-        for table_name, schema in specs:
+        for table_name, ddl_columns in specs:
             logger.info("Creating rules engine metadata table: table=%s mode=%s", table_name, mode)
-            self.spark.createDataFrame([], schema=schema).write.format("delta").mode(
-                mode
-            ).saveAsTable(table_name)
+            self._create_delta_table(table_name, ddl_columns, mode=mode)
+
+    def _create_delta_table(
+        self,
+        table_name: str,
+        ddl_columns: list[str],
+        *,
+        mode: str,
+    ) -> None:
+        """
+        Create one Delta table with explicit nullability metadata.
+
+        Spark can drop ``nullable=False`` catalog metadata when creating an
+        empty table through a DataFrame write, so bootstrap uses DDL.
+        """
+        normalized_mode = mode.lower()
+        if normalized_mode == "error":
+            normalized_mode = "errorifexists"
+        if normalized_mode not in {"errorifexists", "ignore", "overwrite"}:
+            raise RepositoryError(
+                "Base table creation mode must be one of: error, errorifexists, ignore, overwrite"
+            )
+        exists_clause = "IF NOT EXISTS " if normalized_mode == "ignore" else ""
+        if normalized_mode == "overwrite":
+            self.spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+        column_sql = ",\n                ".join(ddl_columns)
+        self.spark.sql(
+            f"""
+            CREATE TABLE {exists_clause}{table_name} (
+                {column_sql}
+            )
+            USING DELTA
+            """
+        )
+
+    def _ruleset_version_ddl_columns(self) -> list[str]:
+        """Return DDL columns for the authoritative ruleset-version table."""
+        return [
+            "ruleset_id STRING NOT NULL",
+            "ruleset_name STRING NOT NULL",
+            "version STRING NOT NULL",
+            "status STRING NOT NULL",
+            "description STRING",
+            "payload_json STRING NOT NULL",
+            "content_hash STRING NOT NULL",
+            "rule_count INT NOT NULL",
+            "condition_count INT NOT NULL",
+            "assignment_count INT NOT NULL",
+            "aggregate_count INT NOT NULL",
+            "custom_function_count INT NOT NULL",
+            "owner STRING",
+            "owner_department STRING",
+            "published_by STRING",
+            "published_at STRING",
+            "retired_by STRING",
+            "retired_at STRING",
+        ]
+
+    def _function_registry_ddl_columns(self) -> list[str]:
+        """Return DDL columns for the function registry table."""
+        return [
+            "function_name STRING NOT NULL",
+            "implementation_reference STRING NOT NULL",
+            "arg_contract_payload_json STRING NOT NULL",
+            "return_type_hint STRING",
+            "allowed_in_condition_flag BOOLEAN NOT NULL",
+            "allowed_in_assignment_flag BOOLEAN NOT NULL",
+            "active_flag BOOLEAN NOT NULL",
+            "description STRING",
+            "version STRING",
+        ]
 
     def save_published(
         self,
@@ -156,22 +225,25 @@ class SparkDeltaRulesetRepository:
         """
         Persist a published ruleset version.
 
-        Published and retired versions are immutable by ruleset_id/version.
-        Only one version of a ruleset_name can be published at a time.
+        Published and retired versions are immutable by ruleset_name/version.
+        Multiple versions of the same ruleset_name may be published at once so
+        callers can test candidate versions side by side.
         """
-        existing_status = self._existing_ruleset_status(ruleset.ruleset_id, ruleset.version)
+        existing_status = self._existing_ruleset_status(
+            ruleset.ruleset_name,
+            ruleset.version,
+        )
         if existing_status is not None:
             logger.error(
-                "Rejected published overwrite for immutable ruleset version: ruleset_id=%s version=%s existing_status=%s",
-                ruleset.ruleset_id,
+                "Rejected published overwrite for immutable ruleset version: ruleset_name=%s version=%s existing_status=%s",
+                ruleset.ruleset_name,
                 ruleset.version,
                 existing_status,
             )
             raise RepositoryError(
                 f"Cannot overwrite ruleset version with status={existing_status}: "
-                f"ruleset_id={ruleset.ruleset_id}, version={ruleset.version}"
+                f"ruleset_name={ruleset.ruleset_name}, version={ruleset.version}"
             )
-        self._assert_no_published_sibling(ruleset.ruleset_name)
         logger.info(
             "Persisting published ruleset version: table=%s ruleset_id=%s ruleset_name=%s version=%s",
             self.table_names.ruleset_versions,
@@ -348,34 +420,34 @@ class SparkDeltaRulesetRepository:
             status.value,
         )
 
-    def _assert_no_published_sibling(self, ruleset_name: str) -> None:
-        """
-        Enforce that no version of a ruleset_name is already published.
-        """
-        published_count = (
-            self.spark.table(self.table_names.ruleset_versions)
-            .where(
-                (F.col("ruleset_name") == ruleset_name)
-                & (F.col("status") == RulesetStatus.PUBLISHED.value)
-            )
-            .count()
-        )
-        if published_count:
-            logger.error(
-                "Publish rejected because another version is already published: ruleset_name=%s published_count=%s",
-                ruleset_name,
-                published_count,
-            )
-            raise RepositoryError(
-                f"Cannot publish {ruleset_name} while another version is published."
-            )
-
-    def _existing_ruleset_status(self, ruleset_id: str, version: str) -> str | None:
+    def _existing_ruleset_status(self, ruleset_name: str, version: str) -> str | None:
         """
         Return the persisted status for one version, or None when absent.
         """
-        row = self._ruleset_row_dict(ruleset_id, version)
+        row = self._ruleset_row_dict_by_name_version(ruleset_name, version)
         return row["status"] if row is not None else None
+
+    def _ruleset_row_dict_by_name_version(
+        self,
+        ruleset_name: str,
+        version: str,
+    ) -> dict | None:
+        """
+        Load one ruleset version row by public identity.
+
+        The publish guard uses ruleset_name/version because ruleset_id can be
+        environment-specific or generated, while the authored name and version
+        are the caller-facing duplicate boundary.
+        """
+        if not self._table_exists(self.table_names.ruleset_versions):
+            return None
+        rows = (
+            self.spark.table(self.table_names.ruleset_versions)
+            .where((F.col("ruleset_name") == ruleset_name) & (F.col("version") == version))
+            .limit(1)
+            .collect()
+        )
+        return rows[0].asDict(recursive=True) if rows else None
 
     def _ruleset_row_dict(self, ruleset_id: str, version: str) -> dict | None:
         """
