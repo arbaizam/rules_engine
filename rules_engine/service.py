@@ -57,12 +57,22 @@ class RulesEngineService:
         spark: SparkSession,
         schema: str,
         *,
+        ruleset_versions_table: str | None = None,
+        function_registry_table: str | None = None,
         register_standard: bool = True,
     ) -> "RulesEngineService":
         """
-        Build a service using the standard two-table footprint under a schema.
+        Build a service using metadata tables under a schema.
+
+        By default, table names use the standard package footprint. Callers may
+        override either table name when a deployment needs custom metadata
+        table names.
         """
-        table_names = RulesEngineTableNames.from_schema(schema)
+        default_table_names = RulesEngineTableNames.from_schema(schema)
+        table_names = RulesEngineTableNames(
+            ruleset_versions=ruleset_versions_table or default_table_names.ruleset_versions,
+            function_registry=function_registry_table or default_table_names.function_registry,
+        )
         repository = SparkDeltaRulesetRepository(spark, table_names)
         registry = FunctionRegistry()
         if register_standard:
@@ -82,17 +92,31 @@ class RulesEngineService:
         """
         self.repository.create_base_tables(mode=mode)
 
-    def save_standard_function_registry(self) -> None:
+    def save_standard_function_registry(self, *, update_existing: bool = False) -> None:
         """
         Save standard function metadata rows to the function registry table.
-        """
-        self.repository.save_function_registry_rows(standard_function_rows())
 
-    def save_function_registry_rows(self, rows: list[FunctionRegistryRow]) -> None:
+        By default, existing function rows are left unchanged so deployment
+        setup notebooks can be rerun without overwriting registry metadata.
+        """
+        self.repository.save_function_registry_rows(
+            standard_function_rows(),
+            update_existing=update_existing,
+        )
+
+    def save_function_registry_rows(
+        self,
+        rows: list[FunctionRegistryRow],
+        *,
+        update_existing: bool = True,
+    ) -> None:
         """
         Save supplied function metadata rows to the function registry table.
         """
-        self.repository.save_function_registry_rows(rows)
+        self.repository.save_function_registry_rows(
+            rows,
+            update_existing=update_existing,
+        )
 
     def compile_yaml_text(self, yaml_text: str) -> Ruleset:
         """
@@ -111,23 +135,37 @@ class RulesEngineService:
         ruleset: Ruleset,
         *,
         published_by: str | None = None,
+        effective_start_date: str | None = None,
+        effective_end_date: str | None = None,
     ) -> None:
         """
         Validate, normalize, and persist a published ruleset.
         """
-        self.publish_service.publish(ruleset, published_by=published_by)
+        self.publish_service.publish(
+            ruleset,
+            published_by=published_by,
+            effective_start_date=effective_start_date,
+            effective_end_date=effective_end_date,
+        )
 
     def publish_yaml_text(
         self,
         yaml_text: str,
         *,
         published_by: str | None = None,
+        effective_start_date: str | None = None,
+        effective_end_date: str | None = None,
     ) -> Ruleset:
         """
         Compile YAML text, publish it, and return the compiled ruleset.
         """
         ruleset = self.compile_yaml_text(yaml_text)
-        self.publish(ruleset, published_by=published_by)
+        self.publish(
+            ruleset,
+            published_by=published_by,
+            effective_start_date=effective_start_date,
+            effective_end_date=effective_end_date,
+        )
         return ruleset
 
     def publish_yaml_path(
@@ -135,12 +173,19 @@ class RulesEngineService:
         path: str | Path,
         *,
         published_by: str | None = None,
+        effective_start_date: str | None = None,
+        effective_end_date: str | None = None,
     ) -> Ruleset:
         """
         Compile a YAML file, publish it, and return the compiled ruleset.
         """
         ruleset = self.compile_yaml_path(path)
-        self.publish(ruleset, published_by=published_by)
+        self.publish(
+            ruleset,
+            published_by=published_by,
+            effective_start_date=effective_start_date,
+            effective_end_date=effective_end_date,
+        )
         return ruleset
 
     def load_published(self, ruleset_name: str, version: str | None = None) -> Ruleset:
@@ -173,8 +218,20 @@ class RulesEngineService:
             fail_on_error=fail_on_error,
         )
 
-    def retire(self, ruleset_id: str, version: str, *, retired_by: str | None = None) -> None:
+    def retire(
+        self,
+        ruleset_id: str,
+        version: str,
+        *,
+        retired_by: str | None = None,
+        effective_end_date: str | None = None,
+    ) -> None:
         """
         Retire a persisted ruleset version.
         """
-        self.repository.retire(ruleset_id, version, retired_by=retired_by)
+        self.repository.retire(
+            ruleset_id,
+            version,
+            retired_by=retired_by,
+            effective_end_date=effective_end_date,
+        )

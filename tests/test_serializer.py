@@ -105,6 +105,7 @@ def test_serializer_stamps_provenance_hash_and_summary_counts():
 
     assert row.owner == "Rules Team"
     assert row.owner_department == "ALM Engineering"
+    assert row.effective_end_date == "2999-12-31"
     assert row.published_by is None
     assert len(row.content_hash) == 64
     assert row.rule_count == 1
@@ -273,3 +274,94 @@ def test_persisted_payload_excludes_lifecycle_status():
     payload = json.loads(row.payload_json)
 
     assert "status" not in payload
+
+
+def test_serializer_accepts_explicit_effective_dates_outside_payload():
+    """
+    What: Persists effective dates as row metadata while keeping payload content canonical.
+    Why: Effective dating belongs to publication lifecycle metadata, not authored YAML.
+    Fails when: Effective dates are ignored or written into payload_json.
+    """
+    ruleset = _compile(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Ruleset",
+            "version": "1",
+            "status": "published",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "Rule 1",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "A"},
+                }
+            ],
+        }
+    )
+
+    row = DeltaRowSerializer().serialize_ruleset_version(
+        ruleset,
+        published_at="2026-04-26T12:00:00Z",
+        effective_start_date="2026-05-01",
+        effective_end_date="2026-12-31",
+    )
+    payload = json.loads(row.payload_json)
+
+    assert row.effective_start_date == "2026-05-01"
+    assert row.effective_end_date == "2026-12-31"
+    assert "effective_start_date" not in payload
+    assert "effective_end_date" not in payload
+
+
+def test_serializer_defaults_effective_dates_from_publish_metadata():
+    """
+    What: Defaults the effective window when no explicit dates are supplied.
+    Why: Published rows should always have a non-null effective date range.
+    Fails when: Default effective dates are missing or not derived from published_at.
+    """
+    ruleset = _compile(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Ruleset",
+            "version": "1",
+            "status": "published",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "Rule 1",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "A"},
+                }
+            ],
+        }
+    )
+
+    row = DeltaRowSerializer().serialize_ruleset_version(
+        ruleset,
+        published_at="2026-04-26T12:00:00Z",
+    )
+
+    assert row.effective_start_date == "2026-04-26"
+    assert row.effective_end_date == "2999-12-31"

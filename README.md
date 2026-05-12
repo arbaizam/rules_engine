@@ -714,6 +714,11 @@ jobs still register approved implementations in code, typically by calling
 `register_standard_functions(...)` and registering any environment-specific
 custom functions during job startup.
 
+For deployment setup, `RulesEngineService.save_standard_function_registry()`
+persists metadata for package standard functions and skips functions that are
+already present. Pass `update_existing=True` only during controlled registry
+metadata upgrades.
+
 For a notebook-style user guide, see:
 
 ```text
@@ -889,6 +894,7 @@ service.save_standard_function_registry()
 ruleset = service.publish_yaml_path(
     "/Volumes/catalog/schema/rules/account_rules.yaml",
     published_by="rules-pipeline",
+    effective_start_date="2026-05-01",
 )
 
 result_df = service.evaluate_dataframe(
@@ -901,6 +907,19 @@ service.retire(
     ruleset.ruleset_id,
     ruleset.version,
     retired_by="rules-pipeline",
+    effective_end_date="2026-12-31",
+)
+```
+
+Pass custom metadata table names when the deployment should not use the
+standard `ruleset_versions` and `function_registry` names:
+
+```python
+service = RulesEngineService.from_schema(
+    spark=spark,
+    schema="catalog.schema",
+    ruleset_versions_table="catalog.schema.custom_ruleset_versions",
+    function_registry_table="catalog.schema.custom_function_registry",
 )
 ```
 
@@ -929,10 +948,10 @@ Published metadata is stored in:
 - `function_registry`: environment-level custom function metadata.
 
 `ruleset_versions` stores the complete canonical ruleset payload as JSON
-alongside lifecycle status, provenance, content hash, and summary counts.
-Runtime loading reads one published row and reconstructs the canonical
-dataclasses from that payload. This avoids multi-table tree reconstruction and
-keeps publication easier to audit.
+alongside lifecycle status, effective dates, provenance, content hash, and
+summary counts. Runtime loading reads one published row and reconstructs the
+canonical dataclasses from that payload. This avoids multi-table tree
+reconstruction and keeps publication easier to audit.
 
 Repository operations are designed for Databricks Unity Catalog and Hive
 metastore-backed Delta tables. The repository checks table existence through
@@ -970,6 +989,9 @@ Lifecycle rules:
 - publish validates before writing metadata.
 - published rows are immutable by `(ruleset_name, version)`.
 - multiple versions of the same `ruleset_name` may be published at a time.
+- published rows have `effective_start_date` and `effective_end_date`
+  metadata. The start defaults to the publish date, and the end defaults to
+  `2999-12-31`.
 - `retire` changes a persisted ruleset version to `retired`.
 - `load_published` loads only `published` metadata.
 - production jobs should use published-only table/view access and `load_published`.
@@ -981,7 +1003,8 @@ What `publish(ruleset)` does:
 3. Fails before publishing if validation has errors.
 4. Verifies the exact `(ruleset_name, version)` does not already exist.
 5. Writes one `ruleset_versions` row with `status = published`.
-6. Stamps `published_by` and `published_at`.
+6. Stamps `published_by`, `published_at`, `effective_start_date`, and
+   `effective_end_date`.
 
 Tables affected by publish:
 
@@ -1015,14 +1038,13 @@ maintenance policy, such as scheduled `OPTIMIZE` and policy-approved `VACUUM`.
 Create the standard registry footprint once per target schema:
 
 ```python
-from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository
+from rules_engine.service import RulesEngineService
 
 schema = "catalog.schema"
-table_names = RulesEngineTableNames.from_schema(schema)
-repository = SparkDeltaRulesetRepository(spark, table_names)
-
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {schema}")
-repository.create_base_tables(mode="error")
+
+service = RulesEngineService.from_schema(spark, schema=schema)
+service.create_tables(mode="error")
 ```
 
 This creates:
@@ -1031,6 +1053,9 @@ This creates:
 - `catalog.schema.function_registry`
 
 Use `mode="overwrite"` only for disposable development or smoke-test schemas.
+After creating tables, call `service.save_standard_function_registry()` to load
+metadata for package standard functions. The call is rerunnable because existing
+function rows are skipped by default.
 
 ### Production YAML Publish Pipeline
 
@@ -1223,6 +1248,8 @@ Key lifecycle points:
   `custom_function_count` store derived size/count metadata for queryability.
 - `owner` and `owner_department` identify business ownership authored in YAML
   or Python.
+- `effective_start_date` and `effective_end_date` identify the version's
+  intended business-effective window.
 - `published_by` and `published_at` identify publication to runtime-loadable metadata.
 - `retired_by` and `retired_at` identify removal from runtime eligibility.
 - Published rows are the only rows loaded by `load_published(...)`.
@@ -1240,6 +1267,8 @@ aggregate_count
 custom_function_count
 owner
 owner_department
+effective_start_date
+effective_end_date
 published_by
 published_at
 retired_by

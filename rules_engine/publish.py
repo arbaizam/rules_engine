@@ -40,6 +40,8 @@ class PublishService:
         ruleset: Ruleset,
         *,
         published_by: str | None = None,
+        effective_start_date: str | None = None,
+        effective_end_date: str | None = None,
     ) -> None:
         """
         Validate and publish a ruleset version.
@@ -67,6 +69,8 @@ class PublishService:
         self._repository.save_published(
             normalized,
             published_by=published_by,
+            effective_start_date=effective_start_date,
+            effective_end_date=effective_end_date,
         )
         logger.info(
             "Ruleset published: ruleset_id=%s ruleset_name=%s version=%s",

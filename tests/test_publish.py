@@ -9,11 +9,20 @@ from rules_engine.validator import RulesetValidator
 
 
 class RecordingRepository:
-    def save_published(self, ruleset, *, published_by=None):
+    def save_published(
+        self,
+        ruleset,
+        *,
+        published_by=None,
+        effective_start_date=None,
+        effective_end_date=None,
+    ):
         self.saved = ruleset
         self.published_by = published_by
+        self.effective_start_date = effective_start_date
+        self.effective_end_date = effective_end_date
 
-    def retire(self, ruleset_id, version, *, retired_by=None):
+    def retire(self, ruleset_id, version, *, retired_by=None, effective_end_date=None):
         raise NotImplementedError
 
     def load_published(self, ruleset_name, version=None):
@@ -81,6 +90,24 @@ def test_publish_passes_provenance_to_repository():
     service.publish(_ruleset("published"), published_by="approver")
 
     assert service._repository.published_by == "approver"
+
+
+def test_publish_passes_effective_dates_to_repository():
+    """
+    What: Passes effective date overrides during direct publication.
+    Why: Effective dating is persisted lifecycle metadata controlled at publish time.
+    Fails when: Effective dates are dropped before repository persistence.
+    """
+    service = _service()
+
+    service.publish(
+        _ruleset("published"),
+        effective_start_date="2026-05-01",
+        effective_end_date="2026-12-31",
+    )
+
+    assert service._repository.effective_start_date == "2026-05-01"
+    assert service._repository.effective_end_date == "2026-12-31"
 
 
 def test_publish_allows_omitted_provenance():

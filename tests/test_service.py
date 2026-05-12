@@ -14,25 +14,36 @@ class RecordingRepository:
         self.saved_ruleset = None
         self.published_by = None
         self.saved_function_rows = None
+        self.update_existing = None
         self.retired = None
 
     def create_base_tables(self, mode="error"):
         self.created_mode = mode
 
-    def save_function_registry_rows(self, rows):
+    def save_function_registry_rows(self, rows, *, update_existing=True):
         self.saved_function_rows = rows
+        self.update_existing = update_existing
 
-    def save_published(self, ruleset, *, published_by=None):
+    def save_published(
+        self,
+        ruleset,
+        *,
+        published_by=None,
+        effective_start_date=None,
+        effective_end_date=None,
+    ):
         self.saved_ruleset = ruleset
         self.published_by = published_by
+        self.effective_start_date = effective_start_date
+        self.effective_end_date = effective_end_date
 
     def load_published(self, ruleset_name, version=None):
         if self.saved_ruleset is None or self.saved_ruleset.ruleset_name != ruleset_name:
             raise RepositoryError(f"Published ruleset not found: {ruleset_name}")
         return self.saved_ruleset
 
-    def retire(self, ruleset_id, version, *, retired_by=None):
-        self.retired = (ruleset_id, version, retired_by)
+    def retire(self, ruleset_id, version, *, retired_by=None, effective_end_date=None):
+        self.retired = (ruleset_id, version, retired_by, effective_end_date)
 
 
 def _yaml_text():
@@ -78,6 +89,23 @@ def test_service_from_schema_uses_standard_table_names():
     assert service.table_names.function_registry == "catalog.schema.function_registry"
 
 
+def test_service_from_schema_accepts_custom_table_names():
+    """
+    What: Builds a service from schema while overriding metadata table names.
+    Why: Deployments may need project-specific table names without manual repository wiring.
+    Fails when: from_schema ignores custom table-name overrides.
+    """
+    service = RulesEngineService.from_schema(
+        None,
+        "catalog.schema",
+        ruleset_versions_table="catalog.schema.custom_ruleset_versions",
+        function_registry_table="catalog.schema.custom_function_registry",
+    )
+
+    assert service.table_names.ruleset_versions == "catalog.schema.custom_ruleset_versions"
+    assert service.table_names.function_registry == "catalog.schema.custom_function_registry"
+
+
 def test_service_publish_yaml_text_and_loads_published_ruleset():
     """
     What: Publishes YAML through the facade and loads it back.
@@ -110,7 +138,8 @@ def test_service_create_tables_save_standard_functions_and_retire():
 
     assert repository.created_mode == "ignore"
     assert any(row.function_name == "substring" for row in repository.saved_function_rows)
-    assert repository.retired == ("rs1", "1", "tester")
+    assert repository.update_existing is False
+    assert repository.retired == ("rs1", "1", "tester", None)
 
 
 def test_service_saves_supplied_function_registry_rows():
@@ -126,6 +155,21 @@ def test_service_saves_supplied_function_registry_rows():
     service.save_function_registry_rows(rows)
 
     assert repository.saved_function_rows == rows
+    assert repository.update_existing is True
+
+
+def test_service_can_upsert_standard_function_registry_when_requested():
+    """
+    What: Allows standard function metadata to update existing registry rows by explicit request.
+    Why: Deployment setup defaults to insert-only, but controlled upgrades may need upsert behavior.
+    Fails when: The update_existing option is not passed through.
+    """
+    repository = RecordingRepository()
+    service = _service(repository)
+
+    service.save_standard_function_registry(update_existing=True)
+
+    assert repository.update_existing is True
 
 
 def test_service_evaluate_dataframe_requires_ruleset_or_name():
@@ -153,3 +197,30 @@ def test_service_publish_accepts_compiled_ruleset():
     service.publish(ruleset, published_by="tester")
 
     assert repository.saved_ruleset.ruleset_id == "service_ruleset"
+
+
+def test_service_publish_and_retire_pass_effective_dates():
+    """
+    What: Passes effective date overrides through the facade.
+    Why: Notebook callers should not need to reach into lower-level services for lifecycle dating.
+    Fails when: Service methods drop effective-date arguments.
+    """
+    repository = RecordingRepository()
+    service = _service(repository)
+    ruleset = YamlRulesetCompiler().compile_text(_yaml_text())
+
+    service.publish(
+        ruleset,
+        effective_start_date="2026-05-01",
+        effective_end_date="2026-12-31",
+    )
+    service.retire(
+        "rs1",
+        "1",
+        retired_by="tester",
+        effective_end_date="2026-10-31",
+    )
+
+    assert repository.effective_start_date == "2026-05-01"
+    assert repository.effective_end_date == "2026-12-31"
+    assert repository.retired == ("rs1", "1", "tester", "2026-10-31")

@@ -63,10 +63,19 @@ class RulesetRepository(Protocol):
         ruleset: Ruleset,
         *,
         published_by: str | None = None,
+        effective_start_date: str | None = None,
+        effective_end_date: str | None = None,
     ) -> None:
         """Persist published metadata."""
 
-    def retire(self, ruleset_id: str, version: str, *, retired_by: str | None = None) -> None:
+    def retire(
+        self,
+        ruleset_id: str,
+        version: str,
+        *,
+        retired_by: str | None = None,
+        effective_end_date: str | None = None,
+    ) -> None:
         """Mark a persisted ruleset version as retired."""
 
     def load_published(self, ruleset_name: str, version: str | None = None) -> Ruleset:
@@ -99,6 +108,8 @@ class SparkDeltaRulesetRepository:
                 StructField("ruleset_name", StringType(), False),
                 StructField("version", StringType(), False),
                 StructField("status", StringType(), False),
+                StructField("effective_start_date", StringType(), False),
+                StructField("effective_end_date", StringType(), False),
                 StructField("description", StringType(), True),
                 StructField("payload_json", StringType(), False),
                 StructField("content_hash", StringType(), False),
@@ -186,6 +197,8 @@ class SparkDeltaRulesetRepository:
             "ruleset_name STRING NOT NULL",
             "version STRING NOT NULL",
             "status STRING NOT NULL",
+            "effective_start_date STRING NOT NULL",
+            "effective_end_date STRING NOT NULL",
             "description STRING",
             "payload_json STRING NOT NULL",
             "content_hash STRING NOT NULL",
@@ -221,6 +234,8 @@ class SparkDeltaRulesetRepository:
         ruleset: Ruleset,
         *,
         published_by: str | None = None,
+        effective_start_date: str | None = None,
+        effective_end_date: str | None = None,
     ) -> None:
         """
         Persist a published ruleset version.
@@ -255,6 +270,8 @@ class SparkDeltaRulesetRepository:
             ruleset,
             published_by=self._actor_or_system(published_by),
             published_at=self._utc_now(),
+            effective_start_date=effective_start_date,
+            effective_end_date=effective_end_date,
         )
         self._write_rows(
             self.table_names.ruleset_versions,
@@ -268,17 +285,26 @@ class SparkDeltaRulesetRepository:
             row.content_hash,
         )
 
-    def retire(self, ruleset_id: str, version: str, *, retired_by: str | None = None) -> None:
+    def retire(
+        self,
+        ruleset_id: str,
+        version: str,
+        *,
+        retired_by: str | None = None,
+        effective_end_date: str | None = None,
+    ) -> None:
         """
         Mark a persisted ruleset version as retired.
         """
         logger.info("Retiring ruleset version: ruleset_id=%s version=%s", ruleset_id, version)
+        retired_at = self._utc_now()
         self._set_status(
             ruleset_id,
             version,
             RulesetStatus.RETIRED,
             retired_by=self._actor_or_system(retired_by),
-            retired_at=self._utc_now(),
+            retired_at=retired_at,
+            effective_end_date=effective_end_date or self._date_from_timestamp(retired_at),
         )
 
     def load_published(self, ruleset_name: str, version: str | None = None) -> Ruleset:
@@ -317,11 +343,24 @@ class SparkDeltaRulesetRepository:
         )
         return self.serializer.deserialize_ruleset_version(row)
 
-    def save_function_registry_rows(self, rows: list[FunctionRegistryRow]) -> None:
+    def save_function_registry_rows(
+        self,
+        rows: list[FunctionRegistryRow],
+        *,
+        update_existing: bool = True,
+    ) -> None:
         """
-        Upsert function registry metadata rows by function_name.
+        Save function registry metadata rows by function_name.
+
+        Existing rows are updated by default. Set ``update_existing=False`` for
+        deployment setup flows that should register only missing functions.
         """
-        logger.info("Saving function registry rows: table=%s row_count=%s", self.table_names.function_registry, len(rows))
+        logger.info(
+            "Saving function registry rows: table=%s row_count=%s update_existing=%s",
+            self.table_names.function_registry,
+            len(rows),
+            update_existing,
+        )
         prepared_rows = [self._function_to_spark_dict(row) for row in rows]
         if not prepared_rows:
             return
@@ -337,16 +376,19 @@ class SparkDeltaRulesetRepository:
             staging_view
         )
         columns = [field.name for field in self.function_registry_schema.fields]
-        update_assignments = ", ".join(f"target.{column} = source.{column}" for column in columns)
         insert_columns = ", ".join(columns)
         insert_values = ", ".join(f"source.{column}" for column in columns)
+        matched_clause = ""
+        if update_existing:
+            update_assignments = ", ".join(f"target.{column} = source.{column}" for column in columns)
+            matched_clause = f"WHEN MATCHED THEN UPDATE SET {update_assignments}"
         try:
             self.spark.sql(
                 f"""
                 MERGE INTO {self.table_names.function_registry} AS target
                 USING {staging_view} AS source
                 ON target.function_name = source.function_name
-                WHEN MATCHED THEN UPDATE SET {update_assignments}
+                {matched_clause}
                 WHEN NOT MATCHED THEN INSERT ({insert_columns})
                 VALUES ({insert_values})
                 """
@@ -376,6 +418,7 @@ class SparkDeltaRulesetRepository:
         *,
         retired_by: str | None = None,
         retired_at: str | None = None,
+        effective_end_date: str | None = None,
     ) -> None:
         """
         Update lifecycle status fields for one version.
@@ -392,6 +435,7 @@ class SparkDeltaRulesetRepository:
         if status is RulesetStatus.RETIRED:
             assignments.append(f"retired_by = {self._sql_nullable(retired_by)}")
             assignments.append(f"retired_at = {self._sql_nullable(retired_at)}")
+            assignments.append(f"effective_end_date = {self._sql_nullable(effective_end_date)}")
 
         self.spark.sql(
             f"""
@@ -502,6 +546,12 @@ class SparkDeltaRulesetRepository:
             return "system"
         stripped = value.strip()
         return stripped or "system"
+
+    def _date_from_timestamp(self, value: str) -> str:
+        """
+        Return the ISO date prefix from a timestamp-like string.
+        """
+        return value[:10]
 
     def _function_to_spark_dict(self, row: FunctionRegistryRow) -> dict:
         """

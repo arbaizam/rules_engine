@@ -39,6 +39,8 @@ def test_ruleset_version_schema_contains_payload_provenance_and_hash_fields():
     assert {
         "payload_json",
         "content_hash",
+        "effective_start_date",
+        "effective_end_date",
         "rule_count",
         "condition_count",
         "assignment_count",
@@ -88,6 +90,8 @@ def test_create_base_tables_uses_explicit_delta_ddl_with_not_null_columns():
     assert any("CREATE TABLE ruleset_versions" in query for query in spark.queries)
     assert any("CREATE TABLE function_registry" in query for query in spark.queries)
     assert any("ruleset_id STRING NOT NULL" in query for query in spark.queries)
+    assert any("effective_start_date STRING NOT NULL" in query for query in spark.queries)
+    assert any("effective_end_date STRING NOT NULL" in query for query in spark.queries)
     assert any("payload_json STRING NOT NULL" in query for query in spark.queries)
     assert any("function_name STRING NOT NULL" in query for query in spark.queries)
     assert any("active_flag BOOLEAN NOT NULL" in query for query in spark.queries)

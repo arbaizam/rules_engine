@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exporter_yaml import YamlRulesetExporter
@@ -24,6 +25,8 @@ class DeltaRowSerializer:
     Convert canonical ruleset models to and from persisted row objects.
     """
 
+    DEFAULT_EFFECTIVE_END_DATE = "2999-12-31"
+
     def serialize_ruleset_version(
         self,
         ruleset: Ruleset,
@@ -32,13 +35,15 @@ class DeltaRowSerializer:
         published_at: str | None = None,
         retired_by: str | None = None,
         retired_at: str | None = None,
+        effective_start_date: str | None = None,
+        effective_end_date: str | None = None,
     ) -> RulesetVersionRow:
         """
         Serialize one ruleset version to the authoritative Delta row shape.
 
-        The payload intentionally excludes lifecycle status. The table row
-        status is authoritative, which lets publish/retire update lifecycle
-        metadata without rewriting rule content.
+        The payload intentionally excludes lifecycle status and effective
+        dates. The table row metadata is authoritative, which lets publish and
+        retire update lifecycle fields without rewriting rule content.
         """
         payload_json = self._payload_json(ruleset)
         return RulesetVersionRow(
@@ -46,6 +51,9 @@ class DeltaRowSerializer:
             ruleset_name=ruleset.ruleset_name,
             version=ruleset.version,
             status=ruleset.status.value,
+            effective_start_date=effective_start_date
+            or self._date_from_timestamp(published_at),
+            effective_end_date=effective_end_date or self.DEFAULT_EFFECTIVE_END_DATE,
             description=ruleset.description,
             payload_json=payload_json,
             content_hash=self.content_hash_from_payload_json(payload_json),
@@ -146,3 +154,11 @@ class DeltaRowSerializer:
         payload = YamlRulesetExporter().export_payload(ruleset)
         payload.pop("status", None)
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    def _date_from_timestamp(self, value: str | None) -> str:
+        """
+        Return a non-null effective date from a timestamp-like string.
+        """
+        if value:
+            return value[:10]
+        return date.today().isoformat()

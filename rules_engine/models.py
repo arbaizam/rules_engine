@@ -398,6 +398,8 @@ class RulesetVersionRow:
     ruleset_name: str
     version: str
     status: str
+    effective_start_date: str
+    effective_end_date: str
     description: str | None
     payload_json: str
     content_hash: str
