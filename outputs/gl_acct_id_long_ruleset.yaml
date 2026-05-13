@@ -1,0 +1,854 @@
+ruleset_id: gl_acct_id_long_ruleset
+ruleset_name: GL Account ID Long Mapping
+version: "1"
+status: published
+owner: Rules Team
+owner_department: ALM Engineering
+description: Canonical YAML translation of GL_ACCT_ID_LONG PySpark when/otherwise mapping.
+rules:
+  - rule_id: gl_acct_id_long_001
+    rule_name: Cash Due from Banks CoreFirst
+    rule_order: 1
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "10000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "CoreFirst_"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1000.CashAndDueFromBanks-CoreFirst"}
+  - rule_id: gl_acct_id_long_002
+    rule_name: Cash Due from Banks FRB KC
+    rule_order: 2
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "10000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "FRB_KC"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1000.CashAndDueFromBanks-FRB_KC"}
+  - rule_id: gl_acct_id_long_003
+    rule_name: Cash Due from Banks JPMC
+    rule_order: 3
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "10000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "JPM_"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1000.CashAndDueFromBanks-JPMC"}
+  - rule_id: gl_acct_id_long_004
+    rule_name: Cash Due from Banks ADP Outsource Bank
+    rule_order: 4
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "10500"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "ADP_"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1000.CashAndDueFromBanks-ADP_Outsource_Bank"}
+  - rule_id: gl_acct_id_long_005
+    rule_name: Cash Due from Banks Other Fallback
+    rule_order: 5
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: in, right: {literal: ["10000", "10500"]}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1000.CashAndDueFromBanks-OtherFallBack"}
+  - rule_id: gl_acct_id_long_006
+    rule_name: IBDDA BANA
+    rule_order: 6
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "BOA_"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1100.IBDDA-BANA"}
+  - rule_id: gl_acct_id_long_007
+    rule_name: IBDDA CINY
+    rule_order: 7
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "Citibank_"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1100.IBDDA-CINY"}
+  - rule_id: gl_acct_id_long_008
+    rule_name: IBDDA GOLD
+    rule_order: 8
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "GS_"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1100.IBDDA-GOLD"}
+  - rule_id: gl_acct_id_long_009
+    rule_name: IBDDA JPMC
+    rule_order: 9
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "JPM_"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1100.IBDDA-JPMC"}
+  - rule_id: gl_acct_id_long_010
+    rule_name: IBDDA WFBK
+    rule_order: 10
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "WF_"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1100.IBDDA-WFBK"}
+  - rule_id: gl_acct_id_long_011
+    rule_name: IBDDA CoreFirst
+    rule_order: 11
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "CoreFirst_"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1100.IBDDA-CoreFirst"}
+  - rule_id: gl_acct_id_long_012
+    rule_name: IBDDA Other Fallback
+    rule_order: 12
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: in, right: {literal: ["PRD0006", "PRD0007"]}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1100.IBDDA-OtherFallBack"}
+  - rule_id: gl_acct_id_long_013
+    rule_name: IBDDA Interbank
+    rule_order: 13
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0005"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1150.IBDDA-Interbank"}
+  - rule_id: gl_acct_id_long_014
+    rule_name: IBDDA Derivative Cash Collateral Cleared
+    rule_order: 14
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11010"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0009"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: ne, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1100.IBDDA-DerivativeCashCollateral-Cleared"}
+  - rule_id: gl_acct_id_long_015
+    rule_name: IBDDA Derivative Cash Collateral Cleared Contra
+    rule_order: 15
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11010"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0009"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: eq, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1100.IBDDA-DerivativeCashCollateral-Cleared-Contra"}
+  - rule_id: gl_acct_id_long_016
+    rule_name: IBDDA Derivative Cash Collateral Uncleared
+    rule_order: 16
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11010"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0008"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: ne, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1100.IBDDA-DerivativeCashCollateral-Uncleared"}
+  - rule_id: gl_acct_id_long_017
+    rule_name: IBDDA Derivative Cash Collateral Uncleared Contra
+    rule_order: 17
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "11010"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0008"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: eq, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1100.IBDDA-DerivativeCashCollateral-Uncleared-Contra"}
+  - rule_id: gl_acct_id_long_018
+    rule_name: Reverse Repurchase Agreement
+    rule_order: 18
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "12000"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1200.ReverseRepurchaseAgreement"}
+  - rule_id: gl_acct_id_long_019
+    rule_name: Federal Funds Sold
+    rule_order: 19
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "13000"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1600.FederalFundsSold"}
+  - rule_id: gl_acct_id_long_020
+    rule_name: Held To Maturity Securities
+    rule_order: 20
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "14200"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1300.HeldToMaturitySecurities"}
+  - rule_id: gl_acct_id_long_021
+    rule_name: Available For Sale Securities
+    rule_order: 21
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "14100"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1400.AvailableForSaleSecurities"}
+  - rule_id: gl_acct_id_long_022
+    rule_name: Available For Sale Securities FV Adjustment
+    rule_order: 22
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "14110"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1400.AvailableForSaleSecurities-FvAdjustment"}
+  - rule_id: gl_acct_id_long_023
+    rule_name: Trading Securities
+    rule_order: 23
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "14000"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1500.TradingSecurities"}
+  - rule_id: gl_acct_id_long_024
+    rule_name: Term Advances
+    rule_order: 24
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "15000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0002"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1800.TermAdvances"}
+  - rule_id: gl_acct_id_long_025
+    rule_name: Term Advances FV Adjustment
+    rule_order: 25
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "15010"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0002"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1800.TermAdvances-FvAdjustment"}
+  - rule_id: gl_acct_id_long_026
+    rule_name: Overnight Advances
+    rule_order: 26
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "15000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0001"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC1800.OvernightAdvances"}
+  - rule_id: gl_acct_id_long_027
+    rule_name: Conventional MPF Loans
+    rule_order: 27
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: in, right: {literal: ["15100", "15105"]}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0003"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BalanceType}, operator: ne, right: {literal: "Mortgage Delivery Commitment Basis Adjustment"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2100.ConventionalMpfLoans"}
+  - rule_id: gl_acct_id_long_028
+    rule_name: Government MPF Loans
+    rule_order: 28
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: in, right: {literal: ["15100", "15105"]}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0004"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BalanceType}, operator: ne, right: {literal: "Mortgage Delivery Commitment Basis Adjustment"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2100.GovernmentMpfLoans"}
+  - rule_id: gl_acct_id_long_029
+    rule_name: Conventional MPF Loans FV Adjustment
+    rule_order: 29
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "15100"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0003"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BalanceType}, operator: eq, right: {literal: "Mortgage Delivery Commitment Basis Adjustment"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2100.ConventionalMpfLoans-FvAdjustment"}
+  - rule_id: gl_acct_id_long_030
+    rule_name: Government MPF Loans FV Adjustment
+    rule_order: 30
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "15100"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0004"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BalanceType}, operator: eq, right: {literal: "Mortgage Delivery Commitment Basis Adjustment"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2100.GovernmentMpfLoans-FvAdjustment"}
+  - rule_id: gl_acct_id_long_031
+    rule_name: MPF Loans LLR
+    rule_order: 31
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "15110"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2200.MpfLoans-LLR"}
+  - rule_id: gl_acct_id_long_032
+    rule_name: Overnight Loans Interbank
+    rule_order: 32
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "15200"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2400.OvernightLoans-Interbank"}
+  - rule_id: gl_acct_id_long_033
+    rule_name: Interest Receivable Derivative Cash Collateral Cleared
+    rule_order: 33
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0009"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: ne, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-DerivativeCashCollateral-Cleared"}
+  - rule_id: gl_acct_id_long_034
+    rule_name: Interest Receivable Derivative Cash Collateral Uncleared
+    rule_order: 34
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0008"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: ne, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-DerivativeCashCollateral-Uncleared"}
+  - rule_id: gl_acct_id_long_035
+    rule_name: Interest Receivable Derivative Cash Collateral Cleared Contra
+    rule_order: 35
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0009"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: eq, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-DerivativeCashCollateral-Cleared-Contra"}
+  - rule_id: gl_acct_id_long_036
+    rule_name: Interest Receivable Derivative Cash Collateral Uncleared Contra
+    rule_order: 36
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0008"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: eq, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-DerivativeCashCollateral-Uncleared-Contra"}
+  - rule_id: gl_acct_id_long_037
+    rule_name: Interest Receivable Derivatives
+    rule_order: 37
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16110"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-Derivatives"}
+  - rule_id: gl_acct_id_long_038
+    rule_name: Interest Receivable Derivatives Contra
+    rule_order: 38
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16120"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-Derivatives-Contra"}
+  - rule_id: gl_acct_id_long_039
+    rule_name: Interest Receivable Federal Funds Sold
+    rule_order: 39
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16010"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-FederalFundsSold"}
+  - rule_id: gl_acct_id_long_040
+    rule_name: Interest Receivable Reverse Repurchase Agreement
+    rule_order: 40
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16020"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-ReverseRepurchaseAgreement"}
+  - rule_id: gl_acct_id_long_041
+    rule_name: Interest Receivable Trading Securities
+    rule_order: 41
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16030"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-TradingSecurities"}
+  - rule_id: gl_acct_id_long_042
+    rule_name: Interest Receivable Available For Sale Securities
+    rule_order: 42
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16040"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-AvailableForSaleSecurities"}
+  - rule_id: gl_acct_id_long_043
+    rule_name: Interest Receivable Held To Maturity Securities
+    rule_order: 43
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16050"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-HeldToMaturitySecurities"}
+  - rule_id: gl_acct_id_long_044
+    rule_name: Interest Receivable Overnight Advances
+    rule_order: 44
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16060"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0001"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-OvernightAdvances"}
+  - rule_id: gl_acct_id_long_045
+    rule_name: Interest Receivable Term Advances
+    rule_order: 45
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16060"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0002"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-TermAdvances"}
+  - rule_id: gl_acct_id_long_046
+    rule_name: Interest Receivable Conventional MPF Loans
+    rule_order: 46
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: in, right: {literal: ["16070", "16075"]}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0003"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-ConventionalMpfLoans"}
+  - rule_id: gl_acct_id_long_047
+    rule_name: Interest Receivable Government MPF Loans
+    rule_order: 47
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16070"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0004"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-GovernmentMpfLoans"}
+  - rule_id: gl_acct_id_long_048
+    rule_name: Interest Receivable IBDDA Interbank
+    rule_order: 48
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16080"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-IBDDA-Interbank"}
+  - rule_id: gl_acct_id_long_049
+    rule_name: Interest Receivable Other Assets Industrial Revenue Bond
+    rule_order: 49
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16090"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-OtherAssets-IndustrialRevenueBond"}
+  - rule_id: gl_acct_id_long_050
+    rule_name: Interest Receivable IBDDA CINY
+    rule_order: 50
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16100"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "Citibank_"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-IBDDA-CINY"}
+  - rule_id: gl_acct_id_long_051
+    rule_name: Interest Receivable IBDDA JPMC
+    rule_order: 51
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "16100"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BankAccountID}, operator: starts_with, right: {literal: "JPM_"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2500.IntRec-IBDDA-JPMC"}
+  - rule_id: gl_acct_id_long_052
+    rule_name: Derivative Assets Accrued Interest
+    rule_order: 52
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "17000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0027"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2700.DerivativeAssets-AccruedInterest"}
+  - rule_id: gl_acct_id_long_053
+    rule_name: Derivative Assets Clean Fair Value
+    rule_order: 53
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "17000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0026"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2700.DerivativeAssets-CleanFairValue"}
+  - rule_id: gl_acct_id_long_054
+    rule_name: Derivative Assets Collateral
+    rule_order: 54
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "17000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0031"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2700.DerivativeAssets-Collateral"}
+  - rule_id: gl_acct_id_long_055
+    rule_name: Derivative Assets Contra
+    rule_order: 55
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "17000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0030"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2700.DerivativeAssets-Contra"}
+  - rule_id: gl_acct_id_long_056
+    rule_name: Derivative Assets MPF Commitments
+    rule_order: 56
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "17000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0028"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2700.DerivativeAssets-MpfCommitments"}
+  - rule_id: gl_acct_id_long_057
+    rule_name: Derivative Assets Variation Margin
+    rule_order: 57
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "17000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0029"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2700.DerivativeAssets-VariationMargin"}
+  - rule_id: gl_acct_id_long_058
+    rule_name: Other Assets Premises And Equipment
+    rule_order: 58
+    stop_on_match: true
+    when: {all: [{left: {field: AccountSummaryId5}, operator: eq, right: {literal: "Standard_Premises_and_Equipment_net"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-PremisesAndEquipment"}
+  - rule_id: gl_acct_id_long_059
+    rule_name: Other Assets Industrial Revenue Bonds
+    rule_order: 59
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18300"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-IndustrialRevenueBonds"}
+  - rule_id: gl_acct_id_long_060
+    rule_name: Other Assets Investment Cash And Safekeeping Wires
+    rule_order: 60
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18310"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-InvestmentCashAndSafekeepingWires"}
+  - rule_id: gl_acct_id_long_061
+    rule_name: Other Assets Debt Clearing Wires
+    rule_order: 61
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18320"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-DebtClearingWires"}
+  - rule_id: gl_acct_id_long_062
+    rule_name: Other Assets Service Fees Receivable
+    rule_order: 62
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18330"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-ServiceFeesReceivable"}
+  - rule_id: gl_acct_id_long_063
+    rule_name: Other Assets Investment Receivable Items
+    rule_order: 63
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18340"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-InvestmentReceivableItems"}
+  - rule_id: gl_acct_id_long_064
+    rule_name: Other Assets FHLBank Shared Expense Receivables
+    rule_order: 64
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18350"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-FHLBankSharedExpenseReceivables"}
+  - rule_id: gl_acct_id_long_065
+    rule_name: Other Assets AHP Repayment Agreement Receivable
+    rule_order: 65
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18360"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-AhpRepaymentAgreementReceivable"}
+  - rule_id: gl_acct_id_long_066
+    rule_name: Other Assets SBPA Commitment Fees Receivable
+    rule_order: 66
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18370"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-SbpaCommitmentFeesReceivable"}
+  - rule_id: gl_acct_id_long_067
+    rule_name: Other Assets Letters Of Credit Fees Receivable
+    rule_order: 67
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18380"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-LettersOfCreditFeesReceivable"}
+  - rule_id: gl_acct_id_long_068
+    rule_name: Other Assets Other Receivables
+    rule_order: 68
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18390"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-OtherReceivables"}
+  - rule_id: gl_acct_id_long_069
+    rule_name: Other Assets Other Deposits
+    rule_order: 69
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18400"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-OtherDeposits"}
+  - rule_id: gl_acct_id_long_070
+    rule_name: Other Assets Down Payments
+    rule_order: 70
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18405"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-DownPayments"}
+  - rule_id: gl_acct_id_long_071
+    rule_name: Other Assets Prepaid Expenses Accounts Payable
+    rule_order: 71
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18410"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-PrepaidExpenses-AccountsPayable"}
+  - rule_id: gl_acct_id_long_072
+    rule_name: Other Assets Prepaid Expenses Employee Benefits
+    rule_order: 72
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18415"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-PrepaidExpenses-EmployeeBenefits"}
+  - rule_id: gl_acct_id_long_073
+    rule_name: Other Assets Fees Paid On Derivatives
+    rule_order: 73
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18420"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-FeesPaidOnDerivatives"}
+  - rule_id: gl_acct_id_long_074
+    rule_name: Other Assets Right Of Use Assets
+    rule_order: 74
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18440"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-RightOfUseAssets"}
+  - rule_id: gl_acct_id_long_075
+    rule_name: Other Assets Retirement Annuity Asset
+    rule_order: 75
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18450"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-RetirementAnnuityAsset"}
+  - rule_id: gl_acct_id_long_076
+    rule_name: Other Assets Investment Principal Receivable
+    rule_order: 76
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: in, right: {literal: ["18200", "18210", "18220", "18110"]}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-InvestmentPrincipalReceivable"}
+  - rule_id: gl_acct_id_long_077
+    rule_name: Other Assets REO
+    rule_order: 77
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "18430"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC2900.OtherAssets-REO"}
+  - rule_id: gl_acct_id_long_078
+    rule_name: Repurchase Agreement
+    rule_order: 78
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "22100"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4400.RepurchaseAgreement"}
+  - rule_id: gl_acct_id_long_079
+    rule_name: Interest Payable Derivative Cash Collateral Uncleared
+    rule_order: 79
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24020"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0037"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: ne, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-DerivativeCashCollateral-Uncleared"}
+  - rule_id: gl_acct_id_long_080
+    rule_name: Interest Payable Derivative Cash Collateral Uncleared Contra
+    rule_order: 80
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24020"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0037"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: eq, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-DerivativeCashCollateral-Uncleared-Contra"}
+  - rule_id: gl_acct_id_long_081
+    rule_name: Interest Payable Derivatives
+    rule_order: 81
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24090"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-Derivatives"}
+  - rule_id: gl_acct_id_long_082
+    rule_name: Interest Payable Derivatives Contra
+    rule_order: 82
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24100"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-Derivatives-Contra"}
+  - rule_id: gl_acct_id_long_083
+    rule_name: Interest Payable Demand Member Deposits
+    rule_order: 83
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0032"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-DemandMemberDeposits"}
+  - rule_id: gl_acct_id_long_084
+    rule_name: Interest Payable Overnight Member Deposits
+    rule_order: 84
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0033"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-OvernightMemberDeposits"}
+  - rule_id: gl_acct_id_long_085
+    rule_name: Interest Payable Term Member Deposits
+    rule_order: 85
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0034"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-TermMemberDeposits"}
+  - rule_id: gl_acct_id_long_086
+    rule_name: Interest Payable Bonds
+    rule_order: 86
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24030"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-Bonds"}
+  - rule_id: gl_acct_id_long_087
+    rule_name: Interest Payable IBDDA Interbank
+    rule_order: 87
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24040"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-IBDDA-Interbank"}
+  - rule_id: gl_acct_id_long_088
+    rule_name: Interest Payable Repurchase Agreement
+    rule_order: 88
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24050"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-RepurchaseAgreement"}
+  - rule_id: gl_acct_id_long_089
+    rule_name: Interest Payable Overnight Loans From Commercial Banks
+    rule_order: 89
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24060"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-OvernightLoansFromCommercialBanks"}
+  - rule_id: gl_acct_id_long_090
+    rule_name: Interest Payable Shawnee County Lease
+    rule_order: 90
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24070"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-ShawneeCountyLease"}
+  - rule_id: gl_acct_id_long_091
+    rule_name: Interest Payable Mandatorily Redeemable Capital Stock
+    rule_order: 91
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "24080"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5200.IntPay-MandatorilyRedeemableCapitalStock"}
+  - rule_id: gl_acct_id_long_092
+    rule_name: Affordable Housing Program
+    rule_order: 92
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: starts_with, right: {literal: "25"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5300.AffordableHousingProgram"}
+  - rule_id: gl_acct_id_long_093
+    rule_name: Consolidated Obligation Bonds
+    rule_order: 93
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "21100"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4800.ConsolidatedObligationBonds"}
+  - rule_id: gl_acct_id_long_094
+    rule_name: Consolidated Obligation Bonds FV Adjustment
+    rule_order: 94
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "21110"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4800.ConsolidatedObligationBonds-FvAdjustment"}
+  - rule_id: gl_acct_id_long_095
+    rule_name: Consolidated Obligation Discount Notes
+    rule_order: 95
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "21000"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4800.ConsolidatedObligationDiscountNotes"}
+  - rule_id: gl_acct_id_long_096
+    rule_name: Consolidated Obligation Discount Notes FV Adjustment
+    rule_order: 96
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "21010"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4800.ConsolidatedObligationDiscountNotes-FvAdjustment"}
+  - rule_id: gl_acct_id_long_097
+    rule_name: Demand Member Deposits
+    rule_order: 97
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "20000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0032"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4000.DemandMemberDeposits"}
+  - rule_id: gl_acct_id_long_098
+    rule_name: Overnight Member Deposits
+    rule_order: 98
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "20000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0033"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4000.OvernightMemberDeposits"}
+  - rule_id: gl_acct_id_long_099
+    rule_name: Term Member Deposits
+    rule_order: 99
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "20000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0034"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4100.TermMemberDeposits"}
+  - rule_id: gl_acct_id_long_100
+    rule_name: Other Deposits MRAA
+    rule_order: 100
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "20000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0036"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4200.OtherDeposits-MRAA"}
+  - rule_id: gl_acct_id_long_101
+    rule_name: Derivative Cash Collateral Uncleared
+    rule_order: 101
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "20010"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0037"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: ne, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4200.DerivativeCashCollateral-Uncleared"}
+  - rule_id: gl_acct_id_long_102
+    rule_name: Derivative Cash Collateral Uncleared Contra
+    rule_order: 102
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "20010"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0037"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: BookCode}, operator: eq, right: {literal: "Average Balance Adjustments"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4200.DerivativeCashCollateral-Uncleared-Contra"}
+  - rule_id: gl_acct_id_long_103
+    rule_name: Derivative Liabilities Clean Fair Value
+    rule_order: 103
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "26000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0026"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5500.DerivativeLiabilities-CleanFairValue"}
+  - rule_id: gl_acct_id_long_104
+    rule_name: Derivative Liabilities Accrued Interest
+    rule_order: 104
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "26000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0027"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5500.DerivativeLiabilities-AccruedInterest"}
+  - rule_id: gl_acct_id_long_105
+    rule_name: Derivative Liabilities MPF Commitments
+    rule_order: 105
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "26000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0028"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5500.DerivativeLiabilities-MpfCommitments"}
+  - rule_id: gl_acct_id_long_106
+    rule_name: Derivative Liabilities Variation Margin
+    rule_order: 106
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "26000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0029"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5500.DerivativeLiabilities-VariationMargin"}
+  - rule_id: gl_acct_id_long_107
+    rule_name: Derivative Liabilities Contra
+    rule_order: 107
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "26000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0030"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5500.DerivativeLiabilities-Contra"}
+  - rule_id: gl_acct_id_long_108
+    rule_name: Derivative Liabilities Collateral
+    rule_order: 108
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "26000"}, null_input_mode: propagate, null_result_mode: "null"}, {left: {field: ProductID}, operator: eq, right: {literal: "PRD0031"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5500.DerivativeLiabilities-Collateral"}
+  - rule_id: gl_acct_id_long_109
+    rule_name: Manditorily Redeemable Capital Stock
+    rule_order: 109
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "23000"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC8000.ManditorilyRedeemableCapitalStock"}
+  - rule_id: gl_acct_id_long_110
+    rule_name: Other Liabilities Supplier Payable
+    rule_order: 110
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27100"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-SupplierPayable"}
+  - rule_id: gl_acct_id_long_111
+    rule_name: Other Liabilities Employee Expense Payable
+    rule_order: 111
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27105"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-EmployeeExpensePayable"}
+  - rule_id: gl_acct_id_long_112
+    rule_name: Other Liabilities Accrued Payroll
+    rule_order: 112
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27110"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-AccruedPayroll"}
+  - rule_id: gl_acct_id_long_113
+    rule_name: Other Liabilities Credit Cards Payable
+    rule_order: 113
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27115"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-CreditCardsPayable"}
+  - rule_id: gl_acct_id_long_114
+    rule_name: Other Liabilities Payroll Tax Liabilities
+    rule_order: 114
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27120"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-PayrollTaxLiabilities"}
+  - rule_id: gl_acct_id_long_115
+    rule_name: Other Liabilities Payroll Witholding Liabilities
+    rule_order: 115
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27130"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-PayrollWitholdingLiabilities"}
+  - rule_id: gl_acct_id_long_116
+    rule_name: Other Liabilities Accrued Compensation
+    rule_order: 116
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27140"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-AccruedCompensation"}
+  - rule_id: gl_acct_id_long_117
+    rule_name: Other Liabilities Accrued Expenses
+    rule_order: 117
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27150"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-AccruedExpenses"}
+  - rule_id: gl_acct_id_long_118
+    rule_name: Other Liabilities Due To PFIs
+    rule_order: 118
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27160"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-DueToPfis"}
+  - rule_id: gl_acct_id_long_119
+    rule_name: Other Liabilities REO Clearing
+    rule_order: 119
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27170"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-ReoClearing"}
+  - rule_id: gl_acct_id_long_120
+    rule_name: Other Liabilities Other Liabilities
+    rule_order: 120
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27180"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-OtherLiabilities"}
+  - rule_id: gl_acct_id_long_121
+    rule_name: Other Liabilities Investment Payable Items
+    rule_order: 121
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27190"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-InvestmentPayableItems"}
+  - rule_id: gl_acct_id_long_122
+    rule_name: Other Liabilities Misc Payable
+    rule_order: 122
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27200"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-MiscPayable"}
+  - rule_id: gl_acct_id_long_123
+    rule_name: Other Liabilities AHP Repayment Agreement Payable
+    rule_order: 123
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27210"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-AhpRepaymentAgreementPayable"}
+  - rule_id: gl_acct_id_long_124
+    rule_name: Other Liabilities Accrued Payable Rec Not Invoiced
+    rule_order: 124
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27220"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-AccruedPayable-RecNotInvoiced"}
+  - rule_id: gl_acct_id_long_125
+    rule_name: Other Liabilities Dividends Payable
+    rule_order: 125
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27240"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-DividendsPayable"}
+  - rule_id: gl_acct_id_long_126
+    rule_name: Other Liabilities Defined Benefit Plan BEP
+    rule_order: 126
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27250"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-DefinedBenefitPlan-BEP"}
+  - rule_id: gl_acct_id_long_127
+    rule_name: Other Liabilities Defined Contribution Plan BEP
+    rule_order: 127
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27260"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-DefinedContributionPlan-BEP"}
+  - rule_id: gl_acct_id_long_128
+    rule_name: Other Liabilities Fees Rec On Derivatives
+    rule_order: 128
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27270"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-FeesRecOnDerivatives"}
+  - rule_id: gl_acct_id_long_129
+    rule_name: Other Liabilities Unearned Letters Of Credit Fees
+    rule_order: 129
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27280"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-UnearnedLettersOfCreditFees"}
+  - rule_id: gl_acct_id_long_130
+    rule_name: Other Liabilities Letters Of Credit FV Adjustment
+    rule_order: 130
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27290"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-LettersOfCreditFvAdjustment"}
+  - rule_id: gl_acct_id_long_131
+    rule_name: Other Liabilities Deferred SBPA Commitment Fees
+    rule_order: 131
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27300"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-DeferredSbpaCommitmentFees"}
+  - rule_id: gl_acct_id_long_132
+    rule_name: Other Liabilities Shawnee County Lease
+    rule_order: 132
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27310"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-ShawneeCountyLease"}
+  - rule_id: gl_acct_id_long_133
+    rule_name: Other Liabilities Lease Liability
+    rule_order: 133
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27320"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-LeaseLiability"}
+  - rule_id: gl_acct_id_long_134
+    rule_name: Other Liabilities Retirement Annuity Liability
+    rule_order: 134
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27330"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-RetirementAnnuityLiability"}
+  - rule_id: gl_acct_id_long_135
+    rule_name: Other Liabilities Open Delivery Commitments
+    rule_order: 135
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "28000"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-OpenDeliveryCommitments"}
+  - rule_id: gl_acct_id_long_136
+    rule_name: Other Liabilities Open Delivery Commitments Contra
+    rule_order: 136
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "28010"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-OpenDeliveryCommitments-Contra"}
+  - rule_id: gl_acct_id_long_137
+    rule_name: Other Liabilities TNS Investments AFS Securities
+    rule_order: 137
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "27010"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-TnsInvestments-AfsSecurities"}
+  - rule_id: gl_acct_id_long_138
+    rule_name: Other Liabilities Voluntary Housing Program Contribution Payable
+    rule_order: 138
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "29000"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC5700.OtherLiabilities-VoluntaryHousingProgramContPayable"}
+  - rule_id: gl_acct_id_long_139
+    rule_name: Overnight Loans From Commercial Banks
+    rule_order: 139
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "22200"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4600.OvernightLoansFromCommercialBanks"}
+  - rule_id: gl_acct_id_long_140
+    rule_name: Overnight Loans Interbank Liability
+    rule_order: 140
+    stop_on_match: true
+    when: {all: [{left: {field: AccountID}, operator: eq, right: {literal: "22000"}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "SC4500.OvernightLoans-Interbank"}
+  - rule_id: gl_acct_id_long_141
+    rule_name: Unmatched
+    rule_order: 141
+    stop_on_match: true
+    when: {all: [{left: {literal: true}, operator: eq, right: {literal: true}, null_input_mode: propagate, null_result_mode: "null"}]}
+    assign: {GL_ACCT_ID_LONG: "Unmatched"}

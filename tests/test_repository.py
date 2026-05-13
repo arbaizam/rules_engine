@@ -201,6 +201,28 @@ def test_retire_allows_explicit_effective_end_date():
     assert "effective_end_date = '2026-04-25'" in "\n".join(spark.queries)
 
 
+def test_retire_rejects_already_retired_version():
+    """
+    What: Rejects a second retirement for an already retired version.
+    Why: Retirement audit fields should preserve the original retirement event.
+    Fails when: A second retirement silently overwrites retired_at or effective_end_date.
+    """
+    spark = FakeSpark()
+    repo = SparkDeltaRulesetRepository(
+        spark,
+        RulesEngineTableNames(
+            ruleset_versions="ruleset_versions",
+            function_registry="function_registry",
+        ),
+    )
+    repo._ruleset_row_dict = lambda ruleset_id, version: {"status": "retired"}
+
+    with pytest.raises(RepositoryError, match="already retired"):
+        repo.retire("rs1", "1", retired_by="engineer")
+
+    assert spark.queries == []
+
+
 def test_save_function_registry_rows_skips_existing_rows_when_update_disabled():
     """
     What: Emits an insert-only merge when update_existing is disabled.

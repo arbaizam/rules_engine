@@ -6,8 +6,7 @@ print("Priority: Critical")
 print("Owner Role: Engineering")
 print("Expected Result: The schema exists and the notebook proceeds to table creation without manual pre-work.")
 print("")
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-assert SCHEMA, "Set RULES_ENGINE_SCHEMA before running this test."
+assert SCHEMA, "Set SCHEMA before running this test."
 
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
 schemas = [row[0] for row in spark.sql(f"SHOW SCHEMAS IN {SCHEMA.rsplit('.', 1)[0]}" if "." in SCHEMA else "SHOW SCHEMAS").collect()]
@@ -25,8 +24,7 @@ print("Expected Result: ruleset_versions and function_registry exist in the targ
 print("")
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-assert SCHEMA, "Set RULES_ENGINE_SCHEMA before running this test."
+assert SCHEMA, "Set SCHEMA before running this test."
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 service.create_tables(mode="ignore")
@@ -45,7 +43,6 @@ print("Expected Result: The custom tables are created and service.table_names re
 print("")
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 RULESET_VERSIONS_TABLE = globals().get("RULESET_VERSIONS_TABLE", f"{SCHEMA}.custom_ruleset_versions")
 FUNCTION_REGISTRY_TABLE = globals().get("FUNCTION_REGISTRY_TABLE", f"{SCHEMA}.custom_function_registry")
 
@@ -75,7 +72,6 @@ import re
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 ruleset_create_sql = "\n".join(
@@ -135,8 +131,7 @@ print("Expected Result: Overwrite recreates tables only in disposable schemas. P
 print("")
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-assert SCHEMA, "Set RULES_ENGINE_SCHEMA before running this test."
+assert SCHEMA, "Set SCHEMA before running this test."
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 ALLOW_OVERWRITE_TEST = bool(globals().get("ALLOW_OVERWRITE_TEST", False))
@@ -165,7 +160,6 @@ print("")
 from rules_engine import RulesEngineService
 from rules_engine.standard_functions import standard_function_rows
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 service.save_standard_function_registry()
 
@@ -185,7 +179,6 @@ print("Expected Result: Second run succeeds and does not overwrite existing rows
 print("")
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 before = spark.table(service.table_names.function_registry).count()
@@ -206,7 +199,6 @@ print("Expected Result: Existing standard function rows are upserted without dup
 print("")
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 service.save_standard_function_registry(update_existing=True)
 
@@ -230,7 +222,6 @@ print("Expected Result: Standard functions are available for validation and runt
 print("")
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 assert service.registry.get_spec("upper").function_name == "upper"
@@ -248,7 +239,6 @@ print("")
 from rules_engine import RulesEngineService
 from rules_engine.models import FunctionRegistryRow
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 row = FunctionRegistryRow(
@@ -277,54 +267,26 @@ print("Owner Role: Engineering")
 print("Expected Result: A Ruleset object is returned with expected ruleset_id, ruleset_name, version, owner, owner_department, rules, conditions, and assignments.")
 print("")
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import CompilationError
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-RULESET_YAML_PATH = globals().get("RULESET_YAML_PATH")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-if "ST-011" in ["ST-011"]:
-    assert RULESET_YAML_PATH, "Set RULESET_YAML_PATH for compile-from-path tests."
-    ruleset = service.compile_yaml_path(RULESET_YAML_PATH)
-    assert ruleset.ruleset_id and ruleset.ruleset_name and ruleset.version
-    print(f"PASS: Compiled ruleset {ruleset.ruleset_name} version {ruleset.version}.")
-elif "ST-011" == "ST-012":
-    yaml_text = """
-ruleset_id: st012_ruleset
-ruleset_name: ST012 Ruleset
-version: "1"
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: r1
-    rule_name: Rule 1
-    rule_order: 1
-    when:
-      all:
-        - left:
-            field: account
-          operator: eq
-          right:
-            literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: A
-"""
-    ruleset = service.compile_yaml_text(yaml_text)
-    assert ruleset.ruleset_name == "ST012 Ruleset"
-    print("PASS: YAML text compiled successfully.")
-else:
-    invalid_yaml_by_test = {
-        "ST-013": "ruleset_id: bad\nruleset_name: Bad\nversion: '1'\nrules:\n  - rule_name: Bad\n    when: {all: []}\n    assignments: {x: y}\n",
-        "ST-014": "ruleset_name: Missing ID\nversion: '1'\nrules: []\n",
-        "ST-015": "ruleset_id: bad\nruleset_name: Bad\nversion: '1'\nrules:\n  - rule_name: Bad\n    when:\n      all: []\n      any: []\n    assign: {x: y}\n",
-    }
-    try:
-        service.compile_yaml_text(invalid_yaml_by_test["ST-011"])
-    except Exception as exc:
-        print(f"PASS: Invalid YAML was rejected as expected: {exc}")
-    else:
-        raise AssertionError("Expected compilation to fail, but it succeeded.")
+assert RULESET_YAML_PATH, "Set RULESET_YAML_PATH for compile-from-path tests."
+
+ruleset = service.compile_yaml_path(RULESET_YAML_PATH)
+
+assert ruleset.ruleset_id, "Expected compiled ruleset_id to be populated."
+assert ruleset.ruleset_name, "Expected compiled ruleset_name to be populated."
+assert ruleset.version, "Expected compiled version to be populated."
+assert ruleset.owner, "Expected compiled owner to be populated."
+assert ruleset.owner_department, "Expected compiled owner_department to be populated."
+assert ruleset.rules, "Expected at least one compiled rule."
+assert ruleset.rules[0].root_group.conditions or ruleset.rules[0].root_group.groups, (
+    "Expected the first rule to contain conditions or nested groups."
+)
+assert ruleset.rules[0].assignments, "Expected the first rule to contain assignments."
+
+print(f"PASS: Compiled ruleset {ruleset.ruleset_name} version {ruleset.version}.")
 
 # COMMAND ----------
 print("ST-012: YAML text compilation works for notebook-authored payloads")
@@ -336,17 +298,9 @@ print("Expected Result: The text compiles into the same model shape as file-base
 print("")
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-RULESET_YAML_PATH = globals().get("RULESET_YAML_PATH")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-if "ST-012" in ["ST-011"]:
-    assert RULESET_YAML_PATH, "Set RULESET_YAML_PATH for compile-from-path tests."
-    ruleset = service.compile_yaml_path(RULESET_YAML_PATH)
-    assert ruleset.ruleset_id and ruleset.ruleset_name and ruleset.version
-    print(f"PASS: Compiled ruleset {ruleset.ruleset_name} version {ruleset.version}.")
-elif "ST-012" == "ST-012":
-    yaml_text = """
+yaml_text = """
 ruleset_id: st012_ruleset
 ruleset_name: ST012 Ruleset
 version: "1"
@@ -368,21 +322,19 @@ rules:
     assign:
       bucket: A
 """
-    ruleset = service.compile_yaml_text(yaml_text)
-    assert ruleset.ruleset_name == "ST012 Ruleset"
-    print("PASS: YAML text compiled successfully.")
-else:
-    invalid_yaml_by_test = {
-        "ST-013": "ruleset_id: bad\nruleset_name: Bad\nversion: '1'\nrules:\n  - rule_name: Bad\n    when: {all: []}\n    assignments: {x: y}\n",
-        "ST-014": "ruleset_name: Missing ID\nversion: '1'\nrules: []\n",
-        "ST-015": "ruleset_id: bad\nruleset_name: Bad\nversion: '1'\nrules:\n  - rule_name: Bad\n    when:\n      all: []\n      any: []\n    assign: {x: y}\n",
-    }
-    try:
-        service.compile_yaml_text(invalid_yaml_by_test["ST-012"])
-    except Exception as exc:
-        print(f"PASS: Invalid YAML was rejected as expected: {exc}")
-    else:
-        raise AssertionError("Expected compilation to fail, but it succeeded.")
+
+ruleset = service.compile_yaml_text(yaml_text)
+
+assert ruleset.ruleset_id == "st012_ruleset"
+assert ruleset.ruleset_name == "ST012 Ruleset"
+assert ruleset.version == "1"
+assert ruleset.owner == "Rules Team"
+assert ruleset.owner_department == "ALM Engineering"
+assert len(ruleset.rules) == 1
+assert ruleset.rules[0].root_group.conditions[0].operator.value == "eq"
+assert ruleset.rules[0].assignments[0].target_field == "bucket"
+
+print("PASS: YAML text compiled into the expected canonical model shape.")
 
 # COMMAND ----------
 print("ST-013: Unsupported legacy aliases are rejected clearly")
@@ -393,26 +345,20 @@ print("Owner Role: Engineering")
 print("Expected Result: Compilation fails with a clear message identifying the unsupported key and canonical replacement.")
 print("")
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import CompilationError
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-RULESET_YAML_PATH = globals().get("RULESET_YAML_PATH")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-if "ST-013" in ["ST-011"]:
-    assert RULESET_YAML_PATH, "Set RULESET_YAML_PATH for compile-from-path tests."
-    ruleset = service.compile_yaml_path(RULESET_YAML_PATH)
-    assert ruleset.ruleset_id and ruleset.ruleset_name and ruleset.version
-    print(f"PASS: Compiled ruleset {ruleset.ruleset_name} version {ruleset.version}.")
-elif "ST-013" == "ST-012":
-    yaml_text = """
-ruleset_id: st012_ruleset
-ruleset_name: ST012 Ruleset
+invalid_yaml = """
+ruleset_id: st013_ruleset
+ruleset_name: ST013 Ruleset
 version: "1"
+status: published
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
   - rule_id: r1
-    rule_name: Rule 1
+    rule_name: Alias Rule
     rule_order: 1
     when:
       all:
@@ -420,27 +366,21 @@ rules:
             field: account
           operator: eq
           right:
-            literal: A
+            value: A
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
       bucket: A
 """
-    ruleset = service.compile_yaml_text(yaml_text)
-    assert ruleset.ruleset_name == "ST012 Ruleset"
-    print("PASS: YAML text compiled successfully.")
+
+try:
+    service.compile_yaml_text(invalid_yaml)
+except CompilationError as exc:
+    assert "Unsupported operand key: value" in str(exc), str(exc)
 else:
-    invalid_yaml_by_test = {
-        "ST-013": "ruleset_id: bad\nruleset_name: Bad\nversion: '1'\nrules:\n  - rule_name: Bad\n    when: {all: []}\n    assignments: {x: y}\n",
-        "ST-014": "ruleset_name: Missing ID\nversion: '1'\nrules: []\n",
-        "ST-015": "ruleset_id: bad\nruleset_name: Bad\nversion: '1'\nrules:\n  - rule_name: Bad\n    when:\n      all: []\n      any: []\n    assign: {x: y}\n",
-    }
-    try:
-        service.compile_yaml_text(invalid_yaml_by_test["ST-013"])
-    except Exception as exc:
-        print(f"PASS: Invalid YAML was rejected as expected: {exc}")
-    else:
-        raise AssertionError("Expected compilation to fail, but it succeeded.")
+    raise AssertionError("Expected unsupported operand alias to fail compilation.")
+
+print("PASS: Unsupported legacy operand alias was rejected clearly.")
 
 # COMMAND ----------
 print("ST-014: Required top-level ruleset metadata is enforced")
@@ -451,54 +391,26 @@ print("Owner Role: Engineering")
 print("Expected Result: Compilation fails before validation or persistence. Error identifies the missing or malformed field.")
 print("")
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import CompilationError
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-RULESET_YAML_PATH = globals().get("RULESET_YAML_PATH")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-if "ST-014" in ["ST-011"]:
-    assert RULESET_YAML_PATH, "Set RULESET_YAML_PATH for compile-from-path tests."
-    ruleset = service.compile_yaml_path(RULESET_YAML_PATH)
-    assert ruleset.ruleset_id and ruleset.ruleset_name and ruleset.version
-    print(f"PASS: Compiled ruleset {ruleset.ruleset_name} version {ruleset.version}.")
-elif "ST-014" == "ST-012":
-    yaml_text = """
-ruleset_id: st012_ruleset
-ruleset_name: ST012 Ruleset
+invalid_yaml = """
+ruleset_name: Missing ID
 version: "1"
 owner: Rules Team
 owner_department: ALM Engineering
-rules:
-  - rule_id: r1
-    rule_name: Rule 1
-    rule_order: 1
-    when:
-      all:
-        - left:
-            field: account
-          operator: eq
-          right:
-            literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: A
+rules: []
 """
-    ruleset = service.compile_yaml_text(yaml_text)
-    assert ruleset.ruleset_name == "ST012 Ruleset"
-    print("PASS: YAML text compiled successfully.")
+
+try:
+    service.compile_yaml_text(invalid_yaml)
+except CompilationError as exc:
+    assert "ruleset_id must be a non-empty string" in str(exc), str(exc)
 else:
-    invalid_yaml_by_test = {
-        "ST-013": "ruleset_id: bad\nruleset_name: Bad\nversion: '1'\nrules:\n  - rule_name: Bad\n    when: {all: []}\n    assignments: {x: y}\n",
-        "ST-014": "ruleset_name: Missing ID\nversion: '1'\nrules: []\n",
-        "ST-015": "ruleset_id: bad\nruleset_name: Bad\nversion: '1'\nrules:\n  - rule_name: Bad\n    when:\n      all: []\n      any: []\n    assign: {x: y}\n",
-    }
-    try:
-        service.compile_yaml_text(invalid_yaml_by_test["ST-014"])
-    except Exception as exc:
-        print(f"PASS: Invalid YAML was rejected as expected: {exc}")
-    else:
-        raise AssertionError("Expected compilation to fail, but it succeeded.")
+    raise AssertionError("Expected missing ruleset_id to fail compilation.")
+
+print("PASS: Missing required top-level ruleset metadata was rejected.")
 
 # COMMAND ----------
 print("ST-015: Condition group logical operator shape is enforced")
@@ -509,20 +421,13 @@ print("Owner Role: Engineering")
 print("Expected Result: Compilation fails and identifies that exactly one logical operator is required.")
 print("")
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import CompilationError
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-RULESET_YAML_PATH = globals().get("RULESET_YAML_PATH")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-if "ST-015" in ["ST-011"]:
-    assert RULESET_YAML_PATH, "Set RULESET_YAML_PATH for compile-from-path tests."
-    ruleset = service.compile_yaml_path(RULESET_YAML_PATH)
-    assert ruleset.ruleset_id and ruleset.ruleset_name and ruleset.version
-    print(f"PASS: Compiled ruleset {ruleset.ruleset_name} version {ruleset.version}.")
-elif "ST-015" == "ST-012":
-    yaml_text = """
-ruleset_id: st012_ruleset
-ruleset_name: ST012 Ruleset
+invalid_yaml = """
+ruleset_id: st015_ruleset
+ruleset_name: ST015 Ruleset
 version: "1"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -532,31 +437,36 @@ rules:
     rule_order: 1
     when:
       all:
-        - left:
+        - condition_id: c1
+          left:
             field: account
           operator: eq
           right:
             literal: A
           null_input_mode: propagate
           null_result_mode: "null"
+      any:
+        - condition_id: c2
+          left:
+            field: status
+          operator: eq
+          right:
+            literal: OPEN
+          null_input_mode: propagate
+          null_result_mode: "null"
     assign:
       bucket: A
 """
-    ruleset = service.compile_yaml_text(yaml_text)
-    assert ruleset.ruleset_name == "ST012 Ruleset"
-    print("PASS: YAML text compiled successfully.")
+
+try:
+    service.compile_yaml_text(invalid_yaml)
+except CompilationError as exc:
+    message = str(exc).lower()
+    assert "exactly one logical operator" in message, str(exc)
 else:
-    invalid_yaml_by_test = {
-        "ST-013": "ruleset_id: bad\nruleset_name: Bad\nversion: '1'\nrules:\n  - rule_name: Bad\n    when: {all: []}\n    assignments: {x: y}\n",
-        "ST-014": "ruleset_name: Missing ID\nversion: '1'\nrules: []\n",
-        "ST-015": "ruleset_id: bad\nruleset_name: Bad\nversion: '1'\nrules:\n  - rule_name: Bad\n    when:\n      all: []\n      any: []\n    assign: {x: y}\n",
-    }
-    try:
-        service.compile_yaml_text(invalid_yaml_by_test["ST-015"])
-    except Exception as exc:
-        print(f"PASS: Invalid YAML was rejected as expected: {exc}")
-    else:
-        raise AssertionError("Expected compilation to fail, but it succeeded.")
+    raise AssertionError("Expected condition group with all and any to fail compilation.")
+
+print("PASS: Invalid condition group logical operator shape was rejected.")
 
 # COMMAND ----------
 print("ST-016: Valid simple row-level rule passes validation")
@@ -569,7 +479,6 @@ print("")
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 valid_yaml = """
@@ -599,12 +508,11 @@ rules:
 ruleset = service.compile_yaml_text(valid_yaml)
 validation = service.validator.validate(ruleset)
 
-if "ST-016" in ["ST-016", "ST-025"]:
-    assert not validation.has_errors(), validation.to_text()
-    print("PASS: Validation passed as expected.")
-else:
-    print(validation.to_text())
-    print("PASS: Review validation output against the expected result for ST-016.")
+assert not validation.has_errors(), validation.to_text()
+assert len(ruleset.rules) == 1
+assert ruleset.rules[0].root_group.conditions[0].condition_id == "c1"
+
+print("PASS: Valid simple row-level rule passed validation.")
 
 # COMMAND ----------
 print("ST-017: Owner and owner_department are required before publish")
@@ -617,15 +525,12 @@ print("")
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-valid_yaml = """
+invalid_yaml = """
 ruleset_id: st_017_ruleset
 ruleset_name: ST-017 Ruleset
 version: "1"
-owner: Rules Team
-owner_department: ALM Engineering
 rules:
   - rule_id: r1
     rule_name: Rule 1
@@ -644,15 +549,18 @@ rules:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(valid_yaml)
+ruleset = service.compile_yaml_text(invalid_yaml)
 validation = service.validator.validate(ruleset)
+check_names = {issue.check_name for issue in validation.issues}
 
-if "ST-017" in ["ST-016", "ST-025"]:
-    assert not validation.has_errors(), validation.to_text()
-    print("PASS: Validation passed as expected.")
-else:
-    print(validation.to_text())
-    print("PASS: Review validation output against the expected result for ST-017.")
+assert validation.has_errors(), "Expected owner metadata validation to fail."
+assert {
+    "RULESET_OWNER_REQUIRED",
+    "RULESET_OWNER_DEPARTMENT_REQUIRED",
+} <= check_names, validation.to_text()
+
+print(validation.to_text())
+print("PASS: Missing owner and owner_department were rejected.")
 
 # COMMAND ----------
 print("ST-018: Duplicate condition_id values are rejected")
@@ -665,10 +573,9 @@ print("")
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-valid_yaml = """
+invalid_yaml = """
 ruleset_id: st_018_ruleset
 ruleset_name: ST-018 Ruleset
 version: "1"
@@ -688,19 +595,27 @@ rules:
             literal: A
           null_input_mode: propagate
           null_result_mode: "null"
+        - condition_id: c1
+          left:
+            field: status
+          operator: eq
+          right:
+            literal: OPEN
+          null_input_mode: propagate
+          null_result_mode: "null"
     assign:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(valid_yaml)
+ruleset = service.compile_yaml_text(invalid_yaml)
 validation = service.validator.validate(ruleset)
+check_names = {issue.check_name for issue in validation.issues}
 
-if "ST-018" in ["ST-016", "ST-025"]:
-    assert not validation.has_errors(), validation.to_text()
-    print("PASS: Validation passed as expected.")
-else:
-    print(validation.to_text())
-    print("PASS: Review validation output against the expected result for ST-018.")
+assert validation.has_errors(), "Expected duplicate condition_id validation to fail."
+assert "CONDITION_ID_DUPLICATE" in check_names, validation.to_text()
+
+print(validation.to_text())
+print("PASS: Duplicate condition_id values were rejected.")
 
 # COMMAND ----------
 print("ST-019: Duplicate condition_group_id values are rejected")
@@ -713,10 +628,9 @@ print("")
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-valid_yaml = """
+invalid_yaml = """
 ruleset_id: st_019_ruleset
 ruleset_name: ST-019 Ruleset
 version: "1"
@@ -727,6 +641,7 @@ rules:
     rule_name: Rule 1
     rule_order: 1
     when:
+      condition_group_id: duplicate_group
       all:
         - condition_id: c1
           left:
@@ -736,19 +651,29 @@ rules:
             literal: A
           null_input_mode: propagate
           null_result_mode: "null"
+        - condition_group_id: duplicate_group
+          any:
+            - condition_id: c2
+              left:
+                field: status
+              operator: eq
+              right:
+                literal: OPEN
+              null_input_mode: propagate
+              null_result_mode: "null"
     assign:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(valid_yaml)
+ruleset = service.compile_yaml_text(invalid_yaml)
 validation = service.validator.validate(ruleset)
+check_names = {issue.check_name for issue in validation.issues}
 
-if "ST-019" in ["ST-016", "ST-025"]:
-    assert not validation.has_errors(), validation.to_text()
-    print("PASS: Validation passed as expected.")
-else:
-    print(validation.to_text())
-    print("PASS: Review validation output against the expected result for ST-019.")
+assert validation.has_errors(), "Expected duplicate condition_group_id validation to fail."
+assert "CONDITION_GROUP_ID_DUPLICATE" in check_names, validation.to_text()
+
+print(validation.to_text())
+print("PASS: Duplicate condition_group_id values were rejected.")
 
 # COMMAND ----------
 print("ST-020: Aggregate scope rules are enforced")
@@ -761,10 +686,9 @@ print("")
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-valid_yaml = """
+invalid_yaml = """
 ruleset_id: st_020_ruleset
 ruleset_name: ST-020 Ruleset
 version: "1"
@@ -778,25 +702,48 @@ rules:
       all:
         - condition_id: c1
           left:
-            field: account
-          operator: eq
+            aggregate:
+              function: sum
+              field: amount
+              scope: group
+              null_input_mode: ignore
+              null_result_mode: "null"
+          operator: gt
           right:
-            literal: A
+            literal: 100
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - condition_id: c2
+          left:
+            aggregate:
+              function: sum
+              field: amount
+              scope: dataset
+              by:
+                - account
+              null_input_mode: ignore
+              null_result_mode: "null"
+          operator: gt
+          right:
+            literal: 100
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(valid_yaml)
+ruleset = service.compile_yaml_text(invalid_yaml)
 validation = service.validator.validate(ruleset)
+check_names = {issue.check_name for issue in validation.issues}
 
-if "ST-020" in ["ST-016", "ST-025"]:
-    assert not validation.has_errors(), validation.to_text()
-    print("PASS: Validation passed as expected.")
-else:
-    print(validation.to_text())
-    print("PASS: Review validation output against the expected result for ST-020.")
+assert validation.has_errors(), "Expected aggregate scope validation to fail."
+assert {
+    "AGGREGATE_GROUP_BY_REQUIRED",
+    "AGGREGATE_DATASET_BY_FORBIDDEN",
+} <= check_names, validation.to_text()
+
+print(validation.to_text())
+print("PASS: Aggregate scope rules were enforced.")
 
 # COMMAND ----------
 print("ST-021: Order-sensitive aggregates require order_by")
@@ -809,10 +756,9 @@ print("")
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-valid_yaml = """
+invalid_yaml = """
 ruleset_id: st_021_ruleset
 ruleset_name: ST-021 Ruleset
 version: "1"
@@ -826,25 +772,30 @@ rules:
       all:
         - condition_id: c1
           left:
-            field: account
+            aggregate:
+              function: first
+              field: amount
+              scope: dataset
+              null_input_mode: ignore
+              null_result_mode: "null"
           operator: eq
           right:
-            literal: A
+            literal: 100
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(valid_yaml)
+ruleset = service.compile_yaml_text(invalid_yaml)
 validation = service.validator.validate(ruleset)
+check_names = {issue.check_name for issue in validation.issues}
 
-if "ST-021" in ["ST-016", "ST-025"]:
-    assert not validation.has_errors(), validation.to_text()
-    print("PASS: Validation passed as expected.")
-else:
-    print(validation.to_text())
-    print("PASS: Review validation output against the expected result for ST-021.")
+assert validation.has_errors(), "Expected order-sensitive aggregate validation to fail."
+assert "AGGREGATE_ORDER_BY_REQUIRED" in check_names, validation.to_text()
+
+print(validation.to_text())
+print("PASS: Order-sensitive aggregate without order_by was rejected.")
 
 # COMMAND ----------
 print("ST-022: Aggregate filters reject nested aggregate operands")
@@ -857,10 +808,9 @@ print("")
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-valid_yaml = """
+invalid_yaml = """
 ruleset_id: st_022_ruleset
 ruleset_name: ST-022 Ruleset
 version: "1"
@@ -874,25 +824,45 @@ rules:
       all:
         - condition_id: c1
           left:
-            field: account
-          operator: eq
+            aggregate:
+              function: sum
+              field: amount
+              scope: dataset
+              filter:
+                all:
+                  - condition_id: filter_c1
+                    left:
+                      aggregate:
+                        function: count
+                        field: amount
+                        scope: dataset
+                        null_input_mode: ignore
+                        null_result_mode: "null"
+                    operator: gt
+                    right:
+                      literal: 1
+                    null_input_mode: propagate
+                    null_result_mode: "null"
+              null_input_mode: ignore
+              null_result_mode: "null"
+          operator: gt
           right:
-            literal: A
+            literal: 100
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(valid_yaml)
+ruleset = service.compile_yaml_text(invalid_yaml)
 validation = service.validator.validate(ruleset)
+check_names = {issue.check_name for issue in validation.issues}
 
-if "ST-022" in ["ST-016", "ST-025"]:
-    assert not validation.has_errors(), validation.to_text()
-    print("PASS: Validation passed as expected.")
-else:
-    print(validation.to_text())
-    print("PASS: Review validation output against the expected result for ST-022.")
+assert validation.has_errors(), "Expected nested aggregate filter validation to fail."
+assert "NESTED_AGGREGATE_FORBIDDEN" in check_names, validation.to_text()
+
+print(validation.to_text())
+print("PASS: Nested aggregate operands inside aggregate filters were rejected.")
 
 # COMMAND ----------
 print("ST-023: Operator arity and literal collection requirements are enforced")
@@ -905,10 +875,9 @@ print("")
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-valid_yaml = """
+invalid_yaml = """
 ruleset_id: st_023_ruleset
 ruleset_name: ST-023 Ruleset
 version: "1"
@@ -923,24 +892,52 @@ rules:
         - condition_id: c1
           left:
             field: account
-          operator: eq
+          operator: is_null
           right:
             literal: A
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - condition_id: c2
+          left:
+            field: account
+          operator: eq
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - condition_id: c3
+          left:
+            field: account
+          operator: in
+          right:
+            literal: A
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - condition_id: c4
+          left:
+            field: amount
+          operator: between
+          right:
+            literal:
+              - 100
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(valid_yaml)
+ruleset = service.compile_yaml_text(invalid_yaml)
 validation = service.validator.validate(ruleset)
+check_names = {issue.check_name for issue in validation.issues}
 
-if "ST-023" in ["ST-016", "ST-025"]:
-    assert not validation.has_errors(), validation.to_text()
-    print("PASS: Validation passed as expected.")
-else:
-    print(validation.to_text())
-    print("PASS: Review validation output against the expected result for ST-023.")
+assert validation.has_errors(), "Expected operator operand validation to fail."
+assert {
+    "UNARY_OPERATOR_RIGHT_FORBIDDEN",
+    "BINARY_OPERATOR_RIGHT_REQUIRED",
+    "IN_OPERATOR_COLLECTION_REQUIRED",
+    "BETWEEN_OPERATOR_PAIR_REQUIRED",
+} <= check_names, validation.to_text()
+
+print(validation.to_text())
+print("PASS: Operator arity and literal collection requirements were enforced.")
 
 # COMMAND ----------
 print("ST-024: Null handling modes require default values when configured")
@@ -953,10 +950,9 @@ print("")
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-valid_yaml = """
+invalid_yaml = """
 ruleset_id: st_024_ruleset
 ruleset_name: ST-024 Ruleset
 version: "1"
@@ -975,20 +971,20 @@ rules:
           right:
             literal: A
           null_input_mode: propagate
-          null_result_mode: "null"
+          null_result_mode: default
     assign:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(valid_yaml)
+ruleset = service.compile_yaml_text(invalid_yaml)
 validation = service.validator.validate(ruleset)
+check_names = {issue.check_name for issue in validation.issues}
 
-if "ST-024" in ["ST-016", "ST-025"]:
-    assert not validation.has_errors(), validation.to_text()
-    print("PASS: Validation passed as expected.")
-else:
-    print(validation.to_text())
-    print("PASS: Review validation output against the expected result for ST-024.")
+assert validation.has_errors(), "Expected null default validation to fail."
+assert "NULL_DEFAULT_REQUIRED" in check_names, validation.to_text()
+
+print(validation.to_text())
+print("PASS: null_result_mode=default without null_default_value was rejected.")
 
 # COMMAND ----------
 print("ST-025: Spark validator accepts supported rulesets")
@@ -1001,7 +997,6 @@ print("")
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 valid_yaml = """
@@ -1031,12 +1026,12 @@ rules:
 ruleset = service.compile_yaml_text(valid_yaml)
 validation = service.validator.validate(ruleset)
 
-if "ST-025" in ["ST-016", "ST-025"]:
-    assert not validation.has_errors(), validation.to_text()
-    print("PASS: Validation passed as expected.")
-else:
-    print(validation.to_text())
-    print("PASS: Review validation output against the expected result for ST-025.")
+assert not validation.has_errors(), validation.to_text()
+assert not any(issue.check_name.startswith("SPARK_") for issue in validation.issues), (
+    validation.to_text()
+)
+
+print("PASS: Supported ruleset passed semantic and Spark compatibility validation.")
 
 # COMMAND ----------
 print("ST-026: Spark validator rejects unsupported aggregate semantics")
@@ -1049,10 +1044,9 @@ print("")
 
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-valid_yaml = """
+invalid_yaml = """
 ruleset_id: st_026_ruleset
 ruleset_name: ST-026 Ruleset
 version: "1"
@@ -1066,25 +1060,63 @@ rules:
       all:
         - condition_id: c1
           left:
-            field: account
+            aggregate:
+              function: median
+              field: amount
+              scope: dataset
+              null_input_mode: ignore
+              null_result_mode: "null"
+          operator: gt
+          right:
+            literal: 100
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - condition_id: c2
+          left:
+            aggregate:
+              function: sum
+              field: amount
+              scope: dataset
+              null_input_mode: error
+              null_result_mode: "null"
+          operator: gt
+          right:
+            literal: 100
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - condition_id: c3
+          left:
+            aggregate:
+              function: first
+              field: event_code
+              scope: dataset
+              order_by:
+                - field: event_sequence
+                  direction: asc
+              null_input_mode: propagate
+              null_result_mode: "null"
           operator: eq
           right:
-            literal: A
+            literal: OPEN
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(valid_yaml)
+ruleset = service.compile_yaml_text(invalid_yaml)
 validation = service.validator.validate(ruleset)
+check_names = {issue.check_name for issue in validation.issues}
 
-if "ST-026" in ["ST-016", "ST-025"]:
-    assert not validation.has_errors(), validation.to_text()
-    print("PASS: Validation passed as expected.")
-else:
-    print(validation.to_text())
-    print("PASS: Review validation output against the expected result for ST-026.")
+assert validation.has_errors(), "Expected Spark compatibility validation to fail."
+assert {
+    "SPARK_EXACT_PERCENTILE_UNSUPPORTED",
+    "SPARK_AGGREGATE_NULL_INPUT_ERROR_UNSUPPORTED",
+    "SPARK_FIRST_LAST_PROPAGATE_UNSUPPORTED",
+} <= check_names, validation.to_text()
+
+print(validation.to_text())
+print("PASS: Spark-incompatible aggregate semantics were rejected before publish.")
 
 # COMMAND ----------
 print("ST-027: Publish YAML path compiles, normalizes, validates, and writes metadata")
@@ -1098,7 +1130,6 @@ print("")
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -1132,33 +1163,26 @@ ruleset = service.publish_yaml_text(
     effective_start_date="2026-05-01",
 )
 
-if "ST-027" == "ST-034":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "retired"
-    assert rows[0]["effective_end_date"] != "2999-12-31"
-    print("PASS: Retirement closed the effective window.")
-elif "ST-027" == "ST-035":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    row = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()[0]
-    assert row["retired_by"] == "system-test"
-    assert row["retired_at"]
-    print("PASS: Retirement metadata was stamped.")
-else:
-    loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-    assert loaded.ruleset_name == ruleset.ruleset_name
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["effective_start_date"] == "2026-05-01"
-    assert rows[0]["effective_end_date"] == "2999-12-31"
-    print("PASS: Publish/lifecycle check completed for ST-027.")
+loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
+rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}'"
+).collect()
+
+assert loaded.ruleset_id == ruleset.ruleset_id
+assert len(rows) == 1, f"Expected one published row, found {len(rows)}."
+row = rows[0]
+assert row["status"] == "published"
+assert row["published_by"] == "system-test"
+assert row["published_at"]
+assert row["payload_json"]
+assert row["content_hash"]
+assert row["rule_count"] == 1
+assert row["condition_count"] == 1
+assert row["assignment_count"] == 1
+assert row["effective_start_date"] == "2026-05-01"
+assert row["effective_end_date"] == "2999-12-31"
+
+print("PASS: Publish YAML path wrote one complete metadata row.")
 
 # COMMAND ----------
 print("ST-028: Direct publish of a compiled ruleset works")
@@ -1170,9 +1194,9 @@ print("Expected Result: The compiled ruleset is persisted and loadable by name/v
 print("")
 
 from datetime import datetime, timezone
+from dataclasses import replace
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -1200,39 +1224,23 @@ rules:
       bucket: A
 """
 
-ruleset = service.publish_yaml_text(
-    yaml_text,
-    published_by="system-test",
-    effective_start_date="2026-05-01",
-)
+compiled = service.compile_yaml_text(yaml_text.replace(f'st_028_{stamp}', f'st_028_direct_{stamp}'))
+compiled = replace(compiled, version=f"{stamp}_direct")
+service.publish(compiled, published_by="system-test", effective_start_date="2026-05-01")
 
-if "ST-028" == "ST-034":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "retired"
-    assert rows[0]["effective_end_date"] != "2999-12-31"
-    print("PASS: Retirement closed the effective window.")
-elif "ST-028" == "ST-035":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    row = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()[0]
-    assert row["retired_by"] == "system-test"
-    assert row["retired_at"]
-    print("PASS: Retirement metadata was stamped.")
-else:
-    loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-    assert loaded.ruleset_name == ruleset.ruleset_name
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["effective_start_date"] == "2026-05-01"
-    assert rows[0]["effective_end_date"] == "2999-12-31"
-    print("PASS: Publish/lifecycle check completed for ST-028.")
+loaded = service.load_published(compiled.ruleset_name, version=compiled.version)
+rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_id = '{compiled.ruleset_id}' AND version = '{compiled.version}'"
+).collect()
+
+assert loaded.ruleset_id == compiled.ruleset_id
+assert loaded.ruleset_name == compiled.ruleset_name
+assert loaded.version == compiled.version
+assert len(rows) == 1
+assert rows[0]["status"] == "published"
+assert rows[0]["effective_start_date"] == "2026-05-01"
+
+print("PASS: Direct publish of a compiled ruleset persisted and loaded successfully.")
 
 # COMMAND ----------
 print("ST-029: Publish rejects non-published lifecycle status")
@@ -1245,8 +1253,8 @@ print("")
 
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import ValidationFailedError
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -1254,7 +1262,7 @@ yaml_text = f"""
 ruleset_id: st_029_{stamp}
 ruleset_name: ST-029 Ruleset
 version: "{stamp}"
-status: published
+status: retired
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
@@ -1274,39 +1282,23 @@ rules:
       bucket: A
 """
 
-ruleset = service.publish_yaml_text(
-    yaml_text,
-    published_by="system-test",
-    effective_start_date="2026-05-01",
-)
+ruleset = service.compile_yaml_text(yaml_text)
 
-if "ST-029" == "ST-034":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "retired"
-    assert rows[0]["effective_end_date"] != "2999-12-31"
-    print("PASS: Retirement closed the effective window.")
-elif "ST-029" == "ST-035":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    row = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()[0]
-    assert row["retired_by"] == "system-test"
-    assert row["retired_at"]
-    print("PASS: Retirement metadata was stamped.")
-else:
-    loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-    assert loaded.ruleset_name == ruleset.ruleset_name
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["effective_start_date"] == "2026-05-01"
-    assert rows[0]["effective_end_date"] == "2999-12-31"
-    print("PASS: Publish/lifecycle check completed for ST-029.")
+try:
+    service.publish(ruleset, published_by="system-test")
+    publish_failed = False
+except ValidationFailedError as exc:
+    publish_failed = True
+    assert "status=published" in str(exc), str(exc)
+
+assert publish_failed, "Expected publish to reject ruleset status=retired."
+
+rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
+).collect()
+assert len(rows) == 0, f"Expected no persisted rows, found {len(rows)}."
+
+print("PASS: Publish rejected non-published lifecycle status before persistence.")
 
 # COMMAND ----------
 print("ST-030: Duplicate ruleset_name and version cannot be published twice")
@@ -1319,8 +1311,8 @@ print("")
 
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import RepositoryError
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -1348,39 +1340,23 @@ rules:
       bucket: A
 """
 
-ruleset = service.publish_yaml_text(
-    yaml_text,
-    published_by="system-test",
-    effective_start_date="2026-05-01",
-)
+first_ruleset = service.publish_yaml_text(yaml_text, published_by="first-publish")
 
-if "ST-030" == "ST-034":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "retired"
-    assert rows[0]["effective_end_date"] != "2999-12-31"
-    print("PASS: Retirement closed the effective window.")
-elif "ST-030" == "ST-035":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    row = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()[0]
-    assert row["retired_by"] == "system-test"
-    assert row["retired_at"]
-    print("PASS: Retirement metadata was stamped.")
-else:
-    loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-    assert loaded.ruleset_name == ruleset.ruleset_name
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["effective_start_date"] == "2026-05-01"
-    assert rows[0]["effective_end_date"] == "2999-12-31"
-    print("PASS: Publish/lifecycle check completed for ST-030.")
+try:
+    service.publish_yaml_text(yaml_text, published_by="second-publish")
+    duplicate_failed = False
+except RepositoryError:
+    duplicate_failed = True
+
+assert duplicate_failed, "Expected duplicate ruleset_name/version publish to fail."
+
+rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_name = '{first_ruleset.ruleset_name}' AND version = '{first_ruleset.version}'"
+).collect()
+assert len(rows) == 1, f"Expected one persisted row after duplicate attempt, found {len(rows)}."
+assert rows[0]["published_by"] == "first-publish"
+
+print("PASS: Duplicate ruleset_name/version publish failed without overwriting the original row.")
 
 # COMMAND ----------
 print("ST-031: Multiple published versions for the same ruleset_name are allowed")
@@ -1394,14 +1370,14 @@ print("")
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+ruleset_name = f"ST-031 Ruleset {stamp}"
 
-yaml_text = f"""
-ruleset_id: st_031_{stamp}
-ruleset_name: ST-031 Ruleset
-version: "{stamp}"
+yaml_v1 = f"""
+ruleset_id: st_031_v1_{stamp}
+ruleset_name: {ruleset_name}
+version: "1"
 status: published
 owner: Rules Team
 owner_department: ALM Engineering
@@ -1422,39 +1398,21 @@ rules:
       bucket: A
 """
 
-ruleset = service.publish_yaml_text(
-    yaml_text,
-    published_by="system-test",
-    effective_start_date="2026-05-01",
-)
+yaml_v2 = yaml_v1.replace(f"st_031_v1_{stamp}", f"st_031_v2_{stamp}").replace('version: "1"', 'version: "2"')
 
-if "ST-031" == "ST-034":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "retired"
-    assert rows[0]["effective_end_date"] != "2999-12-31"
-    print("PASS: Retirement closed the effective window.")
-elif "ST-031" == "ST-035":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    row = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()[0]
-    assert row["retired_by"] == "system-test"
-    assert row["retired_at"]
-    print("PASS: Retirement metadata was stamped.")
-else:
-    loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-    assert loaded.ruleset_name == ruleset.ruleset_name
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["effective_start_date"] == "2026-05-01"
-    assert rows[0]["effective_end_date"] == "2999-12-31"
-    print("PASS: Publish/lifecycle check completed for ST-031.")
+ruleset_v1 = service.publish_yaml_text(yaml_v1, published_by="system-test")
+ruleset_v2 = service.publish_yaml_text(yaml_v2, published_by="system-test")
+
+rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_name = '{ruleset_name}' AND status = 'published'"
+).collect()
+versions = {row["version"] for row in rows}
+
+assert len(rows) == 2, f"Expected two published rows, found {len(rows)}."
+assert {ruleset_v1.version, ruleset_v2.version} <= versions
+assert all(row["effective_end_date"] == "2999-12-31" for row in rows)
+
+print("PASS: Multiple published versions for the same ruleset_name coexist.")
 
 # COMMAND ----------
 print("ST-032: Loading by name without version is rejected when ambiguous")
@@ -1467,15 +1425,16 @@ print("")
 
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import RepositoryError
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+ruleset_name = f"ST-032 Ruleset {stamp}"
 
-yaml_text = f"""
-ruleset_id: st_032_{stamp}
-ruleset_name: ST-032 Ruleset
-version: "{stamp}"
+yaml_v1 = f"""
+ruleset_id: st_032_v1_{stamp}
+ruleset_name: {ruleset_name}
+version: "1"
 status: published
 owner: Rules Team
 owner_department: ALM Engineering
@@ -1496,39 +1455,26 @@ rules:
       bucket: A
 """
 
-ruleset = service.publish_yaml_text(
-    yaml_text,
-    published_by="system-test",
-    effective_start_date="2026-05-01",
-)
+yaml_v2 = yaml_v1.replace(f"st_032_v1_{stamp}", f"st_032_v2_{stamp}").replace('version: "1"', 'version: "2"')
 
-if "ST-032" == "ST-034":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "retired"
-    assert rows[0]["effective_end_date"] != "2999-12-31"
-    print("PASS: Retirement closed the effective window.")
-elif "ST-032" == "ST-035":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    row = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()[0]
-    assert row["retired_by"] == "system-test"
-    assert row["retired_at"]
-    print("PASS: Retirement metadata was stamped.")
-else:
-    loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-    assert loaded.ruleset_name == ruleset.ruleset_name
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["effective_start_date"] == "2026-05-01"
-    assert rows[0]["effective_end_date"] == "2999-12-31"
-    print("PASS: Publish/lifecycle check completed for ST-032.")
+service.publish_yaml_text(yaml_v1, published_by="system-test")
+service.publish_yaml_text(yaml_v2, published_by="system-test")
+
+try:
+    service.load_published(ruleset_name)
+    ambiguous_load_failed = False
+except RepositoryError as exc:
+    ambiguous_load_failed = True
+    assert "specify version" in str(exc), str(exc)
+
+assert ambiguous_load_failed, "Expected load_published without version to fail when multiple versions exist."
+
+loaded_v1 = service.load_published(ruleset_name, version="1")
+loaded_v2 = service.load_published(ruleset_name, version="2")
+assert loaded_v1.version == "1"
+assert loaded_v2.version == "2"
+
+print("PASS: Ambiguous load by name failed and explicit versions loaded.")
 
 # COMMAND ----------
 print("ST-033: Loading by name and version reconstructs the canonical ruleset")
@@ -1542,7 +1488,6 @@ print("")
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -1570,39 +1515,23 @@ rules:
       bucket: A
 """
 
-ruleset = service.publish_yaml_text(
-    yaml_text,
-    published_by="system-test",
-    effective_start_date="2026-05-01",
-)
+ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
+loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
 
-if "ST-033" == "ST-034":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "retired"
-    assert rows[0]["effective_end_date"] != "2999-12-31"
-    print("PASS: Retirement closed the effective window.")
-elif "ST-033" == "ST-035":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    row = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()[0]
-    assert row["retired_by"] == "system-test"
-    assert row["retired_at"]
-    print("PASS: Retirement metadata was stamped.")
-else:
-    loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-    assert loaded.ruleset_name == ruleset.ruleset_name
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["effective_start_date"] == "2026-05-01"
-    assert rows[0]["effective_end_date"] == "2999-12-31"
-    print("PASS: Publish/lifecycle check completed for ST-033.")
+df = spark.createDataFrame([{"account": "A"}, {"account": "B"}])
+result_rows = service.evaluate_dataframe(
+    df,
+    ruleset_name=loaded.ruleset_name,
+    version=loaded.version,
+).collect()
+
+assert loaded.ruleset_id == ruleset.ruleset_id
+assert loaded.ruleset_name == ruleset.ruleset_name
+assert loaded.version == ruleset.version
+assert any(row["rules_engine_matched"] is True for row in result_rows)
+assert any(row["rules_engine_matched"] is False for row in result_rows)
+
+print("PASS: Loaded ruleset matched published metadata and evaluated successfully.")
 
 # COMMAND ----------
 print("ST-034: Retirement makes a version unavailable to load_published")
@@ -1615,8 +1544,8 @@ print("")
 
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import RepositoryError
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -1644,39 +1573,25 @@ rules:
       bucket: A
 """
 
-ruleset = service.publish_yaml_text(
-    yaml_text,
-    published_by="system-test",
-    effective_start_date="2026-05-01",
-)
+ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
+service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
 
-if "ST-034" == "ST-034":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "retired"
-    assert rows[0]["effective_end_date"] != "2999-12-31"
-    print("PASS: Retirement closed the effective window.")
-elif "ST-034" == "ST-035":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    row = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()[0]
-    assert row["retired_by"] == "system-test"
-    assert row["retired_at"]
-    print("PASS: Retirement metadata was stamped.")
-else:
-    loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-    assert loaded.ruleset_name == ruleset.ruleset_name
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["effective_start_date"] == "2026-05-01"
-    assert rows[0]["effective_end_date"] == "2999-12-31"
-    print("PASS: Publish/lifecycle check completed for ST-034.")
+rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
+).collect()
+assert len(rows) == 1
+assert rows[0]["status"] == "retired"
+assert rows[0]["effective_end_date"] != "2999-12-31"
+
+try:
+    service.load_published(ruleset.ruleset_name, version=ruleset.version)
+    retired_load_failed = False
+except RepositoryError:
+    retired_load_failed = True
+
+assert retired_load_failed, "Expected retired version to be unavailable to load_published."
+
+print("PASS: Retired version was removed from load_published eligibility.")
 
 # COMMAND ----------
 print("ST-035: Retirement stamps retired_by and retired_at")
@@ -1690,7 +1605,6 @@ print("")
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -1718,39 +1632,19 @@ rules:
       bucket: A
 """
 
-ruleset = service.publish_yaml_text(
-    yaml_text,
-    published_by="system-test",
-    effective_start_date="2026-05-01",
-)
+ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
+service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
 
-if "ST-035" == "ST-034":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "retired"
-    assert rows[0]["effective_end_date"] != "2999-12-31"
-    print("PASS: Retirement closed the effective window.")
-elif "ST-035" == "ST-035":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    row = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()[0]
-    assert row["retired_by"] == "system-test"
-    assert row["retired_at"]
-    print("PASS: Retirement metadata was stamped.")
-else:
-    loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-    assert loaded.ruleset_name == ruleset.ruleset_name
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["effective_start_date"] == "2026-05-01"
-    assert rows[0]["effective_end_date"] == "2999-12-31"
-    print("PASS: Publish/lifecycle check completed for ST-035.")
+row = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
+).collect()[0]
+
+assert row["status"] == "retired"
+assert row["retired_by"] == "system-test"
+assert row["retired_at"]
+assert row["effective_end_date"] != "2999-12-31"
+
+print("PASS: Retirement metadata was stamped.")
 
 # COMMAND ----------
 print("ST-036: Retiring a missing ruleset version fails safely")
@@ -1763,68 +1657,27 @@ print("")
 
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import RepositoryError
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+before_count = spark.table(service.table_names.ruleset_versions).count()
 
-yaml_text = f"""
-ruleset_id: st_036_{stamp}
-ruleset_name: ST-036 Ruleset
-version: "{stamp}"
-status: published
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: r1
-    rule_name: Rule 1
-    rule_order: 1
-    when:
-      all:
-        - left:
-            field: account
-          operator: eq
-          right:
-            literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: A
-"""
+try:
+    service.retire(f"missing_ruleset_{stamp}", f"missing_version_{stamp}", retired_by="system-test")
+    missing_retire_failed = False
+except RepositoryError as exc:
+    missing_retire_failed = True
+    assert "not found" in str(exc).lower(), str(exc)
 
-ruleset = service.publish_yaml_text(
-    yaml_text,
-    published_by="system-test",
-    effective_start_date="2026-05-01",
+after_count = spark.table(service.table_names.ruleset_versions).count()
+
+assert missing_retire_failed, "Expected retiring a missing ruleset version to fail."
+assert after_count == before_count, (
+    f"Expected row count to remain {before_count}, found {after_count}."
 )
 
-if "ST-036" == "ST-034":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "retired"
-    assert rows[0]["effective_end_date"] != "2999-12-31"
-    print("PASS: Retirement closed the effective window.")
-elif "ST-036" == "ST-035":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    row = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()[0]
-    assert row["retired_by"] == "system-test"
-    assert row["retired_at"]
-    print("PASS: Retirement metadata was stamped.")
-else:
-    loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-    assert loaded.ruleset_name == ruleset.ruleset_name
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["effective_start_date"] == "2026-05-01"
-    assert rows[0]["effective_end_date"] == "2999-12-31"
-    print("PASS: Publish/lifecycle check completed for ST-036.")
+print("PASS: Missing version retirement failed without changing table row count.")
 
 # COMMAND ----------
 print("ST-037: Retiring an already retired version does not silently succeed")
@@ -1832,13 +1685,14 @@ print("-" * 80)
 print("Area: Lifecycle")
 print("Priority: High")
 print("Owner Role: Engineering")
-print("Expected Result: Second retirement fails validation or status verification instead of silently succeeding.")
+print("Expected Result: The first retirement succeeds. A second retirement raises RepositoryError and does not overwrite the original retirement metadata.")
 print("")
 
 from datetime import datetime, timezone
-from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
+from rules_engine import RulesEngineService
+from rules_engine.exceptions import RepositoryError
+
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -1872,33 +1726,77 @@ ruleset = service.publish_yaml_text(
     effective_start_date="2026-05-01",
 )
 
-if "ST-037" == "ST-034":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "retired"
-    assert rows[0]["effective_end_date"] != "2999-12-31"
-    print("PASS: Retirement closed the effective window.")
-elif "ST-037" == "ST-035":
-    service.retire(ruleset.ruleset_id, ruleset.version, retired_by="system-test")
-    row = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
-    ).collect()[0]
-    assert row["retired_by"] == "system-test"
-    assert row["retired_at"]
-    print("PASS: Retirement metadata was stamped.")
-else:
-    loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-    assert loaded.ruleset_name == ruleset.ruleset_name
-    rows = spark.table(service.table_names.ruleset_versions).where(
-        f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'"
-    ).collect()
-    assert len(rows) == 1
-    assert rows[0]["effective_start_date"] == "2026-05-01"
-    assert rows[0]["effective_end_date"] == "2999-12-31"
-    print("PASS: Publish/lifecycle check completed for ST-037.")
+FIRST_RETIRED_BY = "first-retire"
+SECOND_RETIRED_BY = "second-retire"
+
+service.retire(
+    ruleset.ruleset_id,
+    ruleset.version,
+    retired_by=FIRST_RETIRED_BY,
+)
+
+first_rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
+).collect()
+assert len(first_rows) == 1, (
+    f"Expected exactly one row after first retirement, found {len(first_rows)}."
+)
+
+first_row = first_rows[0]
+
+assert first_row["status"] == "retired", (
+    f"Expected first retirement to set status='retired', found {first_row['status']}."
+)
+assert first_row["retired_by"] == FIRST_RETIRED_BY, (
+    f"Expected retired_by={FIRST_RETIRED_BY}, found {first_row['retired_by']}."
+)
+assert first_row["retired_at"], "Expected first retirement to populate retired_at."
+assert first_row["effective_end_date"] != "2999-12-31", (
+    "Expected first retirement to close the open-ended effective_end_date."
+)
+
+original_retired_by = first_row["retired_by"]
+original_retired_at = first_row["retired_at"]
+original_effective_end_date = first_row["effective_end_date"]
+
+try:
+    service.retire(
+        ruleset.ruleset_id,
+        ruleset.version,
+        retired_by=SECOND_RETIRED_BY,
+    )
+    second_retire_failed = False
+except RepositoryError:
+    second_retire_failed = True
+
+assert second_retire_failed, (
+    "Expected second retirement of an already retired version to raise RepositoryError."
+)
+
+second_rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_id = '{ruleset.ruleset_id}' AND version = '{ruleset.version}'"
+).collect()
+assert len(second_rows) == 1, (
+    f"Expected exactly one row after second retirement attempt, found {len(second_rows)}."
+)
+
+second_row = second_rows[0]
+
+assert second_row["status"] == "retired", (
+    f"Expected row to remain retired, found {second_row['status']}."
+)
+assert second_row["retired_by"] == original_retired_by, (
+    f"Expected retired_by to remain {original_retired_by}, found {second_row['retired_by']}."
+)
+assert second_row["retired_at"] == original_retired_at, (
+    f"Expected retired_at to remain {original_retired_at}, found {second_row['retired_at']}."
+)
+assert second_row["effective_end_date"] == original_effective_end_date, (
+    f"Expected effective_end_date to remain {original_effective_end_date}, "
+    f"found {second_row['effective_end_date']}."
+)
+
+print("PASS: Second retirement failed and original retirement metadata was preserved.")
 
 # COMMAND ----------
 print("ST-038: Python runtime evaluates simple row-level rules correctly")
@@ -1912,7 +1810,6 @@ print("")
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -1960,7 +1857,6 @@ print("")
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -2005,26 +1901,32 @@ print("Owner Role: Engineering")
 print("Expected Result: Results match documented null semantics and errors are emitted only where expected.")
 print("")
 
-from datetime import datetime, timezone
-from rules_engine import RulesEngineService
+from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.registry import FunctionRegistry
+from rules_engine.runtime import RulesEngineRuntime
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+class ST040Repository:
+    def load_published(self, ruleset_name, version=None):
+        raise NotImplementedError
 
-yaml_text = f"""
-ruleset_id: st_040_{stamp}
+runtime = RulesEngineRuntime(ST040Repository(), FunctionRegistry())
+compiler = YamlRulesetCompiler()
+
+ruleset = compiler.compile_text("""
+ruleset_id: st_040_ruleset
 ruleset_name: ST-040 Runtime Ruleset
-version: "{stamp}"
+version: "1"
+status: published
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
-  - rule_id: r1
-    rule_name: Account A
+  - rule_id: propagate_null
+    rule_name: Propagate Null Produces No Match
     rule_order: 1
     when:
       all:
-        - left:
+        - condition_id: c_propagate
+          left:
             field: account
           operator: eq
           right:
@@ -2032,18 +1934,82 @@ rules:
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
-      bucket: A
-"""
-ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
-df = spark.createDataFrame([{"account": "A"}, {"account": "B"}])
-result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
-rows = result.collect()
+      bucket: propagate
+  - rule_id: default_true
+    rule_name: Default True Converts Null Result To Match
+    rule_order: 2
+    when:
+      all:
+        - condition_id: c_default_true
+          left:
+            field: account
+          operator: eq
+          right:
+            literal: A
+          null_input_mode: propagate
+          null_result_mode: default
+          null_default_value: true
+    assign:
+      default_bucket: default_true
+  - rule_id: zero_mode
+    rule_name: Zero Mode Replaces Null Numeric Inputs
+    rule_order: 3
+    when:
+      all:
+        - condition_id: c_zero
+          left:
+            field: amount
+          operator: eq
+          right:
+            literal: 0
+          null_input_mode: zero
+          null_result_mode: "null"
+    assign:
+      zero_bucket: zero_match
+""")
 
-assert any(row["rules_engine_matched"] is True for row in rows), "Expected at least one matched row."
-assert any(row["rules_engine_matched"] is False for row in rows), "Expected at least one non-matched row."
-display(result)
-print("PASS: Runtime evaluation completed for ST-040.")
+output, traces = runtime.evaluate([{"account": None, "amount": None}], ruleset)
+row = output[0]
+assert row["matched"] is True
+assert row["matched_rule_ids"] == ["default_true", "zero_mode"], row["matched_rule_ids"]
+assert row["assign"] == {"default_bucket": "default_true", "zero_bucket": "zero_match"}
+trace_by_rule = {trace.rule_id: trace for trace in traces}
+assert trace_by_rule["propagate_null"].matched is False
+assert trace_by_rule["default_true"].matched is True
+assert trace_by_rule["zero_mode"].matched is True
 
+error_ruleset = compiler.compile_text("""
+ruleset_id: st_040_error_ruleset
+ruleset_name: ST-040 Error Ruleset
+version: "1"
+status: published
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: null_error
+    rule_name: Null Result Error
+    rule_order: 1
+    when:
+      all:
+        - condition_id: c_error
+          left:
+            field: account
+          operator: eq
+          right:
+            literal: A
+          null_input_mode: propagate
+          null_result_mode: error
+    assign:
+      bucket: should_error
+""")
+try:
+    runtime.evaluate([{"account": None}], error_ruleset)
+    error_failed = False
+except ValueError as exc:
+    error_failed = True
+    assert "null_result_mode=error" in str(exc), str(exc)
+assert error_failed, "Expected null_result_mode=error to raise on null comparison result."
+print("PASS: Python runtime null semantics matched documented propagate/default/zero/error behavior.")
 # COMMAND ----------
 print("ST-041: Python runtime evaluates aggregate operands correctly")
 print("-" * 80)
@@ -2053,45 +2019,84 @@ print("Owner Role: Engineering")
 print("Expected Result: Aggregate comparisons and assignments match manually calculated expected values.")
 print("")
 
-from datetime import datetime, timezone
-from rules_engine import RulesEngineService
+from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.registry import FunctionRegistry
+from rules_engine.runtime import RulesEngineRuntime
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+class ST041Repository:
+    def load_published(self, ruleset_name, version=None):
+        raise NotImplementedError
 
-yaml_text = f"""
-ruleset_id: st_041_{stamp}
-ruleset_name: ST-041 Runtime Ruleset
-version: "{stamp}"
+runtime = RulesEngineRuntime(ST041Repository(), FunctionRegistry())
+ruleset = YamlRulesetCompiler().compile_text("""
+ruleset_id: st_041_ruleset
+ruleset_name: ST-041 Aggregate Ruleset
+version: "1"
+status: published
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
-  - rule_id: r1
-    rule_name: Account A
+  - rule_id: dataset_total
+    rule_name: Dataset Total Equals 35
     rule_order: 1
     when:
       all:
-        - left:
-            field: account
+        - condition_id: c_dataset
+          left:
+            aggregate:
+              function: sum
+              field: amount
+              scope: dataset
+              null_input_mode: ignore
+              null_result_mode: "null"
           operator: eq
           right:
-            literal: A
+            literal: 35
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
-      bucket: A
-"""
-ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
-df = spark.createDataFrame([{"account": "A"}, {"account": "B"}])
-result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
-rows = result.collect()
-
-assert any(row["rules_engine_matched"] is True for row in rows), "Expected at least one matched row."
-assert any(row["rules_engine_matched"] is False for row in rows), "Expected at least one non-matched row."
-display(result)
-print("PASS: Runtime evaluation completed for ST-041.")
-
+      dataset_total_check: pass
+  - rule_id: group_total
+    rule_name: Group Total Greater Than 15
+    rule_order: 2
+    when:
+      all:
+        - condition_id: c_group
+          left:
+            aggregate:
+              function: sum
+              field: amount
+              scope: group
+              by:
+                - account
+              null_input_mode: ignore
+              null_result_mode: "null"
+          operator: gt
+          right:
+            literal: 15
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      group_total_check: pass
+""")
+input_rows = [
+    {"record_id": "r1", "account": "A", "amount": 10},
+    {"record_id": "r2", "account": "A", "amount": 20},
+    {"record_id": "r3", "account": "B", "amount": 5},
+]
+manual_dataset_total = sum(row["amount"] for row in input_rows)
+manual_group_totals = {}
+for item in input_rows:
+    manual_group_totals[item["account"]] = manual_group_totals.get(item["account"], 0) + item["amount"]
+output, _ = runtime.evaluate(input_rows, ruleset)
+actual_by_id = {row["row"]["record_id"]: row for row in output}
+assert manual_dataset_total == 35
+assert manual_group_totals == {"A": 30, "B": 5}
+assert actual_by_id["r1"]["matched_rule_ids"] == ["dataset_total", "group_total"]
+assert actual_by_id["r2"]["matched_rule_ids"] == ["dataset_total", "group_total"]
+assert actual_by_id["r3"]["matched_rule_ids"] == ["dataset_total"]
+assert actual_by_id["r3"]["assign"] == {"dataset_total_check": "pass"}
+print("PASS: Dataset and group aggregate results matched manual calculations.")
 # COMMAND ----------
 print("ST-042: Spark runtime evaluates a published ruleset against a DataFrame")
 print("-" * 80)
@@ -2102,12 +2107,11 @@ print("Expected Result: Output DataFrame contains matched, matched_rule_ids, ass
 print("")
 
 from datetime import datetime, timezone
+import json
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-
 yaml_text = f"""
 ruleset_id: st_042_{stamp}
 ruleset_name: ST-042 Runtime Ruleset
@@ -2120,7 +2124,8 @@ rules:
     rule_order: 1
     when:
       all:
-        - left:
+        - condition_id: c1
+          left:
             field: account
           operator: eq
           right:
@@ -2131,15 +2136,23 @@ rules:
       bucket: A
 """
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
-df = spark.createDataFrame([{"account": "A"}, {"account": "B"}])
+df = spark.createDataFrame([{"record_id": "r1", "account": "A"}, {"record_id": "r2", "account": "B"}])
 result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
-rows = result.collect()
-
-assert any(row["rules_engine_matched"] is True for row in rows), "Expected at least one matched row."
-assert any(row["rules_engine_matched"] is False for row in rows), "Expected at least one non-matched row."
+rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
+required_columns = {"rules_engine_matched", "rules_engine_matched_rule_ids", "rules_engine_assign", "rules_engine_rule_results", "rules_engine_error"}
+missing_columns = required_columns - set(result.columns)
+assert not missing_columns, f"Missing output columns: {sorted(missing_columns)}"
+assert rows["r1"]["rules_engine_matched"] is True
+assert rows["r1"]["rules_engine_matched_rule_ids"] == ["r1"]
+assert json.loads(rows["r1"]["rules_engine_assign"]) == {"bucket": "A"}
+assert rows["r1"]["rules_engine_error"] is None
+assert rows["r2"]["rules_engine_matched"] is False
+assert rows["r2"]["rules_engine_matched_rule_ids"] == []
+assert rows["r2"]["rules_engine_assign"] is None
+assert rows["r2"]["rules_engine_error"] is None
+assert "r1" in rows["r1"]["rules_engine_rule_results"]
 display(result)
-print("PASS: Runtime evaluation completed for ST-042.")
-
+print("PASS: Spark runtime output columns and values matched expected results.")
 # COMMAND ----------
 print("ST-043: Spark runtime fail_on_error behavior is enforced")
 print("-" * 80)
@@ -2152,10 +2165,8 @@ print("")
 from datetime import datetime, timezone
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-
 yaml_text = f"""
 ruleset_id: st_043_{stamp}
 ruleset_name: ST-043 Runtime Ruleset
@@ -2164,30 +2175,38 @@ owner: Rules Team
 owner_department: ALM Engineering
 rules:
   - rule_id: r1
-    rule_name: Account A
+    rule_name: Null Result Error
     rule_order: 1
     when:
       all:
-        - left:
+        - condition_id: c1
+          left:
             field: account
           operator: eq
           right:
             literal: A
           null_input_mode: propagate
-          null_result_mode: "null"
+          null_result_mode: error
     assign:
       bucket: A
 """
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
-df = spark.createDataFrame([{"account": "A"}, {"account": "B"}])
-result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
-rows = result.collect()
-
-assert any(row["rules_engine_matched"] is True for row in rows), "Expected at least one matched row."
-assert any(row["rules_engine_matched"] is False for row in rows), "Expected at least one non-matched row."
+df = spark.createDataFrame([{"record_id": "r1", "account": None}, {"record_id": "r2", "account": "A"}])
+try:
+    service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version, fail_on_error=True)
+    fail_on_error_raised = False
+except RuntimeError as exc:
+    fail_on_error_raised = True
+    assert "row-level errors" in str(exc).lower(), str(exc)
+assert fail_on_error_raised, "Expected fail_on_error=True to raise for row-level runtime errors."
+result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version, fail_on_error=False)
+rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
+assert rows["r1"]["rules_engine_error"] is not None
+assert "null_result_mode=error" in rows["r1"]["rules_engine_error"]
+assert rows["r2"]["rules_engine_error"] is None
+assert rows["r2"]["rules_engine_matched"] is True
 display(result)
-print("PASS: Runtime evaluation completed for ST-043.")
-
+print("PASS: fail_on_error=True raised and fail_on_error=False recorded row-level errors.")
 # COMMAND ----------
 print("ST-044: Spark runtime supports standard custom functions used in rules")
 print("-" * 80)
@@ -2198,12 +2217,11 @@ print("Expected Result: Evaluation succeeds and outputs match expected transform
 print("")
 
 from datetime import datetime, timezone
+import json
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-
 yaml_text = f"""
 ruleset_id: st_044_{stamp}
 ruleset_name: ST-044 Runtime Ruleset
@@ -2211,12 +2229,13 @@ version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
-  - rule_id: r1
-    rule_name: Account A
+  - rule_id: upper_match
+    rule_name: Upper Account A
     rule_order: 1
     when:
       all:
-        - left:
+        - condition_id: c_upper
+          left:
             custom_function:
               name: upper
               args:
@@ -2228,21 +2247,19 @@ rules:
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
-      bucket: A
+      bucket: upper_a
 """
-print("Ruleset YAML used for ST-044:")
-print(yaml_text)
-
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
-df = spark.createDataFrame([{"account": "a"}, {"account": "B"}])
+df = spark.createDataFrame([{"record_id": "r1", "account": "a"}, {"record_id": "r2", "account": "B"}])
 result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
-rows = result.collect()
-
-assert any(row["rules_engine_matched"] is True for row in rows), "Expected at least one matched row."
-assert any(row["rules_engine_matched"] is False for row in rows), "Expected at least one non-matched row."
+rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
+assert rows["r1"]["rules_engine_matched"] is True
+assert rows["r1"]["rules_engine_matched_rule_ids"] == ["upper_match"]
+assert json.loads(rows["r1"]["rules_engine_assign"]) == {"bucket": "upper_a"}
+assert rows["r2"]["rules_engine_matched"] is False
+assert rows["r2"]["rules_engine_assign"] is None
 display(result)
-print("PASS: Runtime evaluation completed for ST-044.")
-
+print("PASS: Standard upper() function transformed input and produced expected outputs.")
 # COMMAND ----------
 print("ST-045: Spark and Python runtime outputs remain equivalent for shared supported cases")
 print("-" * 80)
@@ -2252,45 +2269,57 @@ print("Owner Role: Engineering")
 print("Expected Result: Matched flags, assignments, and rule traces are equivalent after normalizing output representation.")
 print("")
 
-from datetime import datetime, timezone
-from rules_engine import RulesEngineService
+import json
+from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.registry import FunctionRegistry
+from rules_engine.runtime import RulesEngineRuntime
+from rules_engine.spark_runtime import SparkRulesEngineRuntime
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+class ST045Repository:
+    def load_published(self, ruleset_name, version=None):
+        raise NotImplementedError
 
-yaml_text = f"""
-ruleset_id: st_045_{stamp}
+ruleset = YamlRulesetCompiler().compile_text("""
+ruleset_id: st_045_ruleset
 ruleset_name: ST-045 Runtime Ruleset
-version: "{stamp}"
+version: "1"
+status: published
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
-  - rule_id: r1
-    rule_name: Account A
+  - rule_id: dataset_total
+    rule_name: Dataset Total Equals 30
     rule_order: 1
     when:
       all:
-        - left:
-            field: account
+        - condition_id: c_dataset
+          left:
+            aggregate:
+              function: sum
+              field: amount
+              scope: dataset
+              null_input_mode: ignore
+              null_result_mode: "null"
           operator: eq
           right:
-            literal: A
+            literal: 30
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
-      bucket: A
-"""
-ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
-df = spark.createDataFrame([{"account": "A"}, {"account": "B"}])
-result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
-rows = result.collect()
-
-assert any(row["rules_engine_matched"] is True for row in rows), "Expected at least one matched row."
-assert any(row["rules_engine_matched"] is False for row in rows), "Expected at least one non-matched row."
-display(result)
-print("PASS: Runtime evaluation completed for ST-045.")
-
+      bucket: dataset_match
+""")
+input_rows = [{"row_id": 1, "amount": 10}, {"row_id": 2, "amount": 20}]
+registry = FunctionRegistry()
+python_output, python_traces = RulesEngineRuntime(ST045Repository(), registry).evaluate(input_rows, ruleset)
+spark_result = SparkRulesEngineRuntime(ST045Repository(), registry).evaluate_dataframe(spark.createDataFrame(input_rows), ruleset, fail_on_error=True)
+spark_rows = spark_result.orderBy("row_id").collect()
+assert [row["matched"] for row in python_output] == [row["rules_engine_matched"] for row in spark_rows]
+assert [row["matched_rule_ids"] for row in python_output] == [row["rules_engine_matched_rule_ids"] for row in spark_rows]
+assert [row["assign"] for row in python_output] == [json.loads(row["rules_engine_assign"]) for row in spark_rows]
+assert [trace.matched for trace in python_traces] == [True, True]
+assert all("dataset_total" in row["rules_engine_rule_results"] for row in spark_rows)
+display(spark_result)
+print("PASS: Spark and Python runtime outputs were equivalent after normalizing assignment JSON.")
 # COMMAND ----------
 print("ST-046: Payload JSON excludes mutable lifecycle fields and reconstructs ruleset content")
 print("-" * 80)
@@ -2304,7 +2333,6 @@ from datetime import datetime, timezone
 import hashlib
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -2355,7 +2383,6 @@ from datetime import datetime, timezone
 import hashlib
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
@@ -2403,13 +2430,10 @@ print("Expected Result: Persisted counts match the model counts.")
 print("")
 
 from datetime import datetime, timezone
-import hashlib
 from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-
 yaml_text = f"""
 ruleset_id: st_048_{stamp}
 ruleset_name: ST-048 Audit Ruleset
@@ -2418,11 +2442,127 @@ owner: Rules Team
 owner_department: ALM Engineering
 rules:
   - rule_id: r1
-    rule_name: Rule 1
+    rule_name: Dataset Aggregate Rule
     rule_order: 1
     when:
       all:
-        - left:
+        - condition_id: c1
+          left:
+            aggregate:
+              function: sum
+              field: amount
+              scope: dataset
+              null_input_mode: ignore
+              null_result_mode: "null"
+          operator: gt
+          right:
+            literal: 100
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      aggregate_bucket: large
+  - rule_id: r2
+    rule_name: Standard Function Rule
+    rule_order: 2
+    when:
+      all:
+        - condition_id: c2
+          left:
+            custom_function:
+              name: upper
+              args:
+                value:
+                  field: account
+          operator: eq
+          right:
+            literal: A
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      function_bucket: upper_a
+"""
+ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
+row = spark.table(service.table_names.ruleset_versions).where(f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}'").collect()[0]
+expected_rule_count = len(ruleset.rules)
+expected_condition_count = sum(len(rule.root_group.conditions) for rule in ruleset.rules)
+expected_assignment_count = sum(len(rule.assignments) for rule in ruleset.rules)
+assert row["rule_count"] == expected_rule_count
+assert row["condition_count"] == expected_condition_count
+assert row["assignment_count"] == expected_assignment_count
+assert row["aggregate_count"] == 1
+assert row["custom_function_count"] == 1
+print("PASS: Persisted summary count columns matched compiled ruleset content.")
+# COMMAND ----------
+print("ST-049: Publish notebook re-instantiates service against existing setup tables")
+print("-" * 80)
+print("Area: Pipeline notebooks")
+print("Priority: Critical")
+print("Owner Role: Engineering")
+print("Expected Result: Notebook 2 compiles, validates, publishes, and verifies the ruleset without recreating setup objects.")
+print("")
+from datetime import datetime, timezone
+from dataclasses import replace
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+
+assert spark.catalog.tableExists(service.table_names.ruleset_versions), f"Missing {service.table_names.ruleset_versions}"
+assert spark.catalog.tableExists(service.table_names.function_registry), f"Missing {service.table_names.function_registry}"
+assert RULESET_YAML_PATH, "Set RULESET_YAML_PATH before running the publish notebook verification test."
+
+ruleset = service.compile_yaml_path(RULESET_YAML_PATH)
+ruleset = replace(ruleset, version=f"ST049_{stamp}")
+validation = service.validator.validate(ruleset)
+assert not validation.has_errors(), validation.to_text()
+
+service.publish(ruleset, published_by="system-test")
+loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
+rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}'"
+).collect()
+
+assert loaded.ruleset_id == ruleset.ruleset_id
+assert len(rows) == 1, f"Expected exactly one published row, found {len(rows)}."
+assert rows[0]["status"] == "published"
+
+print(f"PASS: Re-instantiated service published and loaded {ruleset.ruleset_name} version {ruleset.version}.")
+
+# COMMAND ----------
+print("ST-050: Notebook verification checks are present after setup and publish")
+print("-" * 80)
+print("Area: Pipeline notebooks")
+print("Priority: High")
+print("Owner Role: Engineering")
+print("Expected Result: Both notebooks fail fast when expected deployment or publish verification conditions are not met.")
+print("")
+from datetime import datetime, timezone
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+assert spark.catalog.tableExists(service.table_names.ruleset_versions), f"Missing {service.table_names.ruleset_versions}"
+assert spark.catalog.tableExists(service.table_names.function_registry), f"Missing {service.table_names.function_registry}"
+required_functions = {"upper", "lower", "substring"}
+function_rows = spark.table(service.table_names.function_registry).where("active_flag = true").select("function_name").collect()
+active_function_names = {row["function_name"] for row in function_rows}
+missing_functions = required_functions - active_function_names
+assert not missing_functions, f"Missing expected active standard functions: {sorted(missing_functions)}"
+yaml_text = f"""
+ruleset_id: st_050_{stamp}
+ruleset_name: ST-050 Verification Ruleset
+version: "{stamp}"
+status: published
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: r1
+    rule_name: Verification Rule
+    rule_order: 1
+    when:
+      all:
+        - condition_id: c1
+          left:
             field: account
           operator: eq
           right:
@@ -2433,73 +2573,96 @@ rules:
       bucket: A
 """
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
-row = spark.table(service.table_names.ruleset_versions).where(
-    f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}'"
-).collect()[0]
-
-assert "status" not in row["payload_json"]
-assert hashlib.sha256(row["payload_json"].encode("utf-8")).hexdigest() == row["content_hash"]
-assert row["rule_count"] >= 1
-assert row["effective_start_date"]
-assert row["effective_end_date"]
-print("PASS: Audit metadata checks completed for ST-048.")
-
-# COMMAND ----------
-print("ST-049: Publish notebook re-instantiates service against existing setup tables")
-print("-" * 80)
-print("Area: Pipeline notebooks")
-print("Priority: Critical")
-print("Owner Role: Engineering")
-print("Expected Result: Notebook 2 compiles, validates, publishes, and verifies the ruleset without recreating setup objects.")
-print("")
-from rules_engine import RulesEngineService
-
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-RULESET_YAML_PATH = globals().get("RULESET_YAML_PATH")
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-
-assert spark.catalog.tableExists(service.table_names.ruleset_versions), f"Missing {service.table_names.ruleset_versions}"
-assert spark.catalog.tableExists(service.table_names.function_registry), f"Missing {service.table_names.function_registry}"
-
-if RULESET_YAML_PATH:
-    ruleset = service.compile_yaml_path(RULESET_YAML_PATH)
-    validation = service.validator.validate(ruleset)
-    assert not validation.has_errors(), validation.to_text()
-    print(f"Compiled and validated {ruleset.ruleset_name} version {ruleset.version}.")
-else:
-    print("Set RULESET_YAML_PATH to run the compile/validate portion of this pipeline notebook test.")
-
-print("Execution steps:")
-print('Run notebook 2 after notebook 1 using the same schema or custom table parameters.')
-print("")
-print("PASS: Pipeline notebook verification checks are present and executable for ST-049.")
+loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
+published_rows = spark.table(service.table_names.ruleset_versions).where(f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'").collect()
+assert loaded.ruleset_id == ruleset.ruleset_id
+assert len(published_rows) == 1, f"Expected exactly one published verification row, found {len(published_rows)}."
+assert published_rows[0]["content_hash"]
+assert published_rows[0]["payload_json"]
+assert published_rows[0]["rule_count"] == 1
+assert published_rows[0]["condition_count"] == 1
+assert published_rows[0]["assignment_count"] == 1
+print("PASS: Setup and publish verification checks fail fast and prove metadata is usable.")
 
 # COMMAND ----------
-print("ST-050: Notebook verification checks are present after setup and publish")
+print("Run automated unit test suite")
 print("-" * 80)
-print("Area: Pipeline notebooks")
-print("Priority: High")
-print("Owner Role: Engineering")
-print("Expected Result: Both notebooks fail fast when expected deployment or publish verification conditions are not met.")
+print("Purpose: Execute the repository pytest suite.")
 print("")
-from rules_engine import RulesEngineService
 
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-RULESET_YAML_PATH = globals().get("RULESET_YAML_PATH")
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+import os
+from pathlib import Path
+import sys
+import warnings
 
-assert spark.catalog.tableExists(service.table_names.ruleset_versions), f"Missing {service.table_names.ruleset_versions}"
-assert spark.catalog.tableExists(service.table_names.function_registry), f"Missing {service.table_names.function_registry}"
+import pytest
 
-if RULESET_YAML_PATH:
-    ruleset = service.compile_yaml_path(RULESET_YAML_PATH)
-    validation = service.validator.validate(ruleset)
-    assert not validation.has_errors(), validation.to_text()
-    print(f"Compiled and validated {ruleset.ruleset_name} version {ruleset.version}.")
+configured_repo_root = globals().get("RULES_ENGINE_REPO_ROOT")
+if configured_repo_root:
+    REPO_ROOT = Path(configured_repo_root).expanduser().resolve()
 else:
-    print("Set RULESET_YAML_PATH to run the compile/validate portion of this pipeline notebook test.")
+    search_start = Path(os.getcwd()).resolve()
+    candidates = [search_start, *search_start.parents]
+    REPO_ROOT = next(
+        (
+            candidate
+            for candidate in candidates
+            if (candidate / "tests").exists() and (candidate / "pyproject.toml").exists()
+        ),
+        search_start,
+    )
 
-print("Execution steps:")
-print('Review notebooks for assertions that tables exist, standard functions are registered, published row count equals one for target name/version, and load_published succeeds.')
+assert (REPO_ROOT / "tests").exists(), (
+    f"Could not find tests directory under repo root {REPO_ROOT}. "
+    "Set RULES_ENGINE_REPO_ROOT to the repository root before running this cell."
+)
+
+PYTEST_ARGS = globals().get(
+    "RULES_ENGINE_PYTEST_ARGS",
+    [
+        "tests",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "no:assertion_rewriting",
+        "--ignore=tests/test_smoke_test_safety.py",
+    ],
+)
+
+sys.path.insert(0, str(REPO_ROOT))
+src_path = REPO_ROOT / "src"
+bundle_src_path = REPO_ROOT / "rules_engine_bundle" / "src"
+if src_path.exists():
+    sys.path.insert(0, str(src_path))
+if bundle_src_path.exists():
+    sys.path.insert(0, str(bundle_src_path))
+
+previous_cwd = Path(os.getcwd())
+os.chdir(str(REPO_ROOT))
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+os.environ["RULES_ENGINE_RUN_SPARK_TESTS"] = globals().get(
+    "RULES_ENGINE_RUN_SPARK_TESTS",
+    os.environ.get("RULES_ENGINE_RUN_SPARK_TESTS", "1"),
+)
+
+print(f"Repo root: {REPO_ROOT}")
+print(f"pytest args: {PYTEST_ARGS}")
+print(f"RULES_ENGINE_RUN_SPARK_TESTS: {os.environ['RULES_ENGINE_RUN_SPARK_TESTS']}")
 print("")
-print("PASS: Pipeline notebook verification checks are present and executable for ST-050.")
+
+try:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*getargspec.*",
+            category=DeprecationWarning,
+        )
+        retcode = pytest.main(PYTEST_ARGS)
+finally:
+    os.chdir(str(previous_cwd))
+
+assert retcode == 0, f"pytest failed with exit code {retcode}."
+
+print("PASS: Automated pytest suite completed successfully.")

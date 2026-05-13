@@ -368,18 +368,15 @@ class SparkRulesEngineRuntime:
             order_columns = [self._reverse_order_column(item) for item in operand.order_by]
 
         if operand.scope is AggregateScope.DATASET:
-            window = Window.orderBy(*order_columns)
-            selected = F.when(
-                F.col("__rules_engine_row_number") == 1,
-                self._order_sensitive_value_expr(operand),
+            ordered_value = (
+                filtered.orderBy(*order_columns)
+                .select(self._order_sensitive_value_expr(operand).alias("__rules_engine_value"))
+                .limit(1)
             )
-            result_expr = F.first(selected, ignorenulls=True)
+            result_expr = F.first(F.col("__rules_engine_value"), ignorenulls=True)
             if operand.null_result_mode is NullResultMode.DEFAULT:
                 result_expr = F.coalesce(result_expr, F.lit(operand.null_default_value))
-            aggregate_df = (
-                filtered.withColumn("__rules_engine_row_number", F.row_number().over(window))
-                .agg(result_expr.alias(binding.column_name))
-            )
+            aggregate_df = ordered_value.agg(result_expr.alias(binding.column_name))
             return df.crossJoin(aggregate_df)
 
         window = Window.partitionBy(*[F.col(field_name) for field_name in operand.by]).orderBy(

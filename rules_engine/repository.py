@@ -249,12 +249,6 @@ class SparkDeltaRulesetRepository:
             ruleset.version,
         )
         if existing_status is not None:
-            logger.error(
-                "Rejected published overwrite for immutable ruleset version: ruleset_name=%s version=%s existing_status=%s",
-                ruleset.ruleset_name,
-                ruleset.version,
-                existing_status,
-            )
             raise RepositoryError(
                 f"Cannot overwrite ruleset version with status={existing_status}: "
                 f"ruleset_name={ruleset.ruleset_name}, version={ruleset.version}"
@@ -427,6 +421,10 @@ class SparkDeltaRulesetRepository:
         if row is None:
             raise RepositoryError(
                 f"Ruleset version not found: ruleset_id={ruleset_id}, version={version}"
+            )
+        if status is RulesetStatus.RETIRED and row["status"] == RulesetStatus.RETIRED.value:
+            raise RepositoryError(
+                f"Ruleset version is already retired: ruleset_id={ruleset_id}, version={version}"
             )
 
         assignments = [
