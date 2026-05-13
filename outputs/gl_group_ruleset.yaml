@@ -12,7 +12,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_001_c1
       left:
         field: AccountID
       operator: eq
@@ -20,7 +20,7 @@ rules:
         literal: '10000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_001_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -45,7 +45,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_002_c1
       left:
         field: AccountID
       operator: eq
@@ -53,7 +53,7 @@ rules:
         literal: '10000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_002_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -78,7 +78,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_003_c1
       left:
         field: AccountID
       operator: eq
@@ -86,7 +86,7 @@ rules:
         literal: '10000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_003_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -111,7 +111,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_004_c1
       left:
         field: AccountID
       operator: eq
@@ -119,7 +119,7 @@ rules:
         literal: '10500'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_004_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -144,7 +144,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_005_c1
       left:
         field: AccountID
       operator: in
@@ -171,7 +171,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_006_c1
       left:
         field: AccountID
       operator: eq
@@ -179,7 +179,7 @@ rules:
         literal: '11000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_006_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -204,7 +204,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_007_c1
       left:
         field: AccountID
       operator: eq
@@ -212,7 +212,7 @@ rules:
         literal: '11000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_007_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -237,7 +237,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_008_c1
       left:
         field: AccountID
       operator: eq
@@ -245,7 +245,7 @@ rules:
         literal: '11000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_008_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -270,7 +270,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_009_c1
       left:
         field: AccountID
       operator: eq
@@ -278,7 +278,7 @@ rules:
         literal: '11000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_009_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -303,7 +303,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_010_c1
       left:
         field: AccountID
       operator: eq
@@ -311,7 +311,7 @@ rules:
         literal: '11000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_010_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -336,7 +336,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_011_c1
       left:
         field: AccountID
       operator: eq
@@ -344,7 +344,7 @@ rules:
         literal: '11000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_011_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -369,7 +369,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_012_c1
       left:
         field: AccountID
       operator: eq
@@ -377,7 +377,7 @@ rules:
         literal: '11000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_012_c2
       left:
         field: ProductID
       operator: in
@@ -405,7 +405,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_013_c1
       left:
         field: AccountID
       operator: eq
@@ -413,7 +413,7 @@ rules:
         literal: '11000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_013_c2
       left:
         field: ProductID
       operator: eq
@@ -438,7 +438,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_014_c1
       left:
         field: AccountID
       operator: eq
@@ -446,7 +446,7 @@ rules:
         literal: '11010'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_014_c2
       left:
         field: ProductID
       operator: eq
@@ -454,7 +454,7 @@ rules:
         literal: PRD0009
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_014_c3
       left:
         field: BookCode
       operator: ne
@@ -480,7 +480,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_015_c1
       left:
         field: AccountID
       operator: eq
@@ -488,7 +488,7 @@ rules:
         literal: '11010'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_015_c2
       left:
         field: ProductID
       operator: eq
@@ -496,7 +496,7 @@ rules:
         literal: PRD0009
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_015_c3
       left:
         field: BookCode
       operator: eq
@@ -522,7 +522,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_016_c1
       left:
         field: AccountID
       operator: eq
@@ -530,7 +530,7 @@ rules:
         literal: '11010'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_016_c2
       left:
         field: ProductID
       operator: eq
@@ -538,7 +538,7 @@ rules:
         literal: PRD0008
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_016_c3
       left:
         field: BookCode
       operator: ne
@@ -564,7 +564,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_017_c1
       left:
         field: AccountID
       operator: eq
@@ -572,7 +572,7 @@ rules:
         literal: '11010'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_017_c2
       left:
         field: ProductID
       operator: eq
@@ -580,7 +580,7 @@ rules:
         literal: PRD0008
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_017_c3
       left:
         field: BookCode
       operator: eq
@@ -606,7 +606,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_018_c1
       left:
         field: AccountID
       operator: eq
@@ -630,7 +630,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_019_c1
       left:
         field: AccountID
       operator: eq
@@ -654,7 +654,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_020_c1
       left:
         field: AccountID
       operator: eq
@@ -678,7 +678,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_021_c1
       left:
         field: AccountID
       operator: eq
@@ -702,7 +702,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_022_c1
       left:
         field: AccountID
       operator: eq
@@ -726,7 +726,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_023_c1
       left:
         field: AccountID
       operator: eq
@@ -750,7 +750,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_024_c1
       left:
         field: AccountID
       operator: eq
@@ -758,7 +758,7 @@ rules:
         literal: '15000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_024_c2
       left:
         field: ProductID
       operator: eq
@@ -783,7 +783,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_025_c1
       left:
         field: AccountID
       operator: eq
@@ -791,7 +791,7 @@ rules:
         literal: '15010'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_025_c2
       left:
         field: ProductID
       operator: eq
@@ -816,7 +816,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_026_c1
       left:
         field: AccountID
       operator: eq
@@ -824,7 +824,7 @@ rules:
         literal: '15000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_026_c2
       left:
         field: ProductID
       operator: eq
@@ -849,7 +849,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_027_c1
       left:
         field: AccountID
       operator: in
@@ -859,7 +859,7 @@ rules:
         - '15105'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_027_c2
       left:
         field: ProductID
       operator: eq
@@ -867,7 +867,7 @@ rules:
         literal: PRD0003
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_027_c3
       left:
         field: BalanceType
       operator: ne
@@ -893,7 +893,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_028_c1
       left:
         field: AccountID
       operator: in
@@ -903,7 +903,7 @@ rules:
         - '15105'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_028_c2
       left:
         field: ProductID
       operator: eq
@@ -911,7 +911,7 @@ rules:
         literal: PRD0004
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_028_c3
       left:
         field: BalanceType
       operator: ne
@@ -937,7 +937,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_029_c1
       left:
         field: AccountID
       operator: eq
@@ -945,7 +945,7 @@ rules:
         literal: '15100'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_029_c2
       left:
         field: ProductID
       operator: eq
@@ -953,7 +953,7 @@ rules:
         literal: PRD0003
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_029_c3
       left:
         field: BalanceType
       operator: eq
@@ -978,7 +978,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_030_c1
       left:
         field: AccountID
       operator: eq
@@ -986,7 +986,7 @@ rules:
         literal: '15100'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_030_c2
       left:
         field: ProductID
       operator: eq
@@ -994,7 +994,7 @@ rules:
         literal: PRD0004
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_030_c3
       left:
         field: BalanceType
       operator: eq
@@ -1019,7 +1019,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_031_c1
       left:
         field: AccountID
       operator: eq
@@ -1043,7 +1043,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_032_c1
       left:
         field: AccountID
       operator: eq
@@ -1067,7 +1067,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_033_c1
       left:
         field: AccountID
       operator: eq
@@ -1075,7 +1075,7 @@ rules:
         literal: '16000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_033_c2
       left:
         field: ProductID
       operator: eq
@@ -1083,7 +1083,7 @@ rules:
         literal: PRD0009
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_033_c3
       left:
         field: BookCode
       operator: ne
@@ -1109,7 +1109,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_034_c1
       left:
         field: AccountID
       operator: eq
@@ -1117,7 +1117,7 @@ rules:
         literal: '16000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_034_c2
       left:
         field: ProductID
       operator: eq
@@ -1125,7 +1125,7 @@ rules:
         literal: PRD0008
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_034_c3
       left:
         field: BookCode
       operator: ne
@@ -1151,7 +1151,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_035_c1
       left:
         field: AccountID
       operator: eq
@@ -1159,7 +1159,7 @@ rules:
         literal: '16000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_035_c2
       left:
         field: ProductID
       operator: eq
@@ -1167,7 +1167,7 @@ rules:
         literal: PRD0009
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_035_c3
       left:
         field: BookCode
       operator: eq
@@ -1193,7 +1193,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_036_c1
       left:
         field: AccountID
       operator: eq
@@ -1201,7 +1201,7 @@ rules:
         literal: '16000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_036_c2
       left:
         field: ProductID
       operator: eq
@@ -1209,7 +1209,7 @@ rules:
         literal: PRD0008
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_036_c3
       left:
         field: BookCode
       operator: eq
@@ -1235,7 +1235,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_037_c1
       left:
         field: AccountID
       operator: eq
@@ -1259,7 +1259,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_038_c1
       left:
         field: AccountID
       operator: eq
@@ -1283,7 +1283,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_039_c1
       left:
         field: AccountID
       operator: eq
@@ -1307,7 +1307,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_040_c1
       left:
         field: AccountID
       operator: eq
@@ -1331,7 +1331,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_041_c1
       left:
         field: AccountID
       operator: eq
@@ -1355,7 +1355,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_042_c1
       left:
         field: AccountID
       operator: eq
@@ -1379,7 +1379,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_043_c1
       left:
         field: AccountID
       operator: eq
@@ -1403,7 +1403,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_044_c1
       left:
         field: AccountID
       operator: eq
@@ -1411,7 +1411,7 @@ rules:
         literal: '16060'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_044_c2
       left:
         field: ProductID
       operator: eq
@@ -1436,7 +1436,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_045_c1
       left:
         field: AccountID
       operator: eq
@@ -1444,7 +1444,7 @@ rules:
         literal: '16060'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_045_c2
       left:
         field: ProductID
       operator: eq
@@ -1469,7 +1469,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_046_c1
       left:
         field: AccountID
       operator: in
@@ -1479,7 +1479,7 @@ rules:
         - '16075'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_046_c2
       left:
         field: ProductID
       operator: eq
@@ -1505,7 +1505,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_047_c1
       left:
         field: AccountID
       operator: eq
@@ -1513,7 +1513,7 @@ rules:
         literal: '16070'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_047_c2
       left:
         field: ProductID
       operator: eq
@@ -1538,7 +1538,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_048_c1
       left:
         field: AccountID
       operator: eq
@@ -1562,7 +1562,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_049_c1
       left:
         field: AccountID
       operator: eq
@@ -1586,7 +1586,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_050_c1
       left:
         field: AccountID
       operator: eq
@@ -1594,7 +1594,7 @@ rules:
         literal: '16100'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_050_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -1619,7 +1619,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_051_c1
       left:
         field: AccountID
       operator: eq
@@ -1627,7 +1627,7 @@ rules:
         literal: '16100'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_051_c2
       left:
         field: BankAccountID
       operator: starts_with
@@ -1652,7 +1652,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_052_c1
       left:
         field: AccountID
       operator: eq
@@ -1660,7 +1660,7 @@ rules:
         literal: '17000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_052_c2
       left:
         field: ProductID
       operator: eq
@@ -1685,7 +1685,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_053_c1
       left:
         field: AccountID
       operator: eq
@@ -1693,7 +1693,7 @@ rules:
         literal: '17000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_053_c2
       left:
         field: ProductID
       operator: eq
@@ -1718,7 +1718,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_054_c1
       left:
         field: AccountID
       operator: eq
@@ -1726,7 +1726,7 @@ rules:
         literal: '17000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_054_c2
       left:
         field: ProductID
       operator: eq
@@ -1751,7 +1751,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_055_c1
       left:
         field: AccountID
       operator: eq
@@ -1759,7 +1759,7 @@ rules:
         literal: '17000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_055_c2
       left:
         field: ProductID
       operator: eq
@@ -1784,7 +1784,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_056_c1
       left:
         field: AccountID
       operator: eq
@@ -1792,7 +1792,7 @@ rules:
         literal: '17000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_056_c2
       left:
         field: ProductID
       operator: eq
@@ -1817,7 +1817,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_057_c1
       left:
         field: AccountID
       operator: eq
@@ -1825,7 +1825,7 @@ rules:
         literal: '17000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_057_c2
       left:
         field: ProductID
       operator: eq
@@ -1850,7 +1850,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_058_c1
       left:
         field: AccountID
       operator: starts_with
@@ -1874,7 +1874,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_059_c1
       left:
         field: AccountID
       operator: eq
@@ -1898,7 +1898,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_060_c1
       left:
         field: AccountID
       operator: eq
@@ -1922,7 +1922,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_061_c1
       left:
         field: AccountID
       operator: eq
@@ -1946,7 +1946,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_062_c1
       left:
         field: AccountID
       operator: eq
@@ -1970,7 +1970,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_063_c1
       left:
         field: AccountID
       operator: eq
@@ -1994,7 +1994,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_064_c1
       left:
         field: AccountID
       operator: eq
@@ -2018,7 +2018,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_065_c1
       left:
         field: AccountID
       operator: eq
@@ -2042,7 +2042,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_066_c1
       left:
         field: AccountID
       operator: eq
@@ -2066,7 +2066,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_067_c1
       left:
         field: AccountID
       operator: eq
@@ -2090,7 +2090,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_068_c1
       left:
         field: AccountID
       operator: eq
@@ -2114,7 +2114,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_069_c1
       left:
         field: AccountID
       operator: eq
@@ -2138,7 +2138,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_070_c1
       left:
         field: AccountID
       operator: eq
@@ -2162,7 +2162,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_071_c1
       left:
         field: AccountID
       operator: eq
@@ -2186,7 +2186,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_072_c1
       left:
         field: AccountID
       operator: eq
@@ -2210,7 +2210,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_073_c1
       left:
         field: AccountID
       operator: eq
@@ -2234,7 +2234,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_074_c1
       left:
         field: AccountID
       operator: eq
@@ -2258,7 +2258,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_075_c1
       left:
         field: AccountID
       operator: eq
@@ -2282,7 +2282,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_076_c1
       left:
         field: AccountID
       operator: in
@@ -2313,7 +2313,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_077_c1
       left:
         field: AccountID
       operator: eq
@@ -2337,7 +2337,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_078_c1
       left:
         field: AccountID
       operator: eq
@@ -2361,7 +2361,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_079_c1
       left:
         field: AccountID
       operator: eq
@@ -2369,7 +2369,7 @@ rules:
         literal: '24020'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_079_c2
       left:
         field: ProductID
       operator: eq
@@ -2377,7 +2377,7 @@ rules:
         literal: PRD0037
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_079_c3
       left:
         field: BookCode
       operator: ne
@@ -2403,7 +2403,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_080_c1
       left:
         field: AccountID
       operator: eq
@@ -2411,7 +2411,7 @@ rules:
         literal: '24020'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_080_c2
       left:
         field: ProductID
       operator: eq
@@ -2419,7 +2419,7 @@ rules:
         literal: PRD0037
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_080_c3
       left:
         field: BookCode
       operator: eq
@@ -2445,7 +2445,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_081_c1
       left:
         field: AccountID
       operator: eq
@@ -2469,7 +2469,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_082_c1
       left:
         field: AccountID
       operator: eq
@@ -2493,7 +2493,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_083_c1
       left:
         field: AccountID
       operator: eq
@@ -2501,7 +2501,7 @@ rules:
         literal: '24000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_083_c2
       left:
         field: ProductID
       operator: eq
@@ -2526,7 +2526,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_084_c1
       left:
         field: AccountID
       operator: eq
@@ -2534,7 +2534,7 @@ rules:
         literal: '24000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_084_c2
       left:
         field: ProductID
       operator: eq
@@ -2559,7 +2559,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_085_c1
       left:
         field: AccountID
       operator: eq
@@ -2567,7 +2567,7 @@ rules:
         literal: '24000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_085_c2
       left:
         field: ProductID
       operator: eq
@@ -2592,7 +2592,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_086_c1
       left:
         field: AccountID
       operator: eq
@@ -2616,7 +2616,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_087_c1
       left:
         field: AccountID
       operator: eq
@@ -2640,7 +2640,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_088_c1
       left:
         field: AccountID
       operator: eq
@@ -2664,7 +2664,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_089_c1
       left:
         field: AccountID
       operator: eq
@@ -2688,7 +2688,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_090_c1
       left:
         field: AccountID
       operator: eq
@@ -2712,7 +2712,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_091_c1
       left:
         field: AccountID
       operator: eq
@@ -2736,7 +2736,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_092_c1
       left:
         field: AccountID
       operator: starts_with
@@ -2760,7 +2760,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_093_c1
       left:
         field: AccountID
       operator: eq
@@ -2784,7 +2784,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_094_c1
       left:
         field: AccountID
       operator: eq
@@ -2808,7 +2808,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_095_c1
       left:
         field: AccountID
       operator: eq
@@ -2832,7 +2832,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_096_c1
       left:
         field: AccountID
       operator: eq
@@ -2856,7 +2856,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_097_c1
       left:
         field: AccountID
       operator: eq
@@ -2864,7 +2864,7 @@ rules:
         literal: '20000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_097_c2
       left:
         field: ProductID
       operator: eq
@@ -2889,7 +2889,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_098_c1
       left:
         field: AccountID
       operator: eq
@@ -2897,7 +2897,7 @@ rules:
         literal: '20000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_098_c2
       left:
         field: ProductID
       operator: eq
@@ -2922,7 +2922,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_099_c1
       left:
         field: AccountID
       operator: eq
@@ -2930,7 +2930,7 @@ rules:
         literal: '20000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_099_c2
       left:
         field: ProductID
       operator: eq
@@ -2955,7 +2955,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_100_c1
       left:
         field: AccountID
       operator: eq
@@ -2963,7 +2963,7 @@ rules:
         literal: '20000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_100_c2
       left:
         field: ProductID
       operator: eq
@@ -2988,7 +2988,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_101_c1
       left:
         field: AccountID
       operator: eq
@@ -2996,7 +2996,7 @@ rules:
         literal: '20010'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_101_c2
       left:
         field: ProductID
       operator: eq
@@ -3004,7 +3004,7 @@ rules:
         literal: PRD0037
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_101_c3
       left:
         field: BookCode
       operator: ne
@@ -3030,7 +3030,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_102_c1
       left:
         field: AccountID
       operator: eq
@@ -3038,7 +3038,7 @@ rules:
         literal: '20010'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_102_c2
       left:
         field: ProductID
       operator: eq
@@ -3046,7 +3046,7 @@ rules:
         literal: PRD0037
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c3
+    - condition_id: gl_group_id_102_c3
       left:
         field: BookCode
       operator: eq
@@ -3072,7 +3072,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_103_c1
       left:
         field: AccountID
       operator: eq
@@ -3080,7 +3080,7 @@ rules:
         literal: '26000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_103_c2
       left:
         field: ProductID
       operator: eq
@@ -3105,7 +3105,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_104_c1
       left:
         field: AccountID
       operator: eq
@@ -3113,7 +3113,7 @@ rules:
         literal: '26000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_104_c2
       left:
         field: ProductID
       operator: eq
@@ -3138,7 +3138,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_105_c1
       left:
         field: AccountID
       operator: eq
@@ -3146,7 +3146,7 @@ rules:
         literal: '26000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_105_c2
       left:
         field: ProductID
       operator: eq
@@ -3171,7 +3171,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_106_c1
       left:
         field: AccountID
       operator: eq
@@ -3179,7 +3179,7 @@ rules:
         literal: '26000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_106_c2
       left:
         field: ProductID
       operator: eq
@@ -3204,7 +3204,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_107_c1
       left:
         field: AccountID
       operator: eq
@@ -3212,7 +3212,7 @@ rules:
         literal: '26000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_107_c2
       left:
         field: ProductID
       operator: eq
@@ -3237,7 +3237,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_108_c1
       left:
         field: AccountID
       operator: eq
@@ -3245,7 +3245,7 @@ rules:
         literal: '26000'
       null_input_mode: propagate
       null_result_mode: 'null'
-    - condition_id: c2
+    - condition_id: gl_group_id_108_c2
       left:
         field: ProductID
       operator: eq
@@ -3270,7 +3270,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_109_c1
       left:
         field: AccountID
       operator: eq
@@ -3294,7 +3294,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_110_c1
       left:
         field: AccountID
       operator: eq
@@ -3318,7 +3318,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_111_c1
       left:
         field: AccountID
       operator: eq
@@ -3342,7 +3342,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_112_c1
       left:
         field: AccountID
       operator: eq
@@ -3366,7 +3366,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_113_c1
       left:
         field: AccountID
       operator: eq
@@ -3390,7 +3390,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_114_c1
       left:
         field: AccountID
       operator: eq
@@ -3414,7 +3414,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_115_c1
       left:
         field: AccountID
       operator: eq
@@ -3438,7 +3438,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_116_c1
       left:
         field: AccountID
       operator: eq
@@ -3462,7 +3462,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_117_c1
       left:
         field: AccountID
       operator: eq
@@ -3486,7 +3486,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_118_c1
       left:
         field: AccountID
       operator: eq
@@ -3510,7 +3510,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_119_c1
       left:
         field: AccountID
       operator: eq
@@ -3534,7 +3534,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_120_c1
       left:
         field: AccountID
       operator: eq
@@ -3558,7 +3558,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_121_c1
       left:
         field: AccountID
       operator: eq
@@ -3582,7 +3582,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_122_c1
       left:
         field: AccountID
       operator: eq
@@ -3606,7 +3606,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_123_c1
       left:
         field: AccountID
       operator: eq
@@ -3630,7 +3630,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_124_c1
       left:
         field: AccountID
       operator: eq
@@ -3654,7 +3654,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_125_c1
       left:
         field: AccountID
       operator: eq
@@ -3678,7 +3678,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_126_c1
       left:
         field: AccountID
       operator: eq
@@ -3702,7 +3702,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_127_c1
       left:
         field: AccountID
       operator: eq
@@ -3726,7 +3726,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_128_c1
       left:
         field: AccountID
       operator: eq
@@ -3750,7 +3750,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_129_c1
       left:
         field: AccountID
       operator: eq
@@ -3774,7 +3774,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_130_c1
       left:
         field: AccountID
       operator: eq
@@ -3798,7 +3798,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_131_c1
       left:
         field: AccountID
       operator: eq
@@ -3822,7 +3822,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_132_c1
       left:
         field: AccountID
       operator: eq
@@ -3846,7 +3846,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_133_c1
       left:
         field: AccountID
       operator: eq
@@ -3870,7 +3870,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_134_c1
       left:
         field: AccountID
       operator: eq
@@ -3894,7 +3894,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_135_c1
       left:
         field: AccountID
       operator: eq
@@ -3918,7 +3918,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_136_c1
       left:
         field: AccountID
       operator: eq
@@ -3942,7 +3942,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_137_c1
       left:
         field: AccountID
       operator: eq
@@ -3966,7 +3966,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_138_c1
       left:
         field: AccountID
       operator: eq
@@ -3990,7 +3990,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_139_c1
       left:
         field: AccountID
       operator: eq
@@ -4014,7 +4014,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_140_c1
       left:
         field: AccountID
       operator: eq
@@ -4038,7 +4038,7 @@ rules:
   stop_on_match: true
   when:
     all:
-    - condition_id: c1
+    - condition_id: gl_group_id_141_c1
       left:
         literal: true
       operator: eq
