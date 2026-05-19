@@ -1,0 +1,2280 @@
+ruleset_id: leaf_key_ruleset
+ruleset_name: Leaf Key Mapping
+version: '1'
+status: published
+owner: Rules Team
+owner_department: ALM Engineering
+description: Canonical YAML translation of leaf_key mapping from gl_group_id and AccountType.
+rules:
+- rule_id: leaf_key_001
+  rule_name: Leaf key 10105 for CashAndDueFromBanks-FRB_KC
+  rule_order: 1
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_001_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: CashAndDueFromBanks-FRB_KC
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10105'
+- rule_id: leaf_key_002
+  rule_name: Leaf key 10110 for CashAndDueFromBanks-JPMC
+  rule_order: 2
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_002_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: CashAndDueFromBanks-JPMC
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10110'
+- rule_id: leaf_key_003
+  rule_name: Leaf key 10115 for CashAndDueFromBanks-ADP_Outsource_Bank
+  rule_order: 3
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_003_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: CashAndDueFromBanks-ADP_Outsource_Bank
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10115'
+- rule_id: leaf_key_004
+  rule_name: Leaf key 10120 for CashAndDueFromBanks-CoreFirst
+  rule_order: 4
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_004_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: CashAndDueFromBanks-CoreFirst
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10120'
+- rule_id: leaf_key_005
+  rule_name: Leaf key 10125 for CashAndDueFromBanks-Other
+  rule_order: 5
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_005_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: CashAndDueFromBanks-Other
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10125'
+- rule_id: leaf_key_006
+  rule_name: Leaf key 10210 for IBDDA-BANA
+  rule_order: 6
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_006_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-BANA
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10210'
+- rule_id: leaf_key_007
+  rule_name: Leaf key 10215 for IBDDA-CINY
+  rule_order: 7
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_007_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-CINY
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10215'
+- rule_id: leaf_key_008
+  rule_name: Leaf key 10220 for IBDDA-GOLD
+  rule_order: 8
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_008_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-GOLD
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10220'
+- rule_id: leaf_key_009
+  rule_name: Leaf key 10225 for IBDDA-JPMC
+  rule_order: 9
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_009_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-JPMC
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10225'
+- rule_id: leaf_key_010
+  rule_name: Leaf key 10230 for IBDDA-WFBK
+  rule_order: 10
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_010_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-WFBK
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10230'
+- rule_id: leaf_key_011
+  rule_name: Leaf key 10235 for IBDDA-CoreFirst
+  rule_order: 11
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_011_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-CoreFirst
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10235'
+- rule_id: leaf_key_012
+  rule_name: Leaf key 10240 for IBDDA-Other
+  rule_order: 12
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_012_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-Other
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10240'
+- rule_id: leaf_key_013
+  rule_name: Leaf key 10255 for IBDDA-DerivativeCashCollateral-Cleared
+  rule_order: 13
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_013_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-DerivativeCashCollateral-Cleared
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10255'
+- rule_id: leaf_key_014
+  rule_name: Leaf key 10260 for IBDDA-DerivativeCashCollateral-Uncleared
+  rule_order: 14
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_014_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-DerivativeCashCollateral-Uncleared
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10260'
+- rule_id: leaf_key_015
+  rule_name: Leaf key 10265 for IBDDA-DerivativeCashCollateral-Cleared-Contra
+  rule_order: 15
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_015_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-DerivativeCashCollateral-Cleared-Contra
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10265'
+- rule_id: leaf_key_016
+  rule_name: Leaf key 10270 for IBDDA-DerivativeCashCollateral-Uncleared-Contra
+  rule_order: 16
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_016_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-DerivativeCashCollateral-Uncleared-Contra
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10270'
+- rule_id: leaf_key_017
+  rule_name: Leaf key 10295 for IBDDA-Interbank
+  rule_order: 17
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_017_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IBDDA-Interbank
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10295'
+- rule_id: leaf_key_018
+  rule_name: Leaf key 10305 for ReverseRepurchaseAgreement
+  rule_order: 18
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_018_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: ReverseRepurchaseAgreement
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10305'
+- rule_id: leaf_key_019
+  rule_name: Leaf key 10355 for FederalFundsSold
+  rule_order: 19
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_019_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: FederalFundsSold
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10355'
+- rule_id: leaf_key_020
+  rule_name: Leaf key 10410 for TradingSecurities
+  rule_order: 20
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_020_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: TradingSecurities
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10410'
+- rule_id: leaf_key_021
+  rule_name: Leaf key 10420 for AvailableForSaleSecurities
+  rule_order: 21
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_021_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: AvailableForSaleSecurities
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10420'
+- rule_id: leaf_key_022
+  rule_name: Leaf key 10425 for AvailableForSaleSecurities-FvAdjustment
+  rule_order: 22
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_022_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: AvailableForSaleSecurities-FvAdjustment
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10425'
+- rule_id: leaf_key_023
+  rule_name: Leaf key 10435 for HeldToMaturitySecurities
+  rule_order: 23
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_023_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: HeldToMaturitySecurities
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10435'
+- rule_id: leaf_key_024
+  rule_name: Leaf key 10510 for TermAdvances
+  rule_order: 24
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_024_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: TermAdvances
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10510'
+- rule_id: leaf_key_025
+  rule_name: Leaf key 10515 for TermAdvances-FvAdjustment
+  rule_order: 25
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_025_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: TermAdvances-FvAdjustment
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10515'
+- rule_id: leaf_key_026
+  rule_name: Leaf key 10525 for OvernightAdvances
+  rule_order: 26
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_026_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OvernightAdvances
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10525'
+- rule_id: leaf_key_027
+  rule_name: Leaf key 10570 for ConventionalMpfLoans
+  rule_order: 27
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_027_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: ConventionalMpfLoans
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10570'
+- rule_id: leaf_key_028
+  rule_name: Leaf key 10575 for GovernmentMpfLoans
+  rule_order: 28
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_028_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: GovernmentMpfLoans
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10575'
+- rule_id: leaf_key_029
+  rule_name: Leaf key 10580 for ConventionalMpfLoans-FvAdjustment
+  rule_order: 29
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_029_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: ConventionalMpfLoans-FvAdjustment
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10580'
+- rule_id: leaf_key_030
+  rule_name: Leaf key 10585 for GovernmentMpfLoans-FvAdjustment
+  rule_order: 30
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_030_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: GovernmentMpfLoans-FvAdjustment
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10585'
+- rule_id: leaf_key_031
+  rule_name: Leaf key 10595 for OtherAssets-REO
+  rule_order: 31
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_031_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-REO
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10595'
+- rule_id: leaf_key_032
+  rule_name: Leaf key 10599 for MpfLoans-LLR
+  rule_order: 32
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_032_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: MpfLoans-LLR
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10599'
+- rule_id: leaf_key_033
+  rule_name: Leaf key 10605 for OvernightLoans-Interbank
+  rule_order: 33
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_033_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OvernightLoans-Interbank
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: leaf_key_033_c2
+      left:
+        field: AccountType
+      operator: eq
+      right:
+        literal: Asset
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10605'
+- rule_id: leaf_key_034
+  rule_name: Leaf key 10660 for IntRec-Derivatives
+  rule_order: 34
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_034_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-Derivatives
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10660'
+- rule_id: leaf_key_035
+  rule_name: Leaf key 10665 for IntRec-Derivatives-Contra
+  rule_order: 35
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_035_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-Derivatives-Contra
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10665'
+- rule_id: leaf_key_036
+  rule_name: Leaf key 10675 for IntRec-DerivativeCashCollateral-Cleared
+  rule_order: 36
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_036_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-DerivativeCashCollateral-Cleared
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10675'
+- rule_id: leaf_key_037
+  rule_name: Leaf key 10680 for IntRec-DerivativeCashCollateral-Uncleared
+  rule_order: 37
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_037_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-DerivativeCashCollateral-Uncleared
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10680'
+- rule_id: leaf_key_038
+  rule_name: Leaf key 10685 for IntRec-DerivativeCashCollateral-Cleared-Contra
+  rule_order: 38
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_038_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-DerivativeCashCollateral-Cleared-Contra
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10685'
+- rule_id: leaf_key_039
+  rule_name: Leaf key 10690 for IntRec-DerivativeCashCollateral-Uncleared-Contra
+  rule_order: 39
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_039_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-DerivativeCashCollateral-Uncleared-Contra
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10690'
+- rule_id: leaf_key_040
+  rule_name: Leaf key 10705 for IntRec-AvailableForSaleSecurities
+  rule_order: 40
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_040_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-AvailableForSaleSecurities
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10705'
+- rule_id: leaf_key_041
+  rule_name: Leaf key 10710 for IntRec-ConventionalMpfLoans
+  rule_order: 41
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_041_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-ConventionalMpfLoans
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10710'
+- rule_id: leaf_key_042
+  rule_name: Leaf key 10715 for IntRec-FederalFundsSold
+  rule_order: 42
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_042_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-FederalFundsSold
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10715'
+- rule_id: leaf_key_043
+  rule_name: Leaf key 10720 for IntRec-GovernmentMpfLoans
+  rule_order: 43
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_043_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-GovernmentMpfLoans
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10720'
+- rule_id: leaf_key_044
+  rule_name: Leaf key 10725 for IntRec-HeldToMaturitySecurities
+  rule_order: 44
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_044_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-HeldToMaturitySecurities
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10725'
+- rule_id: leaf_key_045
+  rule_name: Leaf key 10730 for IntRec-IBDDA-CINY
+  rule_order: 45
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_045_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-IBDDA-CINY
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10730'
+- rule_id: leaf_key_046
+  rule_name: Leaf key 10735 for IntRec-IBDDA-Interbank
+  rule_order: 46
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_046_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-IBDDA-Interbank
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10735'
+- rule_id: leaf_key_047
+  rule_name: Leaf key 10740 for IntRec-IBDDA-JPMC
+  rule_order: 47
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_047_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-IBDDA-JPMC
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10740'
+- rule_id: leaf_key_048
+  rule_name: Leaf key 10745 for IntRec-OtherAssets-IndustrialRevenueBond
+  rule_order: 48
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_048_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-OtherAssets-IndustrialRevenueBond
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10745'
+- rule_id: leaf_key_049
+  rule_name: Leaf key 10750 for IntRec-OvernightAdvances
+  rule_order: 49
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_049_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-OvernightAdvances
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10750'
+- rule_id: leaf_key_050
+  rule_name: Leaf key 10755 for IntRec-ReverseRepurchaseAgreement
+  rule_order: 50
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_050_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-ReverseRepurchaseAgreement
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10755'
+- rule_id: leaf_key_051
+  rule_name: Leaf key 10760 for IntRec-TermAdvances
+  rule_order: 51
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_051_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-TermAdvances
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10760'
+- rule_id: leaf_key_052
+  rule_name: Leaf key 10765 for IntRec-TradingSecurities
+  rule_order: 52
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_052_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntRec-TradingSecurities
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10765'
+- rule_id: leaf_key_053
+  rule_name: Leaf key 10805 for DerivativeAssets-AccruedInterest
+  rule_order: 53
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_053_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeAssets-AccruedInterest
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10805'
+- rule_id: leaf_key_054
+  rule_name: Leaf key 10810 for DerivativeAssets-CleanFairValue
+  rule_order: 54
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_054_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeAssets-CleanFairValue
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10810'
+- rule_id: leaf_key_055
+  rule_name: Leaf key 10815 for DerivativeAssets-Collateral
+  rule_order: 55
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_055_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeAssets-Collateral
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10815'
+- rule_id: leaf_key_056
+  rule_name: Leaf key 10820 for DerivativeAssets-Contra
+  rule_order: 56
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_056_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeAssets-Contra
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10820'
+- rule_id: leaf_key_057
+  rule_name: Leaf key 10825 for DerivativeAssets-MpfCommitments
+  rule_order: 57
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_057_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeAssets-MpfCommitments
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10825'
+- rule_id: leaf_key_058
+  rule_name: Leaf key 10830 for DerivativeAssets-VariationMargin
+  rule_order: 58
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_058_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeAssets-VariationMargin
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10830'
+- rule_id: leaf_key_059
+  rule_name: Leaf key 10905 for OtherAssets-AhpRepaymentAgreementReceivable
+  rule_order: 59
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_059_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-AhpRepaymentAgreementReceivable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10905'
+- rule_id: leaf_key_060
+  rule_name: Leaf key 10910 for OtherAssets-DebtClearingWires
+  rule_order: 60
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_060_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-DebtClearingWires
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10910'
+- rule_id: leaf_key_061
+  rule_name: Leaf key 10915 for OtherAssets-DownPayments
+  rule_order: 61
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_061_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-DownPayments
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10915'
+- rule_id: leaf_key_062
+  rule_name: Leaf key 10920 for OtherAssets-FeesPaidOnDerivatives
+  rule_order: 62
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_062_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-FeesPaidOnDerivatives
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10920'
+- rule_id: leaf_key_063
+  rule_name: Leaf key 10925 for OtherAssets-FHLBankSharedExpenseReceivables
+  rule_order: 63
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_063_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-FHLBankSharedExpenseReceivables
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10925'
+- rule_id: leaf_key_064
+  rule_name: Leaf key 10930 for OtherAssets-IndustrialRevenueBonds
+  rule_order: 64
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_064_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-IndustrialRevenueBonds
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10930'
+- rule_id: leaf_key_065
+  rule_name: Leaf key 10935 for OtherAssets-InvestmentCashAndSafekeepingWires
+  rule_order: 65
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_065_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-InvestmentCashAndSafekeepingWires
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10935'
+- rule_id: leaf_key_066
+  rule_name: Leaf key 10940 for OtherAssets-InvestmentPrincipalReceivable
+  rule_order: 66
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_066_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-InvestmentPrincipalReceivable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10940'
+- rule_id: leaf_key_067
+  rule_name: Leaf key 10945 for OtherAssets-InvestmentReceivableItems
+  rule_order: 67
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_067_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-InvestmentReceivableItems
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10945'
+- rule_id: leaf_key_068
+  rule_name: Leaf key 10950 for OtherAssets-LettersOfCreditFeesReceivable
+  rule_order: 68
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_068_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-LettersOfCreditFeesReceivable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10950'
+- rule_id: leaf_key_069
+  rule_name: Leaf key 10955 for OtherAssets-OtherDeposits
+  rule_order: 69
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_069_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-OtherDeposits
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10955'
+- rule_id: leaf_key_070
+  rule_name: Leaf key 10960 for OtherAssets-OtherReceivables
+  rule_order: 70
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_070_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-OtherReceivables
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10960'
+- rule_id: leaf_key_071
+  rule_name: Leaf key 10965 for OtherAssets-PremisesAndEquipment
+  rule_order: 71
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_071_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-PremisesAndEquipment
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10965'
+- rule_id: leaf_key_072
+  rule_name: Leaf key 10970 for OtherAssets-PrepaidExpenses-AccountsPayable
+  rule_order: 72
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_072_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-PrepaidExpenses-AccountsPayable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10970'
+- rule_id: leaf_key_073
+  rule_name: Leaf key 10975 for OtherAssets-PrepaidExpenses-EmployeeBenefits
+  rule_order: 73
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_073_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-PrepaidExpenses-EmployeeBenefits
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10975'
+- rule_id: leaf_key_074
+  rule_name: Leaf key 10980 for OtherAssets-RetirementAnnuityAsset
+  rule_order: 74
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_074_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-RetirementAnnuityAsset
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10980'
+- rule_id: leaf_key_075
+  rule_name: Leaf key 10985 for OtherAssets-RightOfUseAssets
+  rule_order: 75
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_075_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-RightOfUseAssets
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10985'
+- rule_id: leaf_key_076
+  rule_name: Leaf key 10990 for OtherAssets-SbpaCommitmentFeesReceivable
+  rule_order: 76
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_076_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-SbpaCommitmentFeesReceivable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10990'
+- rule_id: leaf_key_077
+  rule_name: Leaf key 10995 for OtherAssets-ServiceFeesReceivable
+  rule_order: 77
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_077_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherAssets-ServiceFeesReceivable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '10995'
+- rule_id: leaf_key_078
+  rule_name: Leaf key 20065 for DemandMemberDeposits
+  rule_order: 78
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_078_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DemandMemberDeposits
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20065'
+- rule_id: leaf_key_079
+  rule_name: Leaf key 20070 for OvernightMemberDeposits
+  rule_order: 79
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_079_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OvernightMemberDeposits
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20070'
+- rule_id: leaf_key_080
+  rule_name: Leaf key 20080 for DerivativeCashCollateral-Uncleared
+  rule_order: 80
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_080_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeCashCollateral-Uncleared
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20080'
+- rule_id: leaf_key_081
+  rule_name: Leaf key 20085 for DerivativeCashCollateral-Uncleared-Contra
+  rule_order: 81
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_081_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeCashCollateral-Uncleared-Contra
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20085'
+- rule_id: leaf_key_082
+  rule_name: Leaf key 20095 for TermMemberDeposits
+  rule_order: 82
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_082_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: TermMemberDeposits
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20095'
+- rule_id: leaf_key_083
+  rule_name: Leaf key 20099 for OtherDeposits-MRAA
+  rule_order: 83
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_083_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherDeposits-MRAA
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20099'
+- rule_id: leaf_key_084
+  rule_name: Leaf key 20110 for OvernightLoans-Interbank
+  rule_order: 84
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_084_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OvernightLoans-Interbank
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: leaf_key_084_c2
+      left:
+        field: AccountType
+      operator: eq
+      right:
+        literal: Liability
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20110'
+- rule_id: leaf_key_085
+  rule_name: Leaf key 20120 for RepurchaseAgreement
+  rule_order: 85
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_085_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: RepurchaseAgreement
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20120'
+- rule_id: leaf_key_086
+  rule_name: Leaf key 20130 for OvernightLoansFromCommercialBanks
+  rule_order: 86
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_086_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OvernightLoansFromCommercialBanks
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20130'
+- rule_id: leaf_key_087
+  rule_name: Leaf key 20210 for ConsolidatedObligationBonds
+  rule_order: 87
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_087_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: ConsolidatedObligationBonds
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20210'
+- rule_id: leaf_key_088
+  rule_name: Leaf key 20215 for ConsolidatedObligationBonds-FvAdjustment
+  rule_order: 88
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_088_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: ConsolidatedObligationBonds-FvAdjustment
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20215'
+- rule_id: leaf_key_089
+  rule_name: Leaf key 20225 for ConsolidatedObligationDiscountNotes
+  rule_order: 89
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_089_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: ConsolidatedObligationDiscountNotes
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20225'
+- rule_id: leaf_key_090
+  rule_name: Leaf key 20230 for ConsolidatedObligationDiscountNotes-FvAdjustment
+  rule_order: 90
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_090_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: ConsolidatedObligationDiscountNotes-FvAdjustment
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20230'
+- rule_id: leaf_key_091
+  rule_name: Leaf key 20255 for ManditorilyRedeemableCapitalStock
+  rule_order: 91
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_091_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: ManditorilyRedeemableCapitalStock
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20255'
+- rule_id: leaf_key_092
+  rule_name: Leaf key 20310 for IntPay-Derivatives
+  rule_order: 92
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_092_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-Derivatives
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20310'
+- rule_id: leaf_key_093
+  rule_name: Leaf key 20315 for IntPay-Derivatives-Contra
+  rule_order: 93
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_093_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-Derivatives-Contra
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20315'
+- rule_id: leaf_key_094
+  rule_name: Leaf key 20325 for IntPay-DerivativeCashCollateral-Uncleared
+  rule_order: 94
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_094_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-DerivativeCashCollateral-Uncleared
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20325'
+- rule_id: leaf_key_095
+  rule_name: Leaf key 20330 for IntPay-DerivativeCashCollateral-Uncleared-Contra
+  rule_order: 95
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_095_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-DerivativeCashCollateral-Uncleared-Contra
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20330'
+- rule_id: leaf_key_096
+  rule_name: Leaf key 20405 for IntPay-Bonds
+  rule_order: 96
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_096_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-Bonds
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20405'
+- rule_id: leaf_key_097
+  rule_name: Leaf key 20410 for IntPay-DemandMemberDeposits
+  rule_order: 97
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_097_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-DemandMemberDeposits
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20410'
+- rule_id: leaf_key_098
+  rule_name: Leaf key 20415 for IntPay-IBDDA-Interbank
+  rule_order: 98
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_098_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-IBDDA-Interbank
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20415'
+- rule_id: leaf_key_099
+  rule_name: Leaf key 20420 for IntPay-MandatorilyRedeemableCapitalStock
+  rule_order: 99
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_099_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-MandatorilyRedeemableCapitalStock
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20420'
+- rule_id: leaf_key_100
+  rule_name: Leaf key 20425 for IntPay-OvernightLoansFromCommercialBanks
+  rule_order: 100
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_100_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-OvernightLoansFromCommercialBanks
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20425'
+- rule_id: leaf_key_101
+  rule_name: Leaf key 20430 for IntPay-OvernightMemberDeposits
+  rule_order: 101
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_101_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-OvernightMemberDeposits
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20430'
+- rule_id: leaf_key_102
+  rule_name: Leaf key 20435 for IntPay-RepurchaseAgreement
+  rule_order: 102
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_102_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-RepurchaseAgreement
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20435'
+- rule_id: leaf_key_103
+  rule_name: Leaf key 20440 for IntPay-ShawneeCountyLease
+  rule_order: 103
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_103_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-ShawneeCountyLease
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20440'
+- rule_id: leaf_key_104
+  rule_name: Leaf key 20445 for IntPay-TermMemberDeposits
+  rule_order: 104
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_104_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: IntPay-TermMemberDeposits
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20445'
+- rule_id: leaf_key_105
+  rule_name: Leaf key 20496 for AffordableHousingProgram
+  rule_order: 105
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_105_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: AffordableHousingProgram
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20496'
+- rule_id: leaf_key_106
+  rule_name: Leaf key 20505 for DerivativeLiabilities-AccruedInterest
+  rule_order: 106
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_106_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeLiabilities-AccruedInterest
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20505'
+- rule_id: leaf_key_107
+  rule_name: Leaf key 20510 for DerivativeLiabilities-CleanFairValue
+  rule_order: 107
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_107_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeLiabilities-CleanFairValue
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20510'
+- rule_id: leaf_key_108
+  rule_name: Leaf key 20515 for DerivativeLiabilities-Collateral
+  rule_order: 108
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_108_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeLiabilities-Collateral
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20515'
+- rule_id: leaf_key_109
+  rule_name: Leaf key 20520 for DerivativeLiabilities-Contra
+  rule_order: 109
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_109_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeLiabilities-Contra
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20520'
+- rule_id: leaf_key_110
+  rule_name: Leaf key 20525 for DerivativeLiabilities-MpfCommitments
+  rule_order: 110
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_110_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeLiabilities-MpfCommitments
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20525'
+- rule_id: leaf_key_111
+  rule_name: Leaf key 20530 for DerivativeLiabilities-VariationMargin
+  rule_order: 111
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_111_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: DerivativeLiabilities-VariationMargin
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20530'
+- rule_id: leaf_key_112
+  rule_name: Leaf key 20905 for OtherLiabilities-AccruedCompensation
+  rule_order: 112
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_112_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-AccruedCompensation
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20905'
+- rule_id: leaf_key_113
+  rule_name: Leaf key 20910 for OtherLiabilities-AccruedExpenses
+  rule_order: 113
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_113_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-AccruedExpenses
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20910'
+- rule_id: leaf_key_114
+  rule_name: Leaf key 20915 for OtherLiabilities-AccruedPayable-RecNotInvoiced
+  rule_order: 114
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_114_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-AccruedPayable-RecNotInvoiced
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20915'
+- rule_id: leaf_key_115
+  rule_name: Leaf key 20920 for OtherLiabilities-AccruedPayroll
+  rule_order: 115
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_115_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-AccruedPayroll
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20920'
+- rule_id: leaf_key_116
+  rule_name: Leaf key 20925 for OtherLiabilities-AhpRepaymentAgreementPayable
+  rule_order: 116
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_116_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-AhpRepaymentAgreementPayable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20925'
+- rule_id: leaf_key_117
+  rule_name: Leaf key 20930 for OtherLiabilities-CreditCardsPayable
+  rule_order: 117
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_117_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-CreditCardsPayable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20930'
+- rule_id: leaf_key_118
+  rule_name: Leaf key 20935 for OtherLiabilities-DeferredSbpaCommitmentFees
+  rule_order: 118
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_118_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-DeferredSbpaCommitmentFees
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20935'
+- rule_id: leaf_key_119
+  rule_name: Leaf key 20940 for OtherLiabilities-DefinedBenefitPlan-BEP
+  rule_order: 119
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_119_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-DefinedBenefitPlan-BEP
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20940'
+- rule_id: leaf_key_120
+  rule_name: Leaf key 20945 for OtherLiabilities-DefinedContributionPlan-BEP
+  rule_order: 120
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_120_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-DefinedContributionPlan-BEP
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20945'
+- rule_id: leaf_key_121
+  rule_name: Leaf key 20950 for OtherLiabilities-DividendsPayable
+  rule_order: 121
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_121_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-DividendsPayable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20950'
+- rule_id: leaf_key_122
+  rule_name: Leaf key 20955 for OtherLiabilities-DueToPfis
+  rule_order: 122
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_122_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-DueToPfis
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20955'
+- rule_id: leaf_key_123
+  rule_name: Leaf key 20960 for OtherLiabilities-EmployeeExpensePayable
+  rule_order: 123
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_123_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-EmployeeExpensePayable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20960'
+- rule_id: leaf_key_124
+  rule_name: Leaf key 20965 for OtherLiabilities-FeesRecOnDerivatives
+  rule_order: 124
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_124_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-FeesRecOnDerivatives
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20965'
+- rule_id: leaf_key_125
+  rule_name: Leaf key 20970 for OtherLiabilities-InvestmentPayableItems
+  rule_order: 125
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_125_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-InvestmentPayableItems
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20970'
+- rule_id: leaf_key_126
+  rule_name: Leaf key 20975 for OtherLiabilities-LeaseLiability
+  rule_order: 126
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_126_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-LeaseLiability
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20975'
+- rule_id: leaf_key_127
+  rule_name: Leaf key 20980 for OtherLiabilities-LettersOfCreditFvAdjustment
+  rule_order: 127
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_127_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-LettersOfCreditFvAdjustment
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20980'
+- rule_id: leaf_key_128
+  rule_name: Leaf key 20985 for OtherLiabilities-MiscPayable
+  rule_order: 128
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_128_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-MiscPayable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20985'
+- rule_id: leaf_key_129
+  rule_name: Leaf key 20990 for OtherLiabilities-OpenDeliveryCommitments
+  rule_order: 129
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_129_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-OpenDeliveryCommitments
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20990'
+- rule_id: leaf_key_130
+  rule_name: Leaf key 20995 for OtherLiabilities-OpenDeliveryCommitments-Contra
+  rule_order: 130
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_130_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-OpenDeliveryCommitments-Contra
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '20995'
+- rule_id: leaf_key_131
+  rule_name: Leaf key 21000 for OtherLiabilities-OtherLiabilities
+  rule_order: 131
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_131_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-OtherLiabilities
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '21000'
+- rule_id: leaf_key_132
+  rule_name: Leaf key 21005 for OtherLiabilities-PayrollTaxLiabilities
+  rule_order: 132
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_132_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-PayrollTaxLiabilities
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '21005'
+- rule_id: leaf_key_133
+  rule_name: Leaf key 21010 for OtherLiabilities-PayrollWitholdingLiabilities
+  rule_order: 133
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_133_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-PayrollWitholdingLiabilities
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '21010'
+- rule_id: leaf_key_134
+  rule_name: Leaf key 21015 for OtherLiabilities-ReoClearing
+  rule_order: 134
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_134_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-ReoClearing
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '21015'
+- rule_id: leaf_key_135
+  rule_name: Leaf key 21020 for OtherLiabilities-RetirementAnnuityLiability
+  rule_order: 135
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_135_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-RetirementAnnuityLiability
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '21020'
+- rule_id: leaf_key_136
+  rule_name: Leaf key 21025 for OtherLiabilities-ShawneeCountyLease
+  rule_order: 136
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_136_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-ShawneeCountyLease
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '21025'
+- rule_id: leaf_key_137
+  rule_name: Leaf key 21030 for OtherLiabilities-SupplierPayable
+  rule_order: 137
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_137_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-SupplierPayable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '21030'
+- rule_id: leaf_key_138
+  rule_name: Leaf key 21035 for OtherLiabilities-TnsInvestments-AfsSecurities
+  rule_order: 138
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_138_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-TnsInvestments-AfsSecurities
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '21035'
+- rule_id: leaf_key_139
+  rule_name: Leaf key 21040 for OtherLiabilities-UnearnedLettersOfCreditFees
+  rule_order: 139
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_139_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-UnearnedLettersOfCreditFees
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '21040'
+- rule_id: leaf_key_140
+  rule_name: Leaf key 21045 for OtherLiabilities-VoluntaryHousingProgramContPayable
+  rule_order: 140
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_140_c1
+      left:
+        field: gl_group_id
+      operator: eq
+      right:
+        literal: OtherLiabilities-VoluntaryHousingProgramContPayable
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: '21045'
+- rule_id: leaf_key_141
+  rule_name: Leaf key Other fallback
+  rule_order: 141
+  stop_on_match: true
+  when:
+    all:
+    - condition_id: leaf_key_141_c1
+      left:
+        literal: true
+      operator: eq
+      right:
+        literal: true
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: Other
