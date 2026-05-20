@@ -1,0 +1,417 @@
+ruleset_id: domain_leaf_key_ruleset
+ruleset_name: Domain Leaf Key Mapping
+version: '1'
+status: published
+owner: Rules Team
+owner_department: ALM Engineering
+description: Canonical YAML translation of domain-based leaf_key mapping.
+rules:
+- rule_id: domain_leaf_key_001
+  rule_name: Cash and Money-Market Assets
+  rule_order: 1
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_001_g1
+    all:
+    - condition_id: domain_leaf_key_001_c1
+      left:
+        field: Domain
+      operator: eq
+      right:
+        literal: INV
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_group_id: domain_leaf_key_001_g2
+      any:
+      - condition_id: domain_leaf_key_001_c2
+        left:
+          field: CustID
+        operator: starts_with
+        right:
+          literal: INV-P
+        null_input_mode: propagate
+        null_result_mode: 'null'
+      - condition_id: domain_leaf_key_001_c3
+        left:
+          field: Account
+        operator: eq
+        right:
+          literal: STFA-IBDDA
+        null_input_mode: propagate
+        null_result_mode: 'null'
+      - condition_id: domain_leaf_key_001_c4
+        left:
+          field: CustID
+        operator: starts_with
+        right:
+          literal: INV-FSO
+        null_input_mode: propagate
+        null_result_mode: 'null'
+  assign:
+    leaf_key: Cash and Money-Market Assets
+- rule_id: domain_leaf_key_002
+  rule_name: FHLB Advances standalone value
+  rule_order: 2
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_002_g1
+    all:
+    - condition_id: domain_leaf_key_002_c1
+      left:
+        field: Domain
+      operator: in
+      right:
+        literal:
+        - ADV
+        - LOC
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: FHLB Advances - standalone value
+- rule_id: domain_leaf_key_003
+  rule_name: Non-Mortgage Investment Securities
+  rule_order: 3
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_003_g1
+    all:
+    - condition_id: domain_leaf_key_003_c1
+      left:
+        field: Domain
+      operator: eq
+      right:
+        literal: INV
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_003_c2
+      left:
+        field: Account
+      operator: in
+      right:
+        literal:
+        - ASWAP_BONDS
+        - LTFA
+        - NSVA
+        - MUNI
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_003_c3
+      left:
+        field: InstrumentType
+      operator: not_like
+      right:
+        literal: MBS%
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_003_c4
+      left:
+        field: InstrumentType
+      operator: not_like
+      right:
+        literal: CMO%
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: Non-Mortgage Investment Securities
+- rule_id: domain_leaf_key_004
+  rule_name: Whole-loan Mortgages
+  rule_order: 4
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_004_g1
+    all:
+    - condition_id: domain_leaf_key_004_c1
+      left:
+        field: Domain
+      operator: in
+      right:
+        literal:
+        - MPFPOOL
+        - MPFDC
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: Whole-loan Mortgages
+- rule_id: domain_leaf_key_005
+  rule_name: Mortgage Securities standalone value
+  rule_order: 5
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_005_g1
+    all:
+    - condition_id: domain_leaf_key_005_c1
+      left:
+        field: Domain
+      operator: eq
+      right:
+        literal: INV
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_group_id: domain_leaf_key_005_g2
+      any:
+      - condition_id: domain_leaf_key_005_c2
+        left:
+          field: InstrumentType
+        operator: starts_with
+        right:
+          literal: MBS
+        null_input_mode: propagate
+        null_result_mode: 'null'
+      - condition_id: domain_leaf_key_005_c3
+        left:
+          field: InstrumentType
+        operator: starts_with
+        right:
+          literal: CMO
+        null_input_mode: propagate
+        null_result_mode: 'null'
+  assign:
+    leaf_key: Mortgage Securities - standalone value
+- rule_id: domain_leaf_key_006
+  rule_name: Other Assets
+  rule_order: 6
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_006_g1
+    all:
+    - condition_id: domain_leaf_key_006_c1
+      left:
+        field: Domain
+      operator: eq
+      right:
+        literal: GL
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_006_c2
+      left:
+        field: LedgerAccountType
+      operator: eq
+      right:
+        literal: Asset
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: Other Assets
+- rule_id: domain_leaf_key_007
+  rule_name: Deposits and Borrowings
+  rule_order: 7
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_007_g1
+    any:
+    - condition_id: domain_leaf_key_007_c1
+      left:
+        field: Domain
+      operator: eq
+      right:
+        literal: MD
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_group_id: domain_leaf_key_007_g2
+      all:
+      - condition_id: domain_leaf_key_007_c2
+        left:
+          field: Domain
+        operator: eq
+        right:
+          literal: GL
+        null_input_mode: propagate
+        null_result_mode: 'null'
+      - condition_id: domain_leaf_key_007_c3
+        left:
+          field: CustID
+        operator: eq
+        right:
+          literal: OtherDeposits-MRAA
+        null_input_mode: propagate
+        null_result_mode: 'null'
+  assign:
+    leaf_key: Deposits and Borrowings
+- rule_id: domain_leaf_key_008
+  rule_name: COs and Discount Notes
+  rule_order: 8
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_008_g1
+    all:
+    - condition_id: domain_leaf_key_008_c1
+      left:
+        field: Domain
+      operator: in
+      right:
+        literal:
+        - DN
+        - CO
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_008_c2
+      left:
+        field: IsTNS
+      operator: eq
+      right:
+        literal: false
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: COs and Discount Notes
+- rule_id: domain_leaf_key_009
+  rule_name: Other Liabilities
+  rule_order: 9
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_009_g1
+    all:
+    - condition_id: domain_leaf_key_009_c1
+      left:
+        field: Domain
+      operator: eq
+      right:
+        literal: GL
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_009_c2
+      left:
+        field: CustID
+      operator: ne
+      right:
+        literal: MandatorilyRedeemableCapitalStock
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_009_c3
+      left:
+        field: LedgerAccountType
+      operator: eq
+      right:
+        literal: Liability
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: Other Liabilities
+- rule_id: domain_leaf_key_010
+  rule_name: Asset Swaps
+  rule_order: 10
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_010_g1
+    all:
+    - condition_id: domain_leaf_key_010_c1
+      left:
+        field: Domain
+      operator: eq
+      right:
+        literal: DRV
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_010_c2
+      left:
+        field: LedgerAccountType
+      operator: eq
+      right:
+        literal: Asset
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: Asset Swaps
+- rule_id: domain_leaf_key_011
+  rule_name: Liability Swaps
+  rule_order: 11
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_011_g1
+    all:
+    - condition_id: domain_leaf_key_011_c1
+      left:
+        field: Domain
+      operator: eq
+      right:
+        literal: DRV
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_011_c2
+      left:
+        field: IsTNS
+      operator: eq
+      right:
+        literal: false
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_011_c3
+      left:
+        field: LedgerAccountType
+      operator: eq
+      right:
+        literal: Liability
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: Liability Swaps
+- rule_id: domain_leaf_key_012
+  rule_name: Other Swaps
+  rule_order: 12
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_012_g1
+    all:
+    - condition_id: domain_leaf_key_012_c1
+      left:
+        field: Domain
+      operator: in
+      right:
+        literal:
+        - DRV
+        - DN
+        - CO
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_012_c2
+      left:
+        field: IsTNS
+      operator: eq
+      right:
+        literal: true
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: Other Swaps
+- rule_id: domain_leaf_key_013
+  rule_name: Interest-Rate Caps Floors Options
+  rule_order: 13
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_013_g1
+    all:
+    - condition_id: domain_leaf_key_013_c1
+      left:
+        field: Domain
+      operator: eq
+      right:
+        literal: DRV
+      null_input_mode: propagate
+      null_result_mode: 'null'
+    - condition_id: domain_leaf_key_013_c2
+      left:
+        field: LedgerAccountType
+      operator: eq
+      right:
+        literal: OffBalanceSheet
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: Interest-Rate Caps / Floors / Options
+- rule_id: domain_leaf_key_014
+  rule_name: Other fallback
+  rule_order: 14
+  stop_on_match: true
+  when:
+    condition_group_id: domain_leaf_key_014_g1
+    all:
+    - condition_id: domain_leaf_key_014_c1
+      left:
+        literal: true
+      operator: eq
+      right:
+        literal: true
+      null_input_mode: propagate
+      null_result_mode: 'null'
+  assign:
+    leaf_key: Other
