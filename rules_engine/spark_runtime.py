@@ -236,13 +236,17 @@ class SparkRulesEngineRuntime:
                     (item for item in ruleset.rules if item.active_flag),
                     key=lambda item: item.rule_order,
                 ):
-                    matched, _ = runtime._evaluate_rule(
+                    matched, condition_traces = runtime._evaluate_rule(
                         rule,
                         row_dict,
                         0,
                         None,
                     )
-                    rule_results.append({"rule_id": rule.rule_id, "matched": matched})
+                    rule_results.append(
+                        runtime._rule_trace_payload(
+                            runtime._rule_execution_trace(rule, matched, condition_traces)
+                        )
+                    )
                     if matched:
                         matched_rule_ids.append(rule.rule_id)
                         assignments.update(
@@ -655,16 +659,14 @@ class SparkRowRuntime(RulesEngineRuntime):
         super().__init__(repository, function_registry)
         self._aggregate_lookup = aggregate_lookup
 
-    def _resolve_operand(
+    def _resolve_aggregate_operand_value(
         self,
-        operand: Operand,
+        operand: AggregateOperand,
         row: Mapping[str, Any],
         row_index: int,
         aggregate_cache: Any,
     ) -> Any:
         """
-        Resolve precomputed aggregates from row columns before normal operands.
+        Resolve precomputed aggregate operands from row columns.
         """
-        if isinstance(operand, AggregateOperand):
-            return row.get(self._aggregate_lookup[aggregate_key(operand)])
-        return super()._resolve_operand(operand, row, row_index, aggregate_cache)
+        return row.get(self._aggregate_lookup[aggregate_key(operand)])

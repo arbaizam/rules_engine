@@ -2626,7 +2626,6 @@ PYTEST_ARGS = globals().get(
         "no:cacheprovider",
         "-p",
         "no:assertion_rewriting",
-        "--ignore=tests/test_smoke_test_safety.py",
     ],
 )
 

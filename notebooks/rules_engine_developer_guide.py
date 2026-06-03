@@ -400,7 +400,7 @@ table_names
 # MAGIC publication through the standard public facade.
 # MAGIC
 # MAGIC Published metadata is immutable by `(ruleset_id, version)`. If you rerun
-# MAGIC this cell after publication, retire or overwrite the smoke tables first.
+# MAGIC this cell after publication, retire or overwrite the development tables first.
 # MAGIC
 # MAGIC `owner` and `owner_department` come from the YAML/Python ruleset metadata.
 # MAGIC `published_by` is an optional lifecycle actor field. When omitted,
@@ -505,7 +505,8 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_matched_rule_ids`: ordered list of matched rule IDs.
 # MAGIC - `rules_engine_assign`: JSON object containing assignments from matched
 # MAGIC   rules, or null when no rule matched.
-# MAGIC - `rules_engine_rule_results`: JSON array of per-rule match booleans.
+# MAGIC - `rules_engine_rule_results`: JSON array of per-rule traces with
+# MAGIC   condition-level operand columns, evaluated values, and pass/fail state.
 # MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
 # MAGIC
 # MAGIC In production, avoid collecting large DataFrames. Use aggregations,
@@ -712,7 +713,7 @@ translated_ruleset
 # MAGIC
 # MAGIC - run unit tests,
 # MAGIC - run Spark tests on the target Databricks runtime,
-# MAGIC - run the smoke test against non-production tables,
+# MAGIC - run the system test against a disposable schema,
 # MAGIC - validate representative production-like rulesets,
 # MAGIC - compare translated reconciliation output against known-good results,
 # MAGIC - review metadata table permissions and retention,

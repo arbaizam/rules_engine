@@ -12,7 +12,7 @@ artifacts:
 
 variables:
   existing_cluster_id:
-    description: Existing Databricks cluster ID used by the smoke-test job.
+    description: Existing Databricks cluster ID used by Databricks jobs.
   workspace_host:
     description: Databricks workspace URL for the selected deployment target.
 

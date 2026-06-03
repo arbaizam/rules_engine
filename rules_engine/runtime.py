@@ -8,7 +8,12 @@ not deduplicate, reshape, filter globally, or retain cross-run state.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping as MappingABC
+from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal
+from enum import Enum
+import json
 import logging
 import re
 from statistics import mean, median, pstdev, pvariance
@@ -43,6 +48,14 @@ from rules_engine.repository import RulesetRepository
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class OperandResolution:
+    """Resolved operand value plus trace-safe metadata."""
+
+    value: Any
+    trace: dict[str, Any]
 
 
 class RulesEngineRuntime:
@@ -113,18 +126,9 @@ class RulesEngineRuntime:
                     aggregate_cache,
                 )
                 traces.append(
-                    RuleExecutionTrace(
-                        rule_id=rule.rule_id,
-                        condition_traces=tuple(condition_traces),
-                        assignments_applied=(
-                            tuple(assignment.target_field for assignment in rule.assignments)
-                            if matched
-                            else ()
-                        ),
-                        matched=matched,
-                    )
+                    trace := self._rule_execution_trace(rule, matched, condition_traces)
                 )
-                rule_results.append({"rule_id": rule.rule_id, "matched": matched})
+                rule_results.append(self._rule_trace_payload(trace))
                 if matched:
                     matched_rule_ids.append(rule.rule_id)
                     assignments.update(
@@ -185,11 +189,15 @@ class RulesEngineRuntime:
         """
         results: list[bool] = []
         for condition in group.conditions:
-            passed = self._evaluate_condition(condition, row, row_index, aggregate_cache)
-            condition_traces.append(
-                ResolvedConditionTrace(condition_id=condition.condition_id, passed=passed)
+            condition_trace = self._evaluate_condition(
+                condition,
+                group,
+                row,
+                row_index,
+                aggregate_cache,
             )
-            results.append(passed)
+            condition_traces.append(condition_trace)
+            results.append(condition_trace.passed)
         for nested_group in group.groups:
             results.append(
                 self._evaluate_group(
@@ -207,32 +215,52 @@ class RulesEngineRuntime:
     def _evaluate_condition(
         self,
         condition: Condition,
+        group: ConditionGroup,
         row: Mapping[str, Any],
         row_index: int,
         aggregate_cache: "AggregateContext",
-    ) -> bool:
+    ) -> ResolvedConditionTrace:
         """
         Evaluate one active condition after resolving its operands.
         """
         if not condition.active_flag:
-            return False
-        left = self._resolve_operand(condition.left, row, row_index, aggregate_cache)
+            return self._condition_trace(
+                condition=condition,
+                group=group,
+                passed=False,
+                left=self._operand_metadata(condition.left),
+                right=(
+                    self._operand_metadata(condition.right)
+                    if condition.right is not None
+                    else None
+                ),
+                comparison_result=None,
+            )
+        left = self._resolve_operand_resolution(condition.left, row, row_index, aggregate_cache)
         right = (
-            self._resolve_operand(condition.right, row, row_index, aggregate_cache)
+            self._resolve_operand_resolution(condition.right, row, row_index, aggregate_cache)
             if condition.right is not None
             else None
         )
         result = self._compare_values(
-            left,
+            left.value,
             condition.operator,
-            right,
+            right.value if right is not None else None,
             condition.tolerance_abs,
             condition.null_input_mode,
         )
-        return self._resolve_null_result(
+        passed = self._resolve_null_result(
             result,
             condition.null_result_mode,
             condition.null_default_value,
+        )
+        return self._condition_trace(
+            condition=condition,
+            group=group,
+            passed=passed,
+            left=left.trace,
+            right=right.trace if right is not None else None,
+            comparison_result=result,
         )
 
     def _evaluate_assignments(
@@ -255,6 +283,93 @@ class RulesEngineRuntime:
             for assignment in assignments
         }
 
+    def _rule_execution_trace(
+        self,
+        rule: Rule,
+        matched: bool,
+        condition_traces: list[ResolvedConditionTrace],
+    ) -> RuleExecutionTrace:
+        """
+        Build the canonical trace for one evaluated rule.
+        """
+        return RuleExecutionTrace(
+            rule_id=rule.rule_id,
+            condition_traces=tuple(condition_traces),
+            assignments_applied=(
+                tuple(assignment.target_field for assignment in rule.assignments)
+                if matched
+                else ()
+            ),
+            matched=matched,
+            rule_name=rule.rule_name,
+            rule_order=rule.rule_order,
+        )
+
+    def _rule_trace_payload(self, trace: RuleExecutionTrace) -> dict[str, Any]:
+        """
+        Convert one rule trace to the runtime result payload.
+        """
+        return {
+            "rule_id": trace.rule_id,
+            "rule_name": trace.rule_name,
+            "rule_order": trace.rule_order,
+            "matched": trace.matched,
+            "assignments_applied": list(trace.assignments_applied),
+            "conditions": [
+                self._condition_trace_payload(condition_trace)
+                for condition_trace in trace.condition_traces
+            ],
+        }
+
+    def _condition_trace_payload(self, trace: ResolvedConditionTrace) -> dict[str, Any]:
+        """
+        Convert one condition trace to a JSON-safe result payload.
+        """
+        return {
+            "condition_id": trace.condition_id,
+            "condition_group_id": trace.condition_group_id,
+            "condition_group_operator": trace.condition_group_operator,
+            "active_flag": trace.active_flag,
+            "operator": trace.operator,
+            "tolerance_abs": trace.tolerance_abs,
+            "null_input_mode": trace.null_input_mode,
+            "null_result_mode": trace.null_result_mode,
+            "null_default_value": trace.null_default_value,
+            "left": dict(trace.left) if trace.left is not None else None,
+            "right": dict(trace.right) if trace.right is not None else None,
+            "comparison_result": trace.comparison_result,
+            "passed": trace.passed,
+        }
+
+    def _condition_trace(
+        self,
+        *,
+        condition: Condition,
+        group: ConditionGroup,
+        passed: bool,
+        left: dict[str, Any],
+        right: dict[str, Any] | None,
+        comparison_result: bool | None,
+    ) -> ResolvedConditionTrace:
+        """
+        Build one condition trace while preserving explicit condition metadata.
+        """
+        return ResolvedConditionTrace(
+            condition_id=condition.condition_id,
+            condition_group_id=group.condition_group_id,
+            condition_group_operator=group.logical_operator.value,
+            active_flag=condition.active_flag,
+            operator=condition.operator.value,
+            tolerance_abs=self._trace_value(condition.tolerance_abs),
+            null_input_mode=condition.null_input_mode.value,
+            null_result_mode=condition.null_result_mode.value,
+            null_default_value=self._trace_value(condition.null_default_value),
+            left=left,
+            right=right,
+            comparison_result=comparison_result,
+            passed=passed,
+        )
+
     def _resolve_operand(
         self,
         operand: Operand,
@@ -265,26 +380,101 @@ class RulesEngineRuntime:
         """
         Resolve one operand against the current row or aggregate context.
         """
+        return self._resolve_operand_resolution(operand, row, row_index, aggregate_cache).value
+
+    def _resolve_operand_resolution(
+        self,
+        operand: Operand,
+        row: Mapping[str, Any],
+        row_index: int,
+        aggregate_cache: "AggregateContext",
+    ) -> OperandResolution:
+        """
+        Resolve one operand and return both the value and trace metadata.
+        """
         if isinstance(operand, FieldOperand):
-            return row.get(operand.field_name)
+            value = row.get(operand.field_name)
+            return OperandResolution(
+                value=value,
+                trace={
+                    "kind": operand.kind.value,
+                    "columns": [operand.field_name],
+                    "field_name": operand.field_name,
+                    "value": self._trace_value(value),
+                    "evaluated": True,
+                },
+            )
         if isinstance(operand, LiteralOperand):
-            return operand.value
+            return OperandResolution(
+                value=operand.value,
+                trace={
+                    "kind": operand.kind.value,
+                    "columns": [],
+                    "value": self._trace_value(operand.value),
+                    "value_type": operand.value_type,
+                    "evaluated": True,
+                },
+            )
         if isinstance(operand, AggregateOperand):
-            return aggregate_cache.resolve(operand, row_index)
+            value = self._resolve_aggregate_operand_value(
+                operand,
+                row,
+                row_index,
+                aggregate_cache,
+            )
+            trace = self._aggregate_operand_metadata(operand, row)
+            trace["value"] = self._trace_value(value)
+            trace["evaluated"] = True
+            return OperandResolution(value=value, trace=trace)
         if isinstance(operand, CustomFunctionOperand):
+            args: dict[str, Any] = {}
+            arg_traces: dict[str, Any] = {}
+            for key, value in operand.args.items():
+                arg_key = str(key)
+                if isinstance(value, (FieldOperand, LiteralOperand, AggregateOperand, CustomFunctionOperand)):
+                    argument = self._resolve_operand_resolution(value, row, row_index, aggregate_cache)
+                    args[arg_key] = argument.value
+                    arg_traces[arg_key] = argument.trace
+                else:
+                    args[arg_key] = value
+                    arg_traces[arg_key] = {
+                        "kind": "literal",
+                        "columns": [],
+                        "value": self._trace_value(value),
+                        "evaluated": True,
+                    }
             implementation = self._function_registry.get_implementation(operand.function_name)
-            return implementation(
-                **{
-                    key: self._resolve_custom_function_arg(
-                        value,
-                        row,
-                        row_index,
-                        aggregate_cache,
-                    )
-                    for key, value in operand.args.items()
-                }
+            value = implementation(**args)
+            return OperandResolution(
+                value=value,
+                trace={
+                    "kind": operand.kind.value,
+                    "columns": self._unique_strings(
+                        column
+                        for arg_trace in arg_traces.values()
+                        for column in arg_trace.get("columns", [])
+                    ),
+                    "function_name": operand.function_name,
+                    "args": arg_traces,
+                    "value": self._trace_value(value),
+                    "evaluated": True,
+                },
             )
         raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+
+    def _resolve_aggregate_operand_value(
+        self,
+        operand: AggregateOperand,
+        row: Mapping[str, Any],
+        row_index: int,
+        aggregate_cache: "AggregateContext",
+    ) -> Any:
+        """
+        Resolve an aggregate operand value for the current runtime.
+        """
+        if aggregate_cache is None:
+            raise RuntimeError("Aggregate cache is required to resolve aggregate operands.")
+        return aggregate_cache.resolve(operand, row_index)
 
     def _resolve_custom_function_arg(
         self,
@@ -298,6 +488,188 @@ class RulesEngineRuntime:
         """
         if isinstance(value, (FieldOperand, LiteralOperand, AggregateOperand, CustomFunctionOperand)):
             return self._resolve_operand(value, row, row_index, aggregate_cache)
+        return value
+
+    def _operand_metadata(self, operand: Operand) -> dict[str, Any]:
+        """
+        Return operand metadata without resolving row-dependent values.
+        """
+        if isinstance(operand, FieldOperand):
+            return {
+                "kind": operand.kind.value,
+                "columns": [operand.field_name],
+                "field_name": operand.field_name,
+                "evaluated": False,
+            }
+        if isinstance(operand, LiteralOperand):
+            return {
+                "kind": operand.kind.value,
+                "columns": [],
+                "value": self._trace_value(operand.value),
+                "value_type": operand.value_type,
+                "evaluated": False,
+            }
+        if isinstance(operand, AggregateOperand):
+            trace = self._aggregate_operand_metadata(operand, None)
+            trace["evaluated"] = False
+            return trace
+        if isinstance(operand, CustomFunctionOperand):
+            return {
+                "kind": operand.kind.value,
+                "columns": self._operand_columns(operand),
+                "function_name": operand.function_name,
+                "args": {
+                    str(key): (
+                        self._operand_metadata(value)
+                        if isinstance(value, (FieldOperand, LiteralOperand, AggregateOperand, CustomFunctionOperand))
+                        else {
+                            "kind": "literal",
+                            "columns": [],
+                            "value": self._trace_value(value),
+                            "evaluated": False,
+                        }
+                    )
+                    for key, value in operand.args.items()
+                },
+                "evaluated": False,
+            }
+        raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+
+    def _aggregate_operand_metadata(
+        self,
+        operand: AggregateOperand,
+        row: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """
+        Return trace metadata for an aggregate operand.
+        """
+        return {
+            "kind": operand.kind.value,
+            "columns": self._operand_columns(operand),
+            "function": operand.function.value,
+            "field_name": operand.field_name,
+            "scope": operand.scope.value,
+            "by": list(operand.by),
+            "group_key": (
+                {field_name: self._trace_value(row.get(field_name)) for field_name in operand.by}
+                if row is not None and operand.scope is AggregateScope.GROUP
+                else None
+            ),
+            "args": self._trace_value(dict(operand.args)),
+            "filter": self._aggregate_filter_metadata(operand.filter),
+            "order_by": [
+                {
+                    "field": order.field,
+                    "direction": order.direction,
+                }
+                for order in operand.order_by
+            ],
+            "null_input_mode": operand.null_input_mode.value,
+            "null_result_mode": operand.null_result_mode.value,
+            "null_default_value": self._trace_value(operand.null_default_value),
+        }
+
+    def _aggregate_filter_metadata(self, filter_: Any | None) -> dict[str, Any] | None:
+        """
+        Return trace metadata for an aggregate filter definition.
+        """
+        if filter_ is None:
+            return None
+        return {
+            "logical_operator": filter_.logical_operator.value,
+            "predicates": [
+                self._row_filter_predicate_metadata(predicate)
+                for predicate in filter_.predicates
+            ],
+        }
+
+    def _row_filter_predicate_metadata(self, predicate: RowFilterPredicate) -> dict[str, Any]:
+        """
+        Return trace metadata for one aggregate-filter predicate.
+        """
+        return {
+            "columns": self._unique_strings(
+                [
+                    *self._operand_columns(predicate.left),
+                    *(
+                        self._operand_columns(predicate.right)
+                        if predicate.right is not None
+                        else []
+                    ),
+                ]
+            ),
+            "operator": predicate.operator.value,
+            "tolerance_abs": self._trace_value(predicate.tolerance_abs),
+            "null_input_mode": predicate.null_input_mode.value,
+            "null_result_mode": predicate.null_result_mode.value,
+            "null_default_value": self._trace_value(predicate.null_default_value),
+            "left": self._operand_metadata(predicate.left),
+            "right": (
+                self._operand_metadata(predicate.right)
+                if predicate.right is not None
+                else None
+            ),
+        }
+
+    def _operand_columns(self, operand: Operand | Any) -> list[str]:
+        """
+        Return all source columns referenced by an operand tree.
+        """
+        if isinstance(operand, FieldOperand):
+            return [operand.field_name]
+        if isinstance(operand, LiteralOperand):
+            return []
+        if isinstance(operand, AggregateOperand):
+            columns: list[str] = [operand.field_name, *operand.by]
+            columns.extend(order.field for order in operand.order_by)
+            if operand.filter is not None:
+                for predicate in operand.filter.predicates:
+                    columns.extend(self._operand_columns(predicate.left))
+                    if predicate.right is not None:
+                        columns.extend(self._operand_columns(predicate.right))
+            return self._unique_strings(columns)
+        if isinstance(operand, CustomFunctionOperand):
+            return self._unique_strings(
+                column
+                for value in operand.args.values()
+                for column in self._operand_columns(value)
+            )
+        return []
+
+    def _unique_strings(self, values: Iterable[str]) -> list[str]:
+        """
+        Preserve first-seen order while removing duplicate strings.
+        """
+        return list(dict.fromkeys(str(value) for value in values))
+
+    def _trace_value(self, value: Any) -> Any:
+        """
+        Convert a runtime value into a JSON-safe trace value.
+        """
+        if isinstance(value, Decimal):
+            return format(value, "f")
+        if isinstance(value, Enum):
+            return value.value
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, MappingABC):
+            return {
+                str(key): self._trace_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, tuple):
+            return [self._trace_value(item) for item in value]
+        if isinstance(value, list):
+            return [self._trace_value(item) for item in value]
+        if isinstance(value, set):
+            return [
+                self._trace_value(item)
+                for item in sorted(value, key=lambda item: repr(item))
+            ]
+        try:
+            json.dumps(value)
+        except TypeError:
+            return str(value)
         return value
 
     def _compare_values(

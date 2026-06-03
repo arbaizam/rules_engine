@@ -1,3 +1,5 @@
+import json
+
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 from rules_engine.runtime import RulesEngineRuntime
@@ -35,6 +37,14 @@ def _compile(condition, assign=None):
     )
 
 
+class FakeSparkRow:
+    def __init__(self, data):
+        self._data = data
+
+    def asDict(self, recursive=True):
+        return self._data
+
+
 def test_runtime_evaluates_simple_row_rule_and_assignment():
     """
     What: Evaluates a basic row-level rule and assignment in Python runtime.
@@ -61,6 +71,170 @@ def test_runtime_evaluates_simple_row_rule_and_assignment():
     assert output[1]["matched"] is False
     assert traces[0].matched is True
     assert traces[1].matched is False
+
+
+def test_runtime_rule_results_include_condition_trace_values():
+    """
+    What: Emits resolved operand values and columns in rule_results.
+    Why: Runtime metadata must be traceable back to each evaluated condition.
+    Fails when: rule_results falls back to compact rule-level pass/fail output.
+    """
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A", "value_type": "string"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+
+    output, traces = _runtime().evaluate([{"account": "A"}], ruleset)
+
+    rule_result = output[0]["rule_results"][0]
+    condition_result = rule_result["conditions"][0]
+    assert rule_result["rule_id"] == "r1"
+    assert rule_result["rule_name"] == "Rule 1"
+    assert rule_result["matched"] is True
+    assert rule_result["assignments_applied"] == ["bucket"]
+    assert condition_result["condition_id"] == traces[0].condition_traces[0].condition_id
+    assert condition_result["operator"] == "eq"
+    assert condition_result["left"] == {
+        "kind": "field",
+        "columns": ["account"],
+        "field_name": "account",
+        "value": "A",
+        "evaluated": True,
+    }
+    assert condition_result["right"] == {
+        "kind": "literal",
+        "columns": [],
+        "value": "A",
+        "value_type": "string",
+        "evaluated": True,
+    }
+    assert condition_result["comparison_result"] is True
+    assert condition_result["passed"] is True
+    json.dumps(output[0]["rule_results"])
+
+
+def test_runtime_rule_results_include_aggregate_trace_values():
+    """
+    What: Emits aggregate operand columns, group key, and resolved aggregate value.
+    Why: Aggregate-backed conditions must explain the value compared for a row.
+    Fails when: aggregate traces omit source columns or evaluated values.
+    """
+    ruleset = _compile(
+        {
+            "left": {
+                "aggregate": {
+                    "function": "sum",
+                    "field": "amount",
+                    "scope": "group",
+                    "by": ["account"],
+                    "null_input_mode": "ignore",
+                    "null_result_mode": "null",
+                }
+            },
+            "operator": "gt",
+            "right": {"literal": 15},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+
+    output, _ = _runtime().evaluate(
+        [
+            {"account": "A", "amount": 10},
+            {"account": "A", "amount": 20},
+            {"account": "B", "amount": 5},
+        ],
+        ruleset,
+    )
+
+    aggregate_trace = output[0]["rule_results"][0]["conditions"][0]["left"]
+    assert aggregate_trace["kind"] == "aggregate"
+    assert aggregate_trace["columns"] == ["amount", "account"]
+    assert aggregate_trace["function"] == "sum"
+    assert aggregate_trace["field_name"] == "amount"
+    assert aggregate_trace["scope"] == "group"
+    assert aggregate_trace["by"] == ["account"]
+    assert aggregate_trace["group_key"] == {"account": "A"}
+    assert aggregate_trace["value"] == 30
+
+
+def test_runtime_rule_results_include_custom_function_arg_trace_values():
+    """
+    What: Emits custom-function argument traces and resolved function values.
+    Why: Custom-function conditions need traceability for nested operand inputs.
+    Fails when: function traces hide the row values passed into the callable.
+    """
+    registry = FunctionRegistry()
+    registry.register(
+        CustomFunctionSpec(
+            function_name="score",
+            implementation_reference="tests.score",
+            arg_names=("x", "y"),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=False,
+        ),
+        implementation=lambda **kwargs: kwargs["x"] + kwargs["y"],
+    )
+    ruleset = _compile(
+        {
+            "left": {
+                "custom_function": {
+                    "name": "score",
+                    "args": {"x": {"field": "amount"}, "y": {"literal": 3}},
+                }
+            },
+            "operator": "eq",
+            "right": {"literal": 5},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+
+    output, _ = _runtime(registry).evaluate([{"amount": 2}], ruleset)
+
+    function_trace = output[0]["rule_results"][0]["conditions"][0]["left"]
+    assert function_trace["kind"] == "custom_function"
+    assert function_trace["function_name"] == "score"
+    assert function_trace["columns"] == ["amount"]
+    assert function_trace["value"] == 5
+    assert function_trace["args"]["x"]["value"] == 2
+    assert function_trace["args"]["x"]["columns"] == ["amount"]
+    assert function_trace["args"]["y"]["value"] == 3
+
+
+def test_spark_row_evaluator_serializes_enriched_rule_results():
+    """
+    What: Serializes the enriched rule-result payload through the Spark row UDF.
+    Why: Spark's JSON column must expose the same trace metadata as Python.
+    Fails when: Spark keeps emitting only rule-level pass/fail metadata.
+    """
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    evaluator = SparkRulesEngineRuntime(
+        DummyRepository(),
+        FunctionRegistry(),
+    )._build_row_evaluator(ruleset, {}, ["account"])
+
+    result = evaluator(FakeSparkRow({"account": "A"}))
+    rule_results = json.loads(result["rule_results"])
+
+    assert result["matched"] is True
+    assert rule_results[0]["rule_id"] == "r1"
+    assert rule_results[0]["matched"] is True
+    assert rule_results[0]["conditions"][0]["left"]["columns"] == ["account"]
+    assert rule_results[0]["conditions"][0]["left"]["value"] == "A"
 
 
 def test_runtime_supports_canonical_string_operators():

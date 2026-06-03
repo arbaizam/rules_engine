@@ -33,7 +33,7 @@ semantic weakening.
 - [Standard Workflows](#standard-workflows)
 - [Auditability Model](#auditability-model)
 - [Reconciliation CSV Translation Utility](#reconciliation-csv-translation-utility)
-- [Databricks Smoke Test](#databricks-smoke-test)
+- [Databricks System Test](#databricks-system-test)
 - [Testing](#testing)
 - [Packaging And Asset Bundles](#packaging-and-asset-bundles)
 - [Developer Workflow](#developer-workflow)
@@ -150,7 +150,7 @@ rules_engine/
   validator.py            # semantic validator
 
 databricks/
-  smoke_test_rules_engine.py
+  system_test_rules_engine.py
 
 notebooks/
   rules_engine_developer_guide.py
@@ -335,8 +335,8 @@ Side effects:
 
 - Creates or overwrites Delta tables depending on `mode`.
 - Defaults to `mode="error"`, which fails if a target table already exists.
-- Use `mode="overwrite"` only for non-production setup or controlled smoke
-  tests.
+- Use `mode="overwrite"` only for non-production setup or disposable test
+  workflows.
 
 ### `SparkDeltaRulesetRepository.load_published(ruleset_name, version=None)`
 
@@ -796,7 +796,38 @@ Output rows have this shape:
     "matched": True,
     "matched_rule_ids": ["high_value_account"],
     "assign": {"review_bucket": "high_value"},
-    "rule_results": [{"rule_id": "high_value_account", "matched": True}],
+    "rule_results": [
+        {
+            "rule_id": "high_value_account",
+            "rule_name": "High Value Account",
+            "rule_order": 1,
+            "matched": True,
+            "assignments_applied": ["review_bucket"],
+            "conditions": [
+                {
+                    "condition_id": "cg:high_value_account:root:c1",
+                    "condition_group_id": "cg:high_value_account:root",
+                    "condition_group_operator": "all",
+                    "operator": "gt",
+                    "left": {
+                        "kind": "field",
+                        "columns": ["amount"],
+                        "field_name": "amount",
+                        "value": 100,
+                        "evaluated": True,
+                    },
+                    "right": {
+                        "kind": "literal",
+                        "columns": [],
+                        "value": 50,
+                        "evaluated": True,
+                    },
+                    "comparison_result": True,
+                    "passed": True,
+                }
+            ],
+        }
+    ],
 }
 ```
 
@@ -833,6 +864,9 @@ rules_engine_error
 ```
 
 `rules_engine_assign` and `rules_engine_rule_results` are JSON strings.
+`rules_engine_rule_results` contains the same per-rule, per-condition trace
+payload emitted by the pure-Python runtime, including evaluated operand columns
+and values.
 
 Spark evaluation strategy:
 
@@ -1052,7 +1086,7 @@ This creates:
 - `catalog.schema.ruleset_versions`
 - `catalog.schema.function_registry`
 
-Use `mode="overwrite"` only for disposable development or smoke-test schemas.
+Use `mode="overwrite"` only for disposable development or test schemas.
 After creating tables, call `service.save_standard_function_registry()` to load
 metadata for package standard functions. The call is rerunnable because existing
 function rows are skipped by default.
@@ -1389,30 +1423,6 @@ Join semantics:
   intended.
 - malformed chains fail translation and are reported in the audit.
 
-## Databricks Smoke Test
-
-After copying or installing the package into Databricks, run:
-
-```text
-databricks/smoke_test_rules_engine.py
-```
-
-The smoke test:
-
-1. Creates smoke-test Delta tables.
-2. Compiles a small Spark-compatible ruleset.
-3. Runs Spark compatibility validation.
-4. Publishes the ruleset with explicit provenance.
-5. Loads the published ruleset.
-6. Evaluates a Spark DataFrame with `fail_on_error=True`.
-7. Verifies expected matches.
-8. Retires the ruleset.
-9. Verifies the retired version is no longer loadable as published.
-
-Because the smoke test calls `create_base_tables(mode="overwrite")`, it refuses
-to run unless the configured database/table-prefix target contains `smoke`,
-`test`, or `deleteme`.
-
 ## Databricks System Test
 
 For an automated promotion gate, run:
@@ -1497,7 +1507,7 @@ python -m pip install ".[spark]"
 The recommended production deployment pattern is wheel-based:
 
 ```text
-source repo -> build wheel -> deploy Asset Bundle -> install wheel on job task -> run smoke test
+source repo -> build wheel -> deploy Asset Bundle -> install wheel on job task -> run system test
 ```
 
 This avoids production dependencies on workspace source folders and removes the
@@ -1514,9 +1524,7 @@ The repo includes:
 ```text
 pyproject.toml
 databricks.yml
-resources/rules_engine_smoke_test.job.yml
 resources/rules_engine_system_test.job.yml
-databricks/smoke_test_rules_engine.py
 databricks/system_test_rules_engine.py
 ```
 
@@ -1544,17 +1552,11 @@ CLI authentication:
 ```powershell
 databricks bundle validate --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
 databricks bundle deploy --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
-databricks bundle run rules_engine_smoke_test --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
 databricks bundle run rules_engine_system_test --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
 ```
 
-The smoke-test script creates/overwrites its own smoke-test Delta metadata
-tables, publishes a small ruleset, evaluates a Spark DataFrame, verifies that
-two rows match, retires the ruleset, and confirms retired metadata is no longer
-loadable as published.
-
 The system-test script uses a unique disposable schema and drops it after the
-test, so it is better suited as a repeatable CI/promotion gate.
+test, so it is suited as a repeatable CI/promotion gate.
 
 For Azure DevOps, keep the same sequence in the pipeline:
 
@@ -1564,7 +1566,6 @@ run pytest
 build wheel
 databricks bundle validate
 databricks bundle deploy
-databricks bundle run rules_engine_smoke_test
 databricks bundle run rules_engine_system_test
 ```
 
@@ -1581,23 +1582,21 @@ Recommended local workflow:
 4. Run pure-Python runtime tests.
 5. Run default test suite.
 6. Run Spark tests in Databricks or Spark-enabled CI.
-7. Run `databricks/smoke_test_rules_engine.py`.
-8. Run `databricks/system_test_rules_engine.py`.
-9. Review generated Delta metadata rows.
-10. Promote package artifact or source to the target environment.
+7. Run `databricks/system_test_rules_engine.py`.
+8. Review generated Delta metadata rows.
+9. Promote package artifact or source to the target environment.
 
 Recommended Databricks workflow:
 
 1. Install or copy the package.
 2. Configure table names in the target catalog/schema.
-3. Run the smoke test against non-production tables.
-4. Run the system test against a disposable schema.
-5. Publish a representative ruleset.
-6. Load published metadata.
-7. Evaluate a representative DataFrame.
-8. Assert `rules_engine_error` is empty.
-9. Validate output counts and assignments against expected results.
-10. Retire test metadata.
+3. Run the system test against a disposable schema.
+4. Publish a representative ruleset.
+5. Load published metadata.
+6. Evaluate a representative DataFrame.
+7. Assert `rules_engine_error` is empty.
+8. Validate output counts and assignments against expected results.
+9. Retire test metadata.
 
 ## Logging
 
@@ -1728,5 +1727,3 @@ the version before publishing a replacement under the same ruleset name.
   is Databricks Spark.
 - Utilities under `tools/`, notebooks, and sample `rule_sets/` are not included
   in the production wheel.
-- Runtime traces are compact rule/condition pass-fail structures, not full
-  resolved-value audit records.

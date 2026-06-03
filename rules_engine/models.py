@@ -437,6 +437,17 @@ class ResolvedConditionTrace:
 
     condition_id: str
     passed: bool
+    condition_group_id: str | None = None
+    condition_group_operator: str | None = None
+    active_flag: bool = True
+    operator: str | None = None
+    tolerance_abs: str | None = None
+    null_input_mode: str | None = None
+    null_result_mode: str | None = None
+    null_default_value: Any | None = None
+    left: Mapping[str, Any] | None = None
+    right: Mapping[str, Any] | None = None
+    comparison_result: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -447,3 +458,5 @@ class RuleExecutionTrace:
     condition_traces: tuple[ResolvedConditionTrace, ...]
     assignments_applied: tuple[str, ...]
     matched: bool
+    rule_name: str | None = None
+    rule_order: int | None = None
