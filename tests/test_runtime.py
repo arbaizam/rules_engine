@@ -68,7 +68,13 @@ def test_runtime_evaluates_simple_row_rule_and_assignment():
 
     assert output[0]["matched"] is True
     assert output[0]["assign"] == {"bucket": "matched"}
+    assert output[0]["winning_rule_id"] == "r1"
+    assert output[0]["winning_rule_name"] == "Rule 1"
+    assert output[0]["winning_rule"]["rule_id"] == "r1"
+    assert output[0]["winning_rule_explanation"] == "account=A == A"
     assert output[1]["matched"] is False
+    assert output[1]["winning_rule"] is None
+    assert output[1]["winning_rule_explanation"] is None
     assert traces[0].matched is True
     assert traces[1].matched is False
 
@@ -162,6 +168,7 @@ def test_runtime_rule_results_include_aggregate_trace_values():
     assert aggregate_trace["scope"] == "group"
     assert aggregate_trace["group_key"] == {"account": "A"}
     assert aggregate_trace["value"] == 30
+    assert output[0]["winning_rule_explanation"] == "sum(amount) for account=A=30 > 15"
 
 
 def test_runtime_rule_results_include_custom_function_arg_trace_values():
@@ -206,6 +213,7 @@ def test_runtime_rule_results_include_custom_function_arg_trace_values():
     assert function_trace["args"]["x"]["value"] == 2
     assert function_trace["args"]["x"]["column"] == "amount"
     assert function_trace["args"]["y"]["value"] == 3
+    assert output[0]["winning_rule_explanation"] == "score(x=amount=2, y=3)=5 == 5"
 
 
 def test_spark_row_evaluator_serializes_enriched_rule_results():
@@ -230,8 +238,13 @@ def test_spark_row_evaluator_serializes_enriched_rule_results():
 
     result = evaluator(FakeSparkRow({"account": "A"}))
     rule_results = json.loads(result["rule_results"])
+    winning_rule = json.loads(result["winning_rule"])
 
     assert result["matched"] is True
+    assert result["winning_rule_id"] == "r1"
+    assert result["winning_rule_name"] == "Rule 1"
+    assert result["winning_rule_explanation"] == "account=A == A"
+    assert winning_rule["rule_id"] == "r1"
     assert rule_results[0]["rule_id"] == "r1"
     assert rule_results[0]["matched"] is True
     assert rule_results[0]["conditions"][0]["columns"] == ["account"]

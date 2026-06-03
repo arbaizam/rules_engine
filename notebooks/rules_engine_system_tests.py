@@ -2139,16 +2139,30 @@ ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
 df = spark.createDataFrame([{"record_id": "r1", "account": "A"}, {"record_id": "r2", "account": "B"}])
 result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
 rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
-required_columns = {"rules_engine_matched", "rules_engine_matched_rule_ids", "rules_engine_assign", "rules_engine_rule_results", "rules_engine_error"}
+required_columns = {
+    "rules_engine_matched",
+    "rules_engine_matched_rule_ids",
+    "rules_engine_assign",
+    "rules_engine_rule_results",
+    "rules_engine_winning_rule",
+    "rules_engine_winning_rule_id",
+    "rules_engine_winning_rule_name",
+    "rules_engine_winning_rule_explanation",
+    "rules_engine_error",
+}
 missing_columns = required_columns - set(result.columns)
 assert not missing_columns, f"Missing output columns: {sorted(missing_columns)}"
 assert rows["r1"]["rules_engine_matched"] is True
 assert rows["r1"]["rules_engine_matched_rule_ids"] == ["r1"]
 assert json.loads(rows["r1"]["rules_engine_assign"]) == {"bucket": "A"}
+assert rows["r1"]["rules_engine_winning_rule_id"] == "r1"
+assert rows["r1"]["rules_engine_winning_rule_explanation"] == "account=A == A"
 assert rows["r1"]["rules_engine_error"] is None
 assert rows["r2"]["rules_engine_matched"] is False
 assert rows["r2"]["rules_engine_matched_rule_ids"] == []
 assert rows["r2"]["rules_engine_assign"] is None
+assert rows["r2"]["rules_engine_winning_rule"] is None
+assert rows["r2"]["rules_engine_winning_rule_explanation"] is None
 assert rows["r2"]["rules_engine_error"] is None
 assert "r1" in rows["r1"]["rules_engine_rule_results"]
 display(result)

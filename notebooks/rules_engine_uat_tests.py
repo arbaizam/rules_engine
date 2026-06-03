@@ -888,6 +888,10 @@ required_columns = {
     "rules_engine_matched_rule_ids",
     "rules_engine_assign",
     "rules_engine_rule_results",
+    "rules_engine_winning_rule",
+    "rules_engine_winning_rule_id",
+    "rules_engine_winning_rule_name",
+    "rules_engine_winning_rule_explanation",
     "rules_engine_error",
 }
 actual_columns = set(service.evaluate_dataframe(

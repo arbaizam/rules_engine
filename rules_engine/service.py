@@ -9,6 +9,7 @@ from pathlib import Path
 from pyspark.sql import DataFrame, SparkSession
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.human_readable import HumanReadableRulesetFormatter
 from rules_engine.models import FunctionRegistryRow, Ruleset
 from rules_engine.normalizer import RulesetNormalizer
 from rules_engine.publish import PublishService
@@ -50,6 +51,7 @@ class RulesEngineService:
         )
         self.runtime = SparkRulesEngineRuntime(repository, registry)
         self.compiler = YamlRulesetCompiler()
+        self.rule_formatter = HumanReadableRulesetFormatter()
 
     @classmethod
     def from_schema(
@@ -193,6 +195,22 @@ class RulesEngineService:
         Load a published ruleset by name and optional version.
         """
         return self.repository.load_published(ruleset_name, version)
+
+    def describe_rules(
+        self,
+        *,
+        ruleset: Ruleset | None = None,
+        ruleset_name: str | None = None,
+        version: str | None = None,
+    ) -> list[dict[str, str]]:
+        """
+        Return readable rule metadata rows for a supplied or loaded ruleset.
+        """
+        if ruleset is None:
+            if ruleset_name is None:
+                raise ValueError("ruleset or ruleset_name is required.")
+            ruleset = self.load_published(ruleset_name, version)
+        return self.rule_formatter.describe_rules(ruleset)
 
     def evaluate_dataframe(
         self,

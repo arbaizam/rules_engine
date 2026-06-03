@@ -488,9 +488,13 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_matched_rule_ids`
 # MAGIC - `rules_engine_assign`
 # MAGIC - `rules_engine_rule_results`
+# MAGIC - `rules_engine_winning_rule`
+# MAGIC - `rules_engine_winning_rule_id`
+# MAGIC - `rules_engine_winning_rule_name`
+# MAGIC - `rules_engine_winning_rule_explanation`
 # MAGIC - `rules_engine_error`
 # MAGIC
-# MAGIC Assignment and rule result payloads are JSON strings.
+# MAGIC Assignment, rule result, and winning-rule payloads are JSON strings.
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
@@ -507,6 +511,12 @@ display(result_df.orderBy("row_id"))
 # MAGIC   rules, or null when no rule matched.
 # MAGIC - `rules_engine_rule_results`: compact JSON array of per-rule traces with
 # MAGIC   condition-level source columns, evaluated values, and pass/fail state.
+# MAGIC - `rules_engine_winning_rule`: JSON object for the first matched rule, or
+# MAGIC   null when no rule matched.
+# MAGIC - `rules_engine_winning_rule_id`: ID of the first matched rule.
+# MAGIC - `rules_engine_winning_rule_name`: name of the first matched rule.
+# MAGIC - `rules_engine_winning_rule_explanation`: readable summary of the passed
+# MAGIC   conditions from the first matched rule.
 # MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
 # MAGIC
 # MAGIC In production, avoid collecting large DataFrames. Use aggregations,
@@ -521,6 +531,7 @@ for row in rows:
         row["rules_engine_matched"],
         row["rules_engine_matched_rule_ids"],
         row["rules_engine_assign"],
+        row["rules_engine_winning_rule_explanation"],
         row["rules_engine_error"],
     )
 

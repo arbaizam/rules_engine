@@ -61,6 +61,10 @@ RESULT_STRUCT = T.StructType(
         T.StructField("matched_rule_ids", T.ArrayType(T.StringType(), False), False),
         T.StructField("assign", T.StringType(), True),
         T.StructField("rule_results", T.StringType(), False),
+        T.StructField("winning_rule", T.StringType(), True),
+        T.StructField("winning_rule_id", T.StringType(), True),
+        T.StructField("winning_rule_name", T.StringType(), True),
+        T.StructField("winning_rule_explanation", T.StringType(), True),
         T.StructField("error", T.StringType(), True),
     ]
 )
@@ -172,6 +176,13 @@ class SparkRulesEngineRuntime:
             )
             .withColumn(f"{column_prefix}_assign", F.col(f"{result_col}.assign"))
             .withColumn(f"{column_prefix}_rule_results", F.col(f"{result_col}.rule_results"))
+            .withColumn(f"{column_prefix}_winning_rule", F.col(f"{result_col}.winning_rule"))
+            .withColumn(f"{column_prefix}_winning_rule_id", F.col(f"{result_col}.winning_rule_id"))
+            .withColumn(f"{column_prefix}_winning_rule_name", F.col(f"{result_col}.winning_rule_name"))
+            .withColumn(
+                f"{column_prefix}_winning_rule_explanation",
+                F.col(f"{result_col}.winning_rule_explanation"),
+            )
             .withColumn(f"{column_prefix}_error", F.col(f"{result_col}.error"))
             .drop(result_col)
         )
@@ -254,11 +265,16 @@ class SparkRulesEngineRuntime:
                         )
                         if rule.stop_on_match:
                             break
+                winning_rule = runtime._winning_rule_payload(rule_results)
                 return {
                     "matched": bool(matched_rule_ids),
                     "matched_rule_ids": matched_rule_ids,
                     "assign": json.dumps(assignments, sort_keys=True) if assignments else None,
                     "rule_results": json.dumps(rule_results, sort_keys=True),
+                    "winning_rule": json.dumps(winning_rule, sort_keys=True) if winning_rule else None,
+                    "winning_rule_id": winning_rule.get("rule_id") if winning_rule else None,
+                    "winning_rule_name": winning_rule.get("rule_name") if winning_rule else None,
+                    "winning_rule_explanation": runtime._winning_rule_explanation(winning_rule),
                     "error": None,
                 }
             except Exception as exc:
@@ -267,6 +283,10 @@ class SparkRulesEngineRuntime:
                     "matched_rule_ids": [],
                     "assign": None,
                     "rule_results": "[]",
+                    "winning_rule": None,
+                    "winning_rule_id": None,
+                    "winning_rule_name": None,
+                    "winning_rule_explanation": None,
                     "error": f"{exc}\n{traceback.format_exc()}",
                 }
 

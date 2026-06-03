@@ -138,6 +138,7 @@ class RulesEngineRuntime:
                     if rule.stop_on_match:
                         break
 
+            winning_rule = self._winning_rule_payload(rule_results)
             output_rows.append(
                 {
                     "row": row,
@@ -145,6 +146,10 @@ class RulesEngineRuntime:
                     "matched_rule_ids": matched_rule_ids,
                     "assign": assignments if assignments else None,
                     "rule_results": rule_results,
+                    "winning_rule": winning_rule,
+                    "winning_rule_id": winning_rule.get("rule_id") if winning_rule else None,
+                    "winning_rule_name": winning_rule.get("rule_name") if winning_rule else None,
+                    "winning_rule_explanation": self._winning_rule_explanation(winning_rule),
                 }
             )
         matched_count = sum(1 for row in output_rows if row["matched"])
@@ -322,6 +327,121 @@ class RulesEngineRuntime:
         if trace.assignments_applied:
             payload["assignments_applied"] = list(trace.assignments_applied)
         return payload
+
+    def _winning_rule_payload(self, rule_results: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """
+        Return the first matched rule result for a row.
+        """
+        for rule_result in rule_results:
+            if rule_result.get("matched") is True:
+                return rule_result
+        return None
+
+    def _winning_rule_explanation(self, winning_rule: Mapping[str, Any] | None) -> str | None:
+        """
+        Return a readable summary of the passed conditions in the winning rule.
+        """
+        if winning_rule is None:
+            return None
+        explanations = [
+            self._condition_explanation(condition)
+            for condition in winning_rule.get("conditions", [])
+            if condition.get("passed") is True
+        ]
+        explanations = [item for item in explanations if item]
+        if not explanations:
+            return None
+        return " AND ".join(explanations)
+
+    def _condition_explanation(self, condition: Mapping[str, Any]) -> str:
+        """
+        Return a readable one-condition expression with resolved values.
+        """
+        left = self._operand_explanation(condition.get("left"))
+        operator = self._operator_label(condition.get("operator"))
+        right = self._operand_explanation(condition.get("right"))
+        if right is None:
+            return f"{left} {operator}"
+        return f"{left} {operator} {right}"
+
+    def _operand_explanation(self, operand: Any) -> str | None:
+        """
+        Return a readable operand representation with its resolved value.
+        """
+        if not isinstance(operand, MappingABC):
+            return None
+        kind = operand.get("kind")
+        if kind == OperandKind.FIELD.value:
+            return f"{operand.get('column')}={self._display_value(operand.get('value'))}"
+        if kind == OperandKind.LITERAL.value:
+            return self._display_value(operand.get("value"))
+        if kind == OperandKind.AGGREGATE.value:
+            function = operand.get("function") or "aggregate"
+            source_columns = operand.get("source_columns") or []
+            value_column = source_columns[0] if source_columns else "value"
+            group_key = operand.get("group_key")
+            scope = self._group_key_label(group_key) if group_key else operand.get("scope")
+            label = f"{function}({value_column})"
+            if scope:
+                label = f"{label} for {scope}"
+            return f"{label}={self._display_value(operand.get('value'))}"
+        if kind == OperandKind.CUSTOM_FUNCTION.value:
+            args = operand.get("args") or {}
+            arg_text = ", ".join(
+                f"{name}={self._operand_explanation(value)}"
+                for name, value in args.items()
+            )
+            return (
+                f"{operand.get('function_name')}({arg_text})="
+                f"{self._display_value(operand.get('value'))}"
+            )
+        return self._display_value(operand.get("value"))
+
+    def _operator_label(self, operator: Any) -> str:
+        """
+        Return a readable operator label.
+        """
+        return {
+            ComparisonOperator.EQ.value: "==",
+            ComparisonOperator.NE.value: "!=",
+            ComparisonOperator.GT.value: ">",
+            ComparisonOperator.GE.value: ">=",
+            ComparisonOperator.LT.value: "<",
+            ComparisonOperator.LE.value: "<=",
+            ComparisonOperator.IN.value: "in",
+            ComparisonOperator.NOT_IN.value: "not in",
+            ComparisonOperator.BETWEEN.value: "between",
+            ComparisonOperator.NOT_BETWEEN.value: "not between",
+            ComparisonOperator.LIKE.value: "like",
+            ComparisonOperator.NOT_LIKE.value: "not like",
+            ComparisonOperator.CONTAINS.value: "contains",
+            ComparisonOperator.NOT_CONTAINS.value: "does not contain",
+            ComparisonOperator.STARTS_WITH.value: "starts with",
+            ComparisonOperator.ENDS_WITH.value: "ends with",
+            ComparisonOperator.IS_NULL.value: "is null",
+            ComparisonOperator.IS_NOT_NULL.value: "is not null",
+        }.get(str(operator), str(operator))
+
+    def _group_key_label(self, group_key: Any) -> str | None:
+        """
+        Return a readable aggregate group-key label.
+        """
+        if not isinstance(group_key, MappingABC):
+            return None
+        return ", ".join(
+            f"{key}={self._display_value(value)}"
+            for key, value in group_key.items()
+        )
+
+    def _display_value(self, value: Any) -> str:
+        """
+        Return a compact user-facing value string.
+        """
+        if value is None:
+            return "null"
+        if isinstance(value, str):
+            return value
+        return str(value)
 
     def _condition_trace_payload(self, trace: ResolvedConditionTrace) -> dict[str, Any]:
         """

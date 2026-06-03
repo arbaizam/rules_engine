@@ -408,6 +408,10 @@ Returned columns:
 - `rules_engine_matched_rule_ids`
 - `rules_engine_assign`
 - `rules_engine_rule_results`
+- `rules_engine_winning_rule`
+- `rules_engine_winning_rule_id`
+- `rules_engine_winning_rule_name`
+- `rules_engine_winning_rule_explanation`
 - `rules_engine_error`
 
 Side effects:
@@ -821,6 +825,10 @@ Output rows have this shape:
             ],
         }
     ],
+    "winning_rule": {...},
+    "winning_rule_id": "high_value_account",
+    "winning_rule_name": "High Value Account",
+    "winning_rule_explanation": "amount=100 > 50",
 }
 ```
 
@@ -853,13 +861,20 @@ rules_engine_matched
 rules_engine_matched_rule_ids
 rules_engine_assign
 rules_engine_rule_results
+rules_engine_winning_rule
+rules_engine_winning_rule_id
+rules_engine_winning_rule_name
+rules_engine_winning_rule_explanation
 rules_engine_error
 ```
 
-`rules_engine_assign` and `rules_engine_rule_results` are JSON strings.
+`rules_engine_assign`, `rules_engine_rule_results`, and
+`rules_engine_winning_rule` are JSON strings.
 `rules_engine_rule_results` contains compact per-rule, per-condition audit
 payloads with source columns, evaluated operand values, comparison result, and
 final pass/fail state.
+`rules_engine_winning_rule_explanation` is a readable summary of the passed
+conditions from the first matched rule.
 
 Spark evaluation strategy:
 
@@ -937,6 +952,19 @@ service.retire(
     effective_end_date="2026-12-31",
 )
 ```
+
+Use `describe_rules` when a notebook or audit job needs a compact,
+human-readable view of authored rules:
+
+```python
+service.describe_rules(ruleset=ruleset)
+```
+
+Example output:
+
+| rule_id | rule_name | rule_logic | match_payload |
+| --- | --- | --- | --- |
+| `r1560` | `A Rule` | `BK_AccountID == 'DN'` | `leaf_key = '15656'` |
 
 Pass custom metadata table names when the deployment should not use the
 standard `ruleset_versions` and `function_registry` names:
@@ -1702,9 +1730,9 @@ the version before publishing a replacement under the same ruleset name.
 - v1 assumes `spark.sql.parser.escapedStringLiterals=false`, the modern Spark
   default.
 - Spark runtime uses a Python UDF for final rule evaluation.
-- Spark runtime emits `assign` and `rule_results` as JSON strings. Downstream
-  Spark consumers should parse them with `from_json()` if they need nested
-  access.
+- Spark runtime emits `assign`, `rule_results`, and `winning_rule` as JSON
+  strings. Downstream Spark consumers should parse them with `from_json()` if
+  they need nested access.
 - Spark runtime does not yet compile every row predicate into native Spark
   expressions.
 - Spark aggregate precompute fails fast for explicit modes listed in

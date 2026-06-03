@@ -184,6 +184,111 @@ def test_service_evaluate_dataframe_requires_ruleset_or_name():
         service.evaluate_dataframe(None)
 
 
+def test_service_describe_rules_formats_supplied_ruleset():
+    """
+    What: Formats compiled rule metadata into readable table-shaped rows.
+    Why: Notebook users need a compact audit view of rule logic and match payloads.
+    Fails when: Service-level rule descriptions expose raw metadata or omit payload details.
+    """
+    ruleset = YamlRulesetCompiler().compile_text(
+        """
+ruleset_id: trace_ruleset
+ruleset_name: Trace Ruleset
+version: "1"
+rules:
+  - rule_id: r1560
+    rule_name: A Rule
+    rule_order: 1
+    when:
+      all:
+        - left: {field: BK_AccountID}
+          operator: eq
+          right: {literal: DN}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      leaf_key: "15656"
+"""
+    )
+
+    rows = _service().describe_rules(ruleset=ruleset)
+
+    assert rows == [
+        {
+            "rule_id": "r1560",
+            "rule_name": "A Rule",
+            "rule_logic": "BK_AccountID == 'DN'",
+            "match_payload": "leaf_key = '15656'",
+        }
+    ]
+
+
+def test_service_describe_rules_loads_published_ruleset_and_formats_nested_logic():
+    """
+    What: Loads a published ruleset and renders nested condition groups.
+    Why: The service helper should work for persisted rules without losing boolean structure.
+    Fails when: Nested groups are flattened ambiguously or repository loading is bypassed.
+    """
+    repository = RecordingRepository()
+    service = _service(repository)
+    service.publish_yaml_text(
+        """
+ruleset_id: trace_ruleset
+ruleset_name: Trace Ruleset
+version: "1"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: r1
+    rule_name: Nested Rule
+    rule_order: 1
+    when:
+      all:
+        - left: {field: account}
+          operator: eq
+          right: {literal: A}
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - any:
+            - left: {field: amount}
+              operator: gt
+              right: {literal: 100}
+              null_input_mode: propagate
+              null_result_mode: "null"
+            - left: {field: status}
+              operator: eq
+              right: {literal: OPEN}
+              null_input_mode: propagate
+              null_result_mode: "null"
+    assign:
+      bucket: matched
+"""
+    )
+
+    rows = service.describe_rules(ruleset_name="Trace Ruleset", version="1")
+
+    assert rows == [
+        {
+            "rule_id": "r1",
+            "rule_name": "Nested Rule",
+            "rule_logic": "account == 'A' AND (amount > 100 OR status == 'OPEN')",
+            "match_payload": "bucket = 'matched'",
+        }
+    ]
+
+
+def test_service_describe_rules_requires_ruleset_or_name():
+    """
+    What: Rejects describe calls without a ruleset or ruleset name.
+    Why: The helper should fail clearly like evaluate_dataframe.
+    Fails when: describe_rules accepts ambiguous input.
+    """
+    service = _service()
+
+    with pytest.raises(ValueError, match="ruleset or ruleset_name"):
+        service.describe_rules()
+
+
 def test_service_publish_accepts_compiled_ruleset():
     """
     What: Publishes an already compiled ruleset through the facade.
