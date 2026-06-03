@@ -100,7 +100,8 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert json.loads(rows[0]["rules_engine_assign"]) == {"bucket": "matched"}
     rule_results = json.loads(rows[0]["rules_engine_rule_results"])
     assert rule_results[0]["rule_id"] == "r1"
-    assert rule_results[0]["conditions"][0]["left"]["columns"] == ["account"]
+    assert rule_results[0]["conditions"][0]["columns"] == ["account"]
+    assert rule_results[0]["conditions"][0]["left"]["column"] == "account"
     assert rule_results[0]["conditions"][0]["left"]["value"] == "A"
     assert rows[1]["rules_engine_matched"] is False
 

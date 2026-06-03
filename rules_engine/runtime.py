@@ -27,6 +27,7 @@ from rules_engine.enums import (
     LogicalOperator,
     NullInputMode,
     NullResultMode,
+    OperandKind,
 )
 from rules_engine.models import (
     AggregateOperand,
@@ -309,37 +310,164 @@ class RulesEngineRuntime:
         """
         Convert one rule trace to the runtime result payload.
         """
-        return {
+        payload: dict[str, Any] = {
             "rule_id": trace.rule_id,
             "rule_name": trace.rule_name,
-            "rule_order": trace.rule_order,
             "matched": trace.matched,
-            "assignments_applied": list(trace.assignments_applied),
             "conditions": [
                 self._condition_trace_payload(condition_trace)
                 for condition_trace in trace.condition_traces
             ],
         }
+        if trace.assignments_applied:
+            payload["assignments_applied"] = list(trace.assignments_applied)
+        return payload
 
     def _condition_trace_payload(self, trace: ResolvedConditionTrace) -> dict[str, Any]:
         """
-        Convert one condition trace to a JSON-safe result payload.
+        Convert one condition trace to the compact audit result payload.
         """
-        return {
-            "condition_id": trace.condition_id,
-            "condition_group_id": trace.condition_group_id,
-            "condition_group_operator": trace.condition_group_operator,
-            "active_flag": trace.active_flag,
+        left = self._operand_trace_payload(trace.left)
+        right = self._operand_trace_payload(trace.right)
+        columns = self._unique_strings(
+            [
+                *self._trace_columns(trace.left),
+                *self._trace_columns(trace.right),
+            ]
+        )
+        payload: dict[str, Any] = {
+            "left": left,
             "operator": trace.operator,
-            "tolerance_abs": trace.tolerance_abs,
-            "null_input_mode": trace.null_input_mode,
-            "null_result_mode": trace.null_result_mode,
-            "null_default_value": trace.null_default_value,
-            "left": dict(trace.left) if trace.left is not None else None,
-            "right": dict(trace.right) if trace.right is not None else None,
             "comparison_result": trace.comparison_result,
             "passed": trace.passed,
         }
+        self._add_present(payload, "columns", columns)
+        if right is not None:
+            payload["right"] = right
+        if trace.tolerance_abs not in (None, "0"):
+            payload["tolerance_abs"] = trace.tolerance_abs
+        if trace.null_input_mode not in (None, NullInputMode.PROPAGATE.value):
+            payload["null_input_mode"] = trace.null_input_mode
+        if trace.null_result_mode not in (None, NullResultMode.NULL.value):
+            payload["null_result_mode"] = trace.null_result_mode
+        if trace.null_default_value is not None:
+            payload["null_default_value"] = trace.null_default_value
+        return payload
+
+    def _operand_trace_payload(self, trace: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        """
+        Convert an operand trace to compact audit fields.
+        """
+        if trace is None:
+            return None
+        kind = trace.get("kind")
+        if kind == OperandKind.FIELD.value:
+            payload = {
+                "kind": kind,
+                "column": trace.get("field_name"),
+            }
+            if "value" in trace:
+                payload["value"] = trace["value"]
+            return payload
+        if kind == OperandKind.LITERAL.value:
+            payload = {
+                "kind": kind,
+                "value": trace.get("value"),
+            }
+            if trace.get("value_type") is not None:
+                payload["value_type"] = trace["value_type"]
+            return payload
+        if kind == OperandKind.AGGREGATE.value:
+            payload = {
+                "kind": kind,
+                "function": trace.get("function"),
+                "scope": trace.get("scope"),
+                "source_columns": list(trace.get("columns", [])),
+            }
+            self._add_present(payload, "group_key", trace.get("group_key"))
+            self._add_present(payload, "arguments", trace.get("args"))
+            self._add_present(payload, "filter", self._aggregate_filter_trace_payload(trace.get("filter")))
+            self._add_present(payload, "order_by", trace.get("order_by"))
+            if "value" in trace:
+                payload["value"] = trace["value"]
+            if trace.get("null_input_mode") not in (None, NullInputMode.IGNORE.value):
+                payload["null_input_mode"] = trace["null_input_mode"]
+            if trace.get("null_result_mode") not in (None, NullResultMode.NULL.value):
+                payload["null_result_mode"] = trace["null_result_mode"]
+            self._add_present(payload, "null_default_value", trace.get("null_default_value"))
+            return payload
+        if kind == OperandKind.CUSTOM_FUNCTION.value:
+            payload = {
+                "kind": kind,
+                "function_name": trace.get("function_name"),
+            }
+            self._add_present(
+                payload,
+                "args",
+                {
+                    str(key): self._operand_trace_payload(value)
+                    for key, value in dict(trace.get("args", {})).items()
+                },
+            )
+            self._add_present(payload, "source_columns", trace.get("columns"))
+            if "value" in trace:
+                payload["value"] = trace["value"]
+            return payload
+        payload = {"kind": kind}
+        if "value" in trace:
+            payload["value"] = trace["value"]
+        return payload
+
+    def _aggregate_filter_trace_payload(self, trace: Any) -> dict[str, Any] | None:
+        """
+        Convert aggregate-filter metadata to compact audit fields.
+        """
+        if not trace:
+            return None
+        return {
+            "logical_operator": trace["logical_operator"],
+            "predicates": [
+                self._filter_predicate_trace_payload(predicate)
+                for predicate in trace["predicates"]
+            ],
+        }
+
+    def _filter_predicate_trace_payload(self, trace: Mapping[str, Any]) -> dict[str, Any]:
+        """
+        Convert one aggregate-filter predicate to compact audit fields.
+        """
+        payload: dict[str, Any] = {
+            "columns": list(trace.get("columns", [])),
+            "left": self._operand_trace_payload(trace.get("left")),
+            "operator": trace.get("operator"),
+        }
+        right = self._operand_trace_payload(trace.get("right"))
+        if right is not None:
+            payload["right"] = right
+        if trace.get("tolerance_abs") not in (None, "0"):
+            payload["tolerance_abs"] = trace["tolerance_abs"]
+        if trace.get("null_input_mode") not in (None, NullInputMode.PROPAGATE.value):
+            payload["null_input_mode"] = trace["null_input_mode"]
+        if trace.get("null_result_mode") not in (None, NullResultMode.NULL.value):
+            payload["null_result_mode"] = trace["null_result_mode"]
+        self._add_present(payload, "null_default_value", trace.get("null_default_value"))
+        return payload
+
+    def _trace_columns(self, trace: Mapping[str, Any] | None) -> list[str]:
+        """
+        Return source columns from an operand trace.
+        """
+        if trace is None:
+            return []
+        return list(trace.get("columns", []))
+
+    def _add_present(self, payload: dict[str, Any], key: str, value: Any) -> None:
+        """
+        Add non-empty values to a compact trace payload.
+        """
+        if value in (None, {}, []):
+            return
+        payload[key] = value
 
     def _condition_trace(
         self,

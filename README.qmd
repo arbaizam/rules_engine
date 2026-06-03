@@ -800,27 +800,20 @@ Output rows have this shape:
         {
             "rule_id": "high_value_account",
             "rule_name": "High Value Account",
-            "rule_order": 1,
             "matched": True,
             "assignments_applied": ["review_bucket"],
             "conditions": [
                 {
-                    "condition_id": "cg:high_value_account:root:c1",
-                    "condition_group_id": "cg:high_value_account:root",
-                    "condition_group_operator": "all",
-                    "operator": "gt",
+                    "columns": ["amount"],
                     "left": {
                         "kind": "field",
-                        "columns": ["amount"],
-                        "field_name": "amount",
+                        "column": "amount",
                         "value": 100,
-                        "evaluated": True,
                     },
+                    "operator": "gt",
                     "right": {
                         "kind": "literal",
-                        "columns": [],
                         "value": 50,
-                        "evaluated": True,
                     },
                     "comparison_result": True,
                     "passed": True,
@@ -864,9 +857,9 @@ rules_engine_error
 ```
 
 `rules_engine_assign` and `rules_engine_rule_results` are JSON strings.
-`rules_engine_rule_results` contains the same per-rule, per-condition trace
-payload emitted by the pure-Python runtime, including evaluated operand columns
-and values.
+`rules_engine_rule_results` contains compact per-rule, per-condition audit
+payloads with source columns, evaluated operand values, comparison result, and
+final pass/fail state.
 
 Spark evaluation strategy:
 

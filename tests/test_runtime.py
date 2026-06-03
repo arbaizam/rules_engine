@@ -97,21 +97,24 @@ def test_runtime_rule_results_include_condition_trace_values():
     assert rule_result["rule_name"] == "Rule 1"
     assert rule_result["matched"] is True
     assert rule_result["assignments_applied"] == ["bucket"]
-    assert condition_result["condition_id"] == traces[0].condition_traces[0].condition_id
+    assert traces[0].condition_traces[0].condition_id is not None
+    assert "condition_id" not in condition_result
+    assert "condition_group_id" not in condition_result
+    assert "condition_group_operator" not in condition_result
+    assert "active_flag" not in condition_result
+    assert "evaluated" not in condition_result["left"]
+    assert "rule_order" not in rule_result
+    assert condition_result["columns"] == ["account"]
     assert condition_result["operator"] == "eq"
     assert condition_result["left"] == {
         "kind": "field",
-        "columns": ["account"],
-        "field_name": "account",
+        "column": "account",
         "value": "A",
-        "evaluated": True,
     }
     assert condition_result["right"] == {
         "kind": "literal",
-        "columns": [],
         "value": "A",
         "value_type": "string",
-        "evaluated": True,
     }
     assert condition_result["comparison_result"] is True
     assert condition_result["passed"] is True
@@ -154,11 +157,9 @@ def test_runtime_rule_results_include_aggregate_trace_values():
 
     aggregate_trace = output[0]["rule_results"][0]["conditions"][0]["left"]
     assert aggregate_trace["kind"] == "aggregate"
-    assert aggregate_trace["columns"] == ["amount", "account"]
+    assert aggregate_trace["source_columns"] == ["amount", "account"]
     assert aggregate_trace["function"] == "sum"
-    assert aggregate_trace["field_name"] == "amount"
     assert aggregate_trace["scope"] == "group"
-    assert aggregate_trace["by"] == ["account"]
     assert aggregate_trace["group_key"] == {"account": "A"}
     assert aggregate_trace["value"] == 30
 
@@ -200,10 +201,10 @@ def test_runtime_rule_results_include_custom_function_arg_trace_values():
     function_trace = output[0]["rule_results"][0]["conditions"][0]["left"]
     assert function_trace["kind"] == "custom_function"
     assert function_trace["function_name"] == "score"
-    assert function_trace["columns"] == ["amount"]
+    assert function_trace["source_columns"] == ["amount"]
     assert function_trace["value"] == 5
     assert function_trace["args"]["x"]["value"] == 2
-    assert function_trace["args"]["x"]["columns"] == ["amount"]
+    assert function_trace["args"]["x"]["column"] == "amount"
     assert function_trace["args"]["y"]["value"] == 3
 
 
@@ -233,7 +234,8 @@ def test_spark_row_evaluator_serializes_enriched_rule_results():
     assert result["matched"] is True
     assert rule_results[0]["rule_id"] == "r1"
     assert rule_results[0]["matched"] is True
-    assert rule_results[0]["conditions"][0]["left"]["columns"] == ["account"]
+    assert rule_results[0]["conditions"][0]["columns"] == ["account"]
+    assert rule_results[0]["conditions"][0]["left"]["column"] == "account"
     assert rule_results[0]["conditions"][0]["left"]["value"] == "A"
 
 

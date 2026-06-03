@@ -505,8 +505,8 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_matched_rule_ids`: ordered list of matched rule IDs.
 # MAGIC - `rules_engine_assign`: JSON object containing assignments from matched
 # MAGIC   rules, or null when no rule matched.
-# MAGIC - `rules_engine_rule_results`: JSON array of per-rule traces with
-# MAGIC   condition-level operand columns, evaluated values, and pass/fail state.
+# MAGIC - `rules_engine_rule_results`: compact JSON array of per-rule traces with
+# MAGIC   condition-level source columns, evaluated values, and pass/fail state.
 # MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
 # MAGIC
 # MAGIC In production, avoid collecting large DataFrames. Use aggregations,
