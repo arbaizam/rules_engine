@@ -2599,6 +2599,352 @@ assert published_rows[0]["assignment_count"] == 1
 print("PASS: Setup and publish verification checks fail fast and prove metadata is usable.")
 
 # COMMAND ----------
+print("ST-051: Spark runtime emits condition-level traceability values")
+print("-" * 80)
+print("Area: Runtime Spark")
+print("Priority: Critical")
+print("Owner Role: Engineering")
+print("Expected Result: rule_results and winning_rule expose source columns, evaluated operand values, comparison results, and readable winning-rule output.")
+print("")
+
+from datetime import datetime, timezone
+import json
+
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+yaml_text = f"""
+ruleset_id: st_051_{stamp}
+ruleset_name: ST-051 Traceability Ruleset
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: trace_rule
+    rule_name: Traceability Rule
+    rule_order: 1
+    when:
+      all:
+        - condition_id: c_group_sum
+          left:
+            aggregate:
+              function: sum
+              field: amount
+              scope: group
+              by: [account]
+              null_input_mode: ignore
+              null_result_mode: "null"
+          operator: gt
+          right:
+            literal: 15
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - condition_id: c_upper
+          left:
+            custom_function:
+              name: upper
+              args:
+                value:
+                  field: account
+          operator: eq
+          right:
+            literal: A
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - condition_id: c_status
+          left:
+            field: status
+          operator: eq
+          right:
+            literal: open
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      bucket: traced
+"""
+ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
+df = spark.createDataFrame(
+    [
+        {"record_id": "r1", "account": "a", "amount": 10, "status": "open"},
+        {"record_id": "r2", "account": "a", "amount": 20, "status": "closed"},
+        {"record_id": "r3", "account": "b", "amount": 5, "status": "open"},
+    ]
+)
+result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
+rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
+
+matched_row = rows["r1"]
+rule_results = json.loads(matched_row["rules_engine_rule_results"])
+winning_rule = json.loads(matched_row["rules_engine_winning_rule"])
+trace_rule = rule_results[0]
+conditions = trace_rule["conditions"]
+
+assert matched_row["rules_engine_matched"] is True
+assert matched_row["rules_engine_matched_rule_ids"] == ["trace_rule"]
+assert json.loads(matched_row["rules_engine_assign"]) == {"bucket": "traced"}
+assert matched_row["rules_engine_winning_rule_id"] == "trace_rule"
+assert matched_row["rules_engine_winning_rule_name"] == "Traceability Rule"
+assert matched_row["rules_engine_winning_rule_explanation"] == (
+    "sum(amount) for account=a=30 > 15 AND "
+    "upper(value=account=a)=A == A AND "
+    "status=open == open"
+)
+assert winning_rule == trace_rule
+assert trace_rule["rule_id"] == "trace_rule"
+assert trace_rule["rule_name"] == "Traceability Rule"
+assert trace_rule["matched"] is True
+assert trace_rule["assignments_applied"] == ["bucket"]
+
+aggregate_condition = conditions[0]
+assert aggregate_condition["columns"] == ["amount", "account"]
+assert aggregate_condition["operator"] == "gt"
+assert aggregate_condition["comparison_result"] is True
+assert aggregate_condition["passed"] is True
+assert aggregate_condition["left"]["kind"] == "aggregate"
+assert aggregate_condition["left"]["function"] == "sum"
+assert aggregate_condition["left"]["scope"] == "group"
+assert aggregate_condition["left"]["source_columns"] == ["amount", "account"]
+assert aggregate_condition["left"]["group_key"] == {"account": "a"}
+assert aggregate_condition["left"]["value"] == 30
+assert aggregate_condition["right"] == {"kind": "literal", "value": 15}
+
+function_condition = conditions[1]
+assert function_condition["columns"] == ["account"]
+assert function_condition["operator"] == "eq"
+assert function_condition["comparison_result"] is True
+assert function_condition["passed"] is True
+assert function_condition["left"]["kind"] == "custom_function"
+assert function_condition["left"]["function_name"] == "upper"
+assert function_condition["left"]["source_columns"] == ["account"]
+assert function_condition["left"]["args"]["value"]["column"] == "account"
+assert function_condition["left"]["args"]["value"]["value"] == "a"
+assert function_condition["left"]["value"] == "A"
+assert function_condition["right"] == {"kind": "literal", "value": "A"}
+
+field_condition = conditions[2]
+assert field_condition["columns"] == ["status"]
+assert field_condition["left"] == {"kind": "field", "column": "status", "value": "open"}
+assert field_condition["right"] == {"kind": "literal", "value": "open"}
+assert field_condition["comparison_result"] is True
+assert field_condition["passed"] is True
+
+assert rows["r2"]["rules_engine_matched"] is False
+assert rows["r2"]["rules_engine_winning_rule"] is None
+assert rows["r2"]["rules_engine_winning_rule_explanation"] is None
+assert rows["r3"]["rules_engine_matched"] is False
+assert rows["r3"]["rules_engine_winning_rule"] is None
+assert rows["r3"]["rules_engine_winning_rule_explanation"] is None
+
+display(result)
+print("PASS: Spark runtime traceability payloads included useful evaluated condition details.")
+
+# COMMAND ----------
+print("ST-052: Service describes published rules in human-readable form")
+print("-" * 80)
+print("Area: Auditability")
+print("Priority: High")
+print("Owner Role: Engineering")
+print("Expected Result: describe_rules returns one readable row per rule with rule logic and match payload details.")
+print("")
+
+from datetime import datetime, timezone
+
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+yaml_text = f"""
+ruleset_id: st_052_{stamp}
+ruleset_name: ST-052 Human Readable Ruleset
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: r1560
+    rule_name: A Rule
+    rule_order: 1
+    when:
+      all:
+        - condition_id: c_account
+          left:
+            field: BK_AccountID
+          operator: eq
+          right:
+            literal: DN
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - any:
+            - condition_id: c_amount
+              left:
+                field: amount
+              operator: gt
+              right:
+                literal: 100
+              null_input_mode: propagate
+              null_result_mode: "null"
+            - condition_id: c_status
+              left:
+                field: status
+              operator: eq
+              right:
+                literal: REVIEW
+              null_input_mode: propagate
+              null_result_mode: "null"
+    assign:
+      leaf_key: "15656"
+  - rule_id: aggregate_review
+    rule_name: Aggregate Review
+    rule_order: 2
+    when:
+      all:
+        - condition_id: c_sum
+          left:
+            aggregate:
+              function: sum
+              field: amount
+              scope: group
+              by: [BK_AccountID]
+              null_input_mode: ignore
+              null_result_mode: "null"
+          operator: gt
+          right:
+            literal: 100
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - condition_id: c_upper_status
+          left:
+            custom_function:
+              name: upper
+              args:
+                value:
+                  field: status
+          operator: eq
+          right:
+            literal: REVIEW
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      route: REVIEW
+"""
+ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
+
+described_rows = service.describe_rules(
+    ruleset_name=ruleset.ruleset_name,
+    version=ruleset.version,
+)
+
+expected_rows = [
+    {
+        "rule_id": "r1560",
+        "rule_name": "A Rule",
+        "rule_logic": "BK_AccountID == 'DN' AND (amount > 100 OR status == 'REVIEW')",
+        "match_payload": "leaf_key = '15656'",
+    },
+    {
+        "rule_id": "aggregate_review",
+        "rule_name": "Aggregate Review",
+        "rule_logic": (
+            "sum(amount) by BK_AccountID > 100 AND "
+            "upper(value=status) == 'REVIEW'"
+        ),
+        "match_payload": "route = 'REVIEW'",
+    },
+]
+
+assert described_rows == expected_rows
+display(spark.createDataFrame(described_rows))
+print("PASS: Service-level human-readable rule descriptions matched expected audit rows.")
+
+# COMMAND ----------
+print("ST-053: Spark runtime preserves legacy output columns")
+print("-" * 80)
+print("Area: Runtime Spark")
+print("Priority: Critical")
+print("Owner Role: Engineering")
+print("Expected Result: Output columns that existed before winning-rule traceability remain present and populated with the same semantics.")
+print("")
+
+from datetime import datetime, timezone
+import json
+
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+yaml_text = f"""
+ruleset_id: st_053_{stamp}
+ruleset_name: ST-053 Legacy Output Columns Ruleset
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: legacy_rule
+    rule_name: Legacy Output Rule
+    rule_order: 1
+    when:
+      all:
+        - condition_id: c_account
+          left:
+            field: account
+          operator: eq
+          right:
+            literal: A
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      bucket: legacy_a
+"""
+ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
+df = spark.createDataFrame(
+    [
+        {"record_id": "r1", "account": "A", "amount": 10},
+        {"record_id": "r2", "account": "B", "amount": 20},
+    ]
+)
+result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
+rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
+
+previous_input_columns = {"record_id", "account", "amount"}
+previous_output_columns = {
+    "rules_engine_matched",
+    "rules_engine_matched_rule_ids",
+    "rules_engine_assign",
+    "rules_engine_rule_results",
+    "rules_engine_error",
+}
+missing_columns = (previous_input_columns | previous_output_columns) - set(result.columns)
+assert not missing_columns, f"Missing previously available columns: {sorted(missing_columns)}"
+
+matched = rows["r1"]
+unmatched = rows["r2"]
+
+assert matched["record_id"] == "r1"
+assert matched["account"] == "A"
+assert matched["amount"] == 10
+assert matched["rules_engine_matched"] is True
+assert matched["rules_engine_matched_rule_ids"] == ["legacy_rule"]
+assert json.loads(matched["rules_engine_assign"]) == {"bucket": "legacy_a"}
+matched_rule_results = json.loads(matched["rules_engine_rule_results"])
+assert matched_rule_results[0]["rule_id"] == "legacy_rule"
+assert matched_rule_results[0]["matched"] is True
+assert matched["rules_engine_error"] is None
+
+assert unmatched["record_id"] == "r2"
+assert unmatched["account"] == "B"
+assert unmatched["amount"] == 20
+assert unmatched["rules_engine_matched"] is False
+assert unmatched["rules_engine_matched_rule_ids"] == []
+assert unmatched["rules_engine_assign"] is None
+unmatched_rule_results = json.loads(unmatched["rules_engine_rule_results"])
+assert unmatched_rule_results[0]["rule_id"] == "legacy_rule"
+assert unmatched_rule_results[0]["matched"] is False
+assert unmatched["rules_engine_error"] is None
+
+display(result)
+print("PASS: Previously available Spark runtime input and output columns remain present and usable.")
+
+# COMMAND ----------
 print("Run automated unit test suite")
 print("-" * 80)
 print("Purpose: Execute the repository pytest suite.")
