@@ -1,7 +1,7 @@
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.registry import FunctionRegistry
-from rules_engine.runtime import RulesEngineRuntime
+from rules_engine.spark_runtime import SparkRulesEngineRuntime
 from rules_engine.standard_functions import (
     register_standard_functions,
     standard_function_rows,
@@ -13,6 +13,14 @@ from rules_engine.validator import RulesetValidator
 class DummyRepository:
     def load_published(self, ruleset_name, version=None):
         raise NotImplementedError
+
+
+class FakeSparkRow:
+    def __init__(self, data):
+        self._data = data
+
+    def asDict(self, recursive=True):
+        return self._data
 
 
 def test_substring_uses_sql_style_start_position():
@@ -81,15 +89,20 @@ def test_standard_functions_can_be_registered_for_runtime_field_args():
 
     validation = RulesetValidator(registry).validate(ruleset)
     row = DeltaRowSerializer().serialize_ruleset_version(ruleset)
-    output, _ = RulesEngineRuntime(DummyRepository(), registry).evaluate(
-        [{"account_code": "ABCDE"}],
+    evaluator = SparkRulesEngineRuntime(
+        DummyRepository(),
+        registry,
+    )._build_row_evaluator(
         ruleset,
+        ["account_prefix"],
+        {"account_prefix"},
     )
+    output = evaluator(FakeSparkRow({"account_code": "ABCDE"}))
 
     assert validation.passed
     assert '"field":"account_code"' in row.payload_json
-    assert output[0]["matched"] is True
-    assert output[0]["assign"] == {"account_prefix": "AB"}
+    assert output["matched"] is True
+    assert output["assign"] == {"account_prefix": "AB"}
 
 
 def test_standard_function_rows_expose_registry_metadata():

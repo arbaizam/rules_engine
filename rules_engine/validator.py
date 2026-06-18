@@ -12,10 +12,7 @@ from decimal import Decimal
 from typing import Any
 
 from rules_engine.enums import (
-    AggregateFunction,
-    AggregateScope,
     COLLECTION_LITERAL_OPERATORS,
-    ORDER_SENSITIVE_AGGREGATES,
     UNARY_OPERATORS,
     ComparisonOperator,
     NullResultMode,
@@ -23,7 +20,6 @@ from rules_engine.enums import (
     ValidationSeverity,
 )
 from rules_engine.models import (
-    AggregateOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -31,7 +27,6 @@ from rules_engine.models import (
     FieldOperand,
     LiteralOperand,
     Operand,
-    RowFilterPredicate,
     Rule,
     Ruleset,
     ValidationResult,
@@ -353,8 +348,6 @@ class RulesetValidator:
                 )
         elif isinstance(operand, LiteralOperand):
             return
-        elif isinstance(operand, AggregateOperand):
-            self._validate_aggregate(operand, result, object_id, in_assignment=in_assignment)
         elif isinstance(operand, CustomFunctionOperand):
             self._validate_custom_function(operand, result, object_id, in_assignment=in_assignment)
         else:
@@ -365,154 +358,6 @@ class RulesetValidator:
                 object_type,
                 object_id,
             )
-
-    def _validate_aggregate(
-        self,
-        operand: AggregateOperand,
-        result: ValidationResult,
-        object_id: str,
-        *,
-        in_assignment: bool,
-    ) -> None:
-        """
-        Validate aggregate scope, args, ordering, null behavior, and filters.
-        """
-        if in_assignment:
-            self._add(
-                result,
-                "AGGREGATE_ASSIGNMENT_FORBIDDEN",
-                "Aggregate operands are not allowed in assignments in v1.",
-                ObjectType.ASSIGNMENT,
-                object_id,
-            )
-        if not operand.field_name:
-            self._add(
-                result,
-                "AGGREGATE_FIELD_REQUIRED",
-                "Aggregate field_name is required.",
-                ObjectType.CONDITION,
-                object_id,
-            )
-        if operand.scope is AggregateScope.GROUP and not operand.by:
-            self._add(
-                result,
-                "AGGREGATE_GROUP_BY_REQUIRED",
-                "scope=group requires non-empty by.",
-                ObjectType.CONDITION,
-                object_id,
-            )
-        if operand.scope is AggregateScope.DATASET and operand.by:
-            self._add(
-                result,
-                "AGGREGATE_DATASET_BY_FORBIDDEN",
-                "scope=dataset forbids by.",
-                ObjectType.CONDITION,
-                object_id,
-            )
-        if operand.function is AggregateFunction.QUANTILE:
-            q = operand.args.get("q")
-            if not self._valid_quantile(q):
-                self._add(
-                    result,
-                    "QUANTILE_Q_REQUIRED",
-                    "quantile requires args.q within [0, 1].",
-                    ObjectType.CONDITION,
-                    object_id,
-                )
-        if operand.function in ORDER_SENSITIVE_AGGREGATES and not operand.order_by:
-            self._add(
-                result,
-                "AGGREGATE_ORDER_BY_REQUIRED",
-                f"Aggregate {operand.function.value} requires explicit order_by.",
-                ObjectType.CONDITION,
-                object_id,
-            )
-        for order in operand.order_by:
-            if not order.field:
-                self._add(
-                    result,
-                    "ORDER_BY_FIELD_REQUIRED",
-                    "order_by field is required.",
-                    ObjectType.CONDITION,
-                    object_id,
-                )
-            if order.direction not in {"asc", "desc"}:
-                self._add(
-                    result,
-                    "ORDER_BY_DIRECTION_INVALID",
-                    "order_by direction must be asc or desc.",
-                    ObjectType.CONDITION,
-                    object_id,
-                )
-        if operand.null_result_mode is NullResultMode.DEFAULT and operand.null_default_value is None:
-            self._add(
-                result,
-                "AGGREGATE_NULL_DEFAULT_REQUIRED",
-                "Aggregate null_default_value is required when null_result_mode is default.",
-                ObjectType.CONDITION,
-                object_id,
-            )
-        if operand.filter is not None:
-            if not operand.filter.predicates:
-                self._add(
-                    result,
-                    "AGGREGATE_FILTER_EMPTY",
-                    "Aggregate filter must contain at least one predicate.",
-                    ObjectType.CONDITION,
-                    object_id,
-                )
-            for predicate in operand.filter.predicates:
-                self._validate_row_filter_predicate(predicate, result, object_id)
-
-    def _validate_row_filter_predicate(
-        self,
-        predicate: RowFilterPredicate,
-        result: ValidationResult,
-        object_id: str,
-    ) -> None:
-        """
-        Validate one row-level predicate inside an aggregate filter.
-        """
-        if predicate.tolerance_abs < Decimal("0"):
-            self._add(
-                result,
-                "FILTER_TOLERANCE_NEGATIVE",
-                "Filtered aggregate tolerance_abs must be non-negative.",
-                ObjectType.CONDITION,
-                object_id,
-            )
-        if predicate.null_result_mode is NullResultMode.DEFAULT and predicate.null_default_value is None:
-            self._add(
-                result,
-                "FILTER_NULL_DEFAULT_REQUIRED",
-                "Filtered aggregate null_default_value is required when null_result_mode is default.",
-                ObjectType.CONDITION,
-                object_id,
-            )
-        for side_name, operand in (("left", predicate.left), ("right", predicate.right)):
-            if operand is None:
-                continue
-            if isinstance(operand, AggregateOperand):
-                self._add(
-                    result,
-                    "NESTED_AGGREGATE_FORBIDDEN",
-                    f"Aggregate filter {side_name} operand must be row-level.",
-                    ObjectType.CONDITION,
-                    object_id,
-                )
-            else:
-                self._validate_operand(operand, result, object_id, in_assignment=False)
-        pseudo_condition = Condition(
-            condition_id=object_id,
-            left=predicate.left,
-            operator=predicate.operator,
-            right=predicate.right,
-            tolerance_abs=predicate.tolerance_abs,
-            null_input_mode=predicate.null_input_mode,
-            null_result_mode=predicate.null_result_mode,
-            null_default_value=predicate.null_default_value,
-        )
-        self._validate_operator_operands(pseudo_condition, result)
 
     def _validate_custom_function(
         self,
@@ -593,18 +438,6 @@ class RulesetValidator:
                     f"{object_id}.{operand.function_name}.{arg_name}",
                     in_assignment=in_assignment,
                 )
-
-    def _valid_quantile(self, value: Any) -> bool:
-        """
-        Return whether a quantile argument is numeric and inside [0, 1].
-        """
-        if value is None:
-            return False
-        try:
-            numeric = Decimal(str(value))
-        except Exception:
-            return False
-        return Decimal("0") <= numeric <= Decimal("1")
 
     def _add(
         self,

@@ -1,13 +1,9 @@
 """
-Runtime facade and pure-Python evaluator.
-
-The evaluator operates on the incoming row set exactly as provided. It does
-not deduplicate, reshape, filter globally, or retain cross-run state.
+Worker-side row evaluation helpers for the Spark runtime.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -16,13 +12,9 @@ from enum import Enum
 import json
 import logging
 import re
-from statistics import mean, median, pstdev, pvariance
 from typing import Any, Iterable, Mapping
 
-from rules_engine.aggregate_key import aggregate_key
 from rules_engine.enums import (
-    AggregateFunction,
-    AggregateScope,
     ComparisonOperator,
     LogicalOperator,
     NullInputMode,
@@ -30,7 +22,6 @@ from rules_engine.enums import (
     OperandKind,
 )
 from rules_engine.models import (
-    AggregateOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -39,7 +30,6 @@ from rules_engine.models import (
     LiteralOperand,
     Operand,
     ResolvedConditionTrace,
-    RowFilterPredicate,
     Rule,
     RuleExecutionTrace,
     Ruleset,
@@ -59,9 +49,9 @@ class OperandResolution:
     trace: dict[str, Any]
 
 
-class RulesEngineRuntime:
+class SparkRowEvaluator:
     """
-    Runtime facade for published ruleset metadata.
+    Row-level evaluator reused inside Spark worker UDFs.
     """
 
     def __init__(self, repository: RulesetRepository, function_registry: FunctionRegistry) -> None:
@@ -77,97 +67,10 @@ class RulesEngineRuntime:
         """
         return self._repository.load_published(ruleset_name, version)
 
-    def evaluate(
-        self,
-        rows: Iterable[Mapping[str, Any]],
-        ruleset: Ruleset,
-    ) -> tuple[list[dict[str, Any]], list[RuleExecutionTrace]]:
-        """
-        Evaluate rows against a published ruleset.
-
-        Parameters
-        ----------
-        rows : Iterable[Mapping[str, Any]]
-            Incoming row set. Aggregates operate on this materialized row set
-            exactly as supplied.
-        ruleset : Ruleset
-            Ruleset metadata to evaluate.
-
-        Returns
-        -------
-        tuple[list[dict[str, Any]], list[RuleExecutionTrace]]
-            Output rows and flattened rule execution traces.
-        """
-        materialized_rows = [dict(row) for row in rows]
-        logger.info(
-            "Evaluating ruleset in Python runtime: ruleset_id=%s ruleset_name=%s version=%s row_count=%s rule_count=%s",
-            ruleset.ruleset_id,
-            ruleset.ruleset_name,
-            ruleset.version,
-            len(materialized_rows),
-            len(ruleset.rules),
-        )
-        aggregate_cache = AggregateContext(materialized_rows, self)
-        output_rows: list[dict[str, Any]] = []
-        traces: list[RuleExecutionTrace] = []
-
-        active_rules = sorted(
-            (rule for rule in ruleset.rules if rule.active_flag),
-            key=lambda item: item.rule_order,
-        )
-        for row_index, row in enumerate(materialized_rows):
-            matched_rule_ids: list[str] = []
-            assignments: dict[str, Any] = {}
-            rule_results: list[dict[str, Any]] = []
-            for rule in active_rules:
-                matched, condition_traces = self._evaluate_rule(
-                    rule,
-                    row,
-                    row_index,
-                    aggregate_cache,
-                )
-                traces.append(
-                    trace := self._rule_execution_trace(rule, matched, condition_traces)
-                )
-                rule_results.append(self._rule_trace_payload(trace))
-                if matched:
-                    matched_rule_ids.append(rule.rule_id)
-                    assignments.update(
-                        self._evaluate_assignments(rule.assignments, row, row_index, aggregate_cache)
-                    )
-                    if rule.stop_on_match:
-                        break
-
-            winning_rule = self._winning_rule_payload(rule_results)
-            output_rows.append(
-                {
-                    "row": row,
-                    "matched": bool(matched_rule_ids),
-                    "matched_rule_ids": matched_rule_ids,
-                    "assign": assignments if assignments else None,
-                    "rule_results": rule_results,
-                    "winning_rule": winning_rule,
-                    "winning_rule_id": winning_rule.get("rule_id") if winning_rule else None,
-                    "winning_rule_name": winning_rule.get("rule_name") if winning_rule else None,
-                    "winning_rule_explanation": self._winning_rule_explanation(winning_rule),
-                }
-            )
-        matched_count = sum(1 for row in output_rows if row["matched"])
-        logger.info(
-            "Python runtime evaluation complete: ruleset_id=%s version=%s row_count=%s matched_count=%s",
-            ruleset.ruleset_id,
-            ruleset.version,
-            len(output_rows),
-            matched_count,
-        )
-        return output_rows, traces
-
     def _evaluate_rule(
         self,
         rule: Rule,
         row: Mapping[str, Any],
-        row_index: int,
-        aggregate_cache: "AggregateContext",
     ) -> tuple[bool, list[ResolvedConditionTrace]]:
         """
         Evaluate one rule against one row and collect condition traces.
@@ -176,8 +79,6 @@ class RulesEngineRuntime:
         matched = self._evaluate_group(
             rule.root_group,
             row,
-            row_index,
-            aggregate_cache,
             condition_traces,
         )
         return matched, condition_traces
@@ -186,8 +87,6 @@ class RulesEngineRuntime:
         self,
         group: ConditionGroup,
         row: Mapping[str, Any],
-        row_index: int,
-        aggregate_cache: "AggregateContext",
         condition_traces: list[ResolvedConditionTrace],
     ) -> bool:
         """
@@ -199,8 +98,6 @@ class RulesEngineRuntime:
                 condition,
                 group,
                 row,
-                row_index,
-                aggregate_cache,
             )
             condition_traces.append(condition_trace)
             results.append(condition_trace.passed)
@@ -209,8 +106,6 @@ class RulesEngineRuntime:
                 self._evaluate_group(
                     nested_group,
                     row,
-                    row_index,
-                    aggregate_cache,
                     condition_traces,
                 )
             )
@@ -223,8 +118,6 @@ class RulesEngineRuntime:
         condition: Condition,
         group: ConditionGroup,
         row: Mapping[str, Any],
-        row_index: int,
-        aggregate_cache: "AggregateContext",
     ) -> ResolvedConditionTrace:
         """
         Evaluate one active condition after resolving its operands.
@@ -242,9 +135,9 @@ class RulesEngineRuntime:
                 ),
                 comparison_result=None,
             )
-        left = self._resolve_operand_resolution(condition.left, row, row_index, aggregate_cache)
+        left = self._resolve_operand_resolution(condition.left, row)
         right = (
-            self._resolve_operand_resolution(condition.right, row, row_index, aggregate_cache)
+            self._resolve_operand_resolution(condition.right, row)
             if condition.right is not None
             else None
         )
@@ -273,8 +166,6 @@ class RulesEngineRuntime:
         self,
         assignments: tuple[Assignment, ...],
         row: Mapping[str, Any],
-        row_index: int,
-        aggregate_cache: "AggregateContext",
     ) -> dict[str, Any]:
         """
         Resolve all assignments for a matched rule into output values.
@@ -283,8 +174,6 @@ class RulesEngineRuntime:
             assignment.target_field: self._resolve_operand(
                 assignment.value,
                 row,
-                row_index,
-                aggregate_cache,
             )
             for assignment in assignments
         }
@@ -328,15 +217,6 @@ class RulesEngineRuntime:
             payload["assignments_applied"] = list(trace.assignments_applied)
         return payload
 
-    def _winning_rule_payload(self, rule_results: list[dict[str, Any]]) -> dict[str, Any] | None:
-        """
-        Return the first matched rule result for a row.
-        """
-        for rule_result in rule_results:
-            if rule_result.get("matched") is True:
-                return rule_result
-        return None
-
     def _winning_rule_explanation(self, winning_rule: Mapping[str, Any] | None) -> str | None:
         """
         Return a readable summary of the passed conditions in the winning rule.
@@ -375,22 +255,18 @@ class RulesEngineRuntime:
             return f"{operand.get('column')}={self._display_value(operand.get('value'))}"
         if kind == OperandKind.LITERAL.value:
             return self._display_value(operand.get("value"))
-        if kind == OperandKind.AGGREGATE.value:
-            function = operand.get("function") or "aggregate"
-            source_columns = operand.get("source_columns") or []
-            value_column = source_columns[0] if source_columns else "value"
-            group_key = operand.get("group_key")
-            scope = self._group_key_label(group_key) if group_key else operand.get("scope")
-            label = f"{function}({value_column})"
-            if scope:
-                label = f"{label} for {scope}"
-            return f"{label}={self._display_value(operand.get('value'))}"
         if kind == OperandKind.CUSTOM_FUNCTION.value:
-            args = operand.get("args") or {}
-            arg_text = ", ".join(
-                f"{name}={self._operand_explanation(value)}"
-                for name, value in args.items()
-            )
+            args = operand.get("args")
+            if isinstance(args, MappingABC):
+                arg_text = ", ".join(
+                    f"{name}={self._operand_explanation(value)}"
+                    for name, value in args.items()
+                )
+            else:
+                arg_text = ", ".join(
+                    f"{name}={value}"
+                    for name, value in dict(operand.get("arguments") or {}).items()
+                )
             return (
                 f"{operand.get('function_name')}({arg_text})="
                 f"{self._display_value(operand.get('value'))}"
@@ -421,17 +297,6 @@ class RulesEngineRuntime:
             ComparisonOperator.IS_NULL.value: "is null",
             ComparisonOperator.IS_NOT_NULL.value: "is not null",
         }.get(str(operator), str(operator))
-
-    def _group_key_label(self, group_key: Any) -> str | None:
-        """
-        Return a readable aggregate group-key label.
-        """
-        if not isinstance(group_key, MappingABC):
-            return None
-        return ", ".join(
-            f"{key}={self._display_value(value)}"
-            for key, value in group_key.items()
-        )
 
     def _display_value(self, value: Any) -> str:
         """
@@ -497,25 +362,6 @@ class RulesEngineRuntime:
             if trace.get("value_type") is not None:
                 payload["value_type"] = trace["value_type"]
             return payload
-        if kind == OperandKind.AGGREGATE.value:
-            payload = {
-                "kind": kind,
-                "function": trace.get("function"),
-                "scope": trace.get("scope"),
-                "source_columns": list(trace.get("columns", [])),
-            }
-            self._add_present(payload, "group_key", trace.get("group_key"))
-            self._add_present(payload, "arguments", trace.get("args"))
-            self._add_present(payload, "filter", self._aggregate_filter_trace_payload(trace.get("filter")))
-            self._add_present(payload, "order_by", trace.get("order_by"))
-            if "value" in trace:
-                payload["value"] = trace["value"]
-            if trace.get("null_input_mode") not in (None, NullInputMode.IGNORE.value):
-                payload["null_input_mode"] = trace["null_input_mode"]
-            if trace.get("null_result_mode") not in (None, NullResultMode.NULL.value):
-                payload["null_result_mode"] = trace["null_result_mode"]
-            self._add_present(payload, "null_default_value", trace.get("null_default_value"))
-            return payload
         if kind == OperandKind.CUSTOM_FUNCTION.value:
             payload = {
                 "kind": kind,
@@ -536,41 +382,6 @@ class RulesEngineRuntime:
         payload = {"kind": kind}
         if "value" in trace:
             payload["value"] = trace["value"]
-        return payload
-
-    def _aggregate_filter_trace_payload(self, trace: Any) -> dict[str, Any] | None:
-        """
-        Convert aggregate-filter metadata to compact audit fields.
-        """
-        if not trace:
-            return None
-        return {
-            "logical_operator": trace["logical_operator"],
-            "predicates": [
-                self._filter_predicate_trace_payload(predicate)
-                for predicate in trace["predicates"]
-            ],
-        }
-
-    def _filter_predicate_trace_payload(self, trace: Mapping[str, Any]) -> dict[str, Any]:
-        """
-        Convert one aggregate-filter predicate to compact audit fields.
-        """
-        payload: dict[str, Any] = {
-            "columns": list(trace.get("columns", [])),
-            "left": self._operand_trace_payload(trace.get("left")),
-            "operator": trace.get("operator"),
-        }
-        right = self._operand_trace_payload(trace.get("right"))
-        if right is not None:
-            payload["right"] = right
-        if trace.get("tolerance_abs") not in (None, "0"):
-            payload["tolerance_abs"] = trace["tolerance_abs"]
-        if trace.get("null_input_mode") not in (None, NullInputMode.PROPAGATE.value):
-            payload["null_input_mode"] = trace["null_input_mode"]
-        if trace.get("null_result_mode") not in (None, NullResultMode.NULL.value):
-            payload["null_result_mode"] = trace["null_result_mode"]
-        self._add_present(payload, "null_default_value", trace.get("null_default_value"))
         return payload
 
     def _trace_columns(self, trace: Mapping[str, Any] | None) -> list[str]:
@@ -622,20 +433,16 @@ class RulesEngineRuntime:
         self,
         operand: Operand,
         row: Mapping[str, Any],
-        row_index: int,
-        aggregate_cache: "AggregateContext",
     ) -> Any:
         """
-        Resolve one operand against the current row or aggregate context.
+        Resolve one operand against the current row.
         """
-        return self._resolve_operand_resolution(operand, row, row_index, aggregate_cache).value
+        return self._resolve_operand_resolution(operand, row).value
 
     def _resolve_operand_resolution(
         self,
         operand: Operand,
         row: Mapping[str, Any],
-        row_index: int,
-        aggregate_cache: "AggregateContext",
     ) -> OperandResolution:
         """
         Resolve one operand and return both the value and trace metadata.
@@ -663,24 +470,13 @@ class RulesEngineRuntime:
                     "evaluated": True,
                 },
             )
-        if isinstance(operand, AggregateOperand):
-            value = self._resolve_aggregate_operand_value(
-                operand,
-                row,
-                row_index,
-                aggregate_cache,
-            )
-            trace = self._aggregate_operand_metadata(operand, row)
-            trace["value"] = self._trace_value(value)
-            trace["evaluated"] = True
-            return OperandResolution(value=value, trace=trace)
         if isinstance(operand, CustomFunctionOperand):
             args: dict[str, Any] = {}
             arg_traces: dict[str, Any] = {}
             for key, value in operand.args.items():
                 arg_key = str(key)
-                if isinstance(value, (FieldOperand, LiteralOperand, AggregateOperand, CustomFunctionOperand)):
-                    argument = self._resolve_operand_resolution(value, row, row_index, aggregate_cache)
+                if isinstance(value, (FieldOperand, LiteralOperand, CustomFunctionOperand)):
+                    argument = self._resolve_operand_resolution(value, row)
                     args[arg_key] = argument.value
                     arg_traces[arg_key] = argument.trace
                 else:
@@ -710,34 +506,6 @@ class RulesEngineRuntime:
             )
         raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
 
-    def _resolve_aggregate_operand_value(
-        self,
-        operand: AggregateOperand,
-        row: Mapping[str, Any],
-        row_index: int,
-        aggregate_cache: "AggregateContext",
-    ) -> Any:
-        """
-        Resolve an aggregate operand value for the current runtime.
-        """
-        if aggregate_cache is None:
-            raise RuntimeError("Aggregate cache is required to resolve aggregate operands.")
-        return aggregate_cache.resolve(operand, row_index)
-
-    def _resolve_custom_function_arg(
-        self,
-        value: Any,
-        row: Mapping[str, Any],
-        row_index: int,
-        aggregate_cache: "AggregateContext",
-    ) -> Any:
-        """
-        Resolve operand-valued custom function args against the current row.
-        """
-        if isinstance(value, (FieldOperand, LiteralOperand, AggregateOperand, CustomFunctionOperand)):
-            return self._resolve_operand(value, row, row_index, aggregate_cache)
-        return value
-
     def _operand_metadata(self, operand: Operand) -> dict[str, Any]:
         """
         Return operand metadata without resolving row-dependent values.
@@ -757,10 +525,6 @@ class RulesEngineRuntime:
                 "value_type": operand.value_type,
                 "evaluated": False,
             }
-        if isinstance(operand, AggregateOperand):
-            trace = self._aggregate_operand_metadata(operand, None)
-            trace["evaluated"] = False
-            return trace
         if isinstance(operand, CustomFunctionOperand):
             return {
                 "kind": operand.kind.value,
@@ -769,7 +533,7 @@ class RulesEngineRuntime:
                 "args": {
                     str(key): (
                         self._operand_metadata(value)
-                        if isinstance(value, (FieldOperand, LiteralOperand, AggregateOperand, CustomFunctionOperand))
+                        if isinstance(value, (FieldOperand, LiteralOperand, CustomFunctionOperand))
                         else {
                             "kind": "literal",
                             "columns": [],
@@ -783,82 +547,6 @@ class RulesEngineRuntime:
             }
         raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
 
-    def _aggregate_operand_metadata(
-        self,
-        operand: AggregateOperand,
-        row: Mapping[str, Any] | None,
-    ) -> dict[str, Any]:
-        """
-        Return trace metadata for an aggregate operand.
-        """
-        return {
-            "kind": operand.kind.value,
-            "columns": self._operand_columns(operand),
-            "function": operand.function.value,
-            "field_name": operand.field_name,
-            "scope": operand.scope.value,
-            "by": list(operand.by),
-            "group_key": (
-                {field_name: self._trace_value(row.get(field_name)) for field_name in operand.by}
-                if row is not None and operand.scope is AggregateScope.GROUP
-                else None
-            ),
-            "args": self._trace_value(dict(operand.args)),
-            "filter": self._aggregate_filter_metadata(operand.filter),
-            "order_by": [
-                {
-                    "field": order.field,
-                    "direction": order.direction,
-                }
-                for order in operand.order_by
-            ],
-            "null_input_mode": operand.null_input_mode.value,
-            "null_result_mode": operand.null_result_mode.value,
-            "null_default_value": self._trace_value(operand.null_default_value),
-        }
-
-    def _aggregate_filter_metadata(self, filter_: Any | None) -> dict[str, Any] | None:
-        """
-        Return trace metadata for an aggregate filter definition.
-        """
-        if filter_ is None:
-            return None
-        return {
-            "logical_operator": filter_.logical_operator.value,
-            "predicates": [
-                self._row_filter_predicate_metadata(predicate)
-                for predicate in filter_.predicates
-            ],
-        }
-
-    def _row_filter_predicate_metadata(self, predicate: RowFilterPredicate) -> dict[str, Any]:
-        """
-        Return trace metadata for one aggregate-filter predicate.
-        """
-        return {
-            "columns": self._unique_strings(
-                [
-                    *self._operand_columns(predicate.left),
-                    *(
-                        self._operand_columns(predicate.right)
-                        if predicate.right is not None
-                        else []
-                    ),
-                ]
-            ),
-            "operator": predicate.operator.value,
-            "tolerance_abs": self._trace_value(predicate.tolerance_abs),
-            "null_input_mode": predicate.null_input_mode.value,
-            "null_result_mode": predicate.null_result_mode.value,
-            "null_default_value": self._trace_value(predicate.null_default_value),
-            "left": self._operand_metadata(predicate.left),
-            "right": (
-                self._operand_metadata(predicate.right)
-                if predicate.right is not None
-                else None
-            ),
-        }
-
     def _operand_columns(self, operand: Operand | Any) -> list[str]:
         """
         Return all source columns referenced by an operand tree.
@@ -867,15 +555,6 @@ class RulesEngineRuntime:
             return [operand.field_name]
         if isinstance(operand, LiteralOperand):
             return []
-        if isinstance(operand, AggregateOperand):
-            columns: list[str] = [operand.field_name, *operand.by]
-            columns.extend(order.field for order in operand.order_by)
-            if operand.filter is not None:
-                for predicate in operand.filter.predicates:
-                    columns.extend(self._operand_columns(predicate.left))
-                    if predicate.right is not None:
-                        columns.extend(self._operand_columns(predicate.right))
-            return self._unique_strings(columns)
         if isinstance(operand, CustomFunctionOperand):
             return self._unique_strings(
                 column
@@ -1051,234 +730,3 @@ class RulesEngineRuntime:
             else:
                 regex_parts.append(re.escape(character))
         return re.fullmatch("".join(regex_parts), value, flags=re.DOTALL) is not None
-
-
-class AggregateContext:
-    """
-    Per-run aggregate resolver.
-
-    Aggregates are cached by operand shape and group key for the materialized
-    incoming row set. The cache is scoped to one call to ``evaluate`` only.
-    """
-
-    def __init__(self, rows: list[dict[str, Any]], runtime: RulesEngineRuntime) -> None:
-        """
-        Create a per-evaluation aggregate context over materialized rows.
-        """
-        self._rows = rows
-        self._runtime = runtime
-        self._dataset_cache: dict[str, Any] = {}
-        self._group_cache: dict[str, dict[tuple[Any, ...], Any]] = {}
-
-    def resolve(self, operand: AggregateOperand, row_index: int) -> Any:
-        """
-        Resolve an aggregate operand for one input row.
-        """
-        cache_key = self._cache_key(operand)
-        if operand.scope is AggregateScope.DATASET:
-            if cache_key not in self._dataset_cache:
-                logger.debug(
-                    "Calculating dataset aggregate: function=%s field=%s row_count=%s",
-                    operand.function.value,
-                    operand.field_name,
-                    len(self._rows),
-                )
-                self._dataset_cache[cache_key] = self._calculate(operand, self._rows)
-            return self._dataset_cache[cache_key]
-
-        if cache_key not in self._group_cache:
-            logger.debug(
-                "Calculating group aggregate: function=%s field=%s by=%s row_count=%s",
-                operand.function.value,
-                operand.field_name,
-                list(operand.by),
-                len(self._rows),
-            )
-            grouped_rows: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
-            for row in self._rows:
-                grouped_rows[self._group_key(operand, row)].append(row)
-            self._group_cache[cache_key] = {
-                key: self._calculate(operand, group_rows)
-                for key, group_rows in grouped_rows.items()
-            }
-        current_key = self._group_key(operand, self._rows[row_index])
-        return self._group_cache[cache_key].get(current_key)
-
-    def _calculate(self, operand: AggregateOperand, rows: list[dict[str, Any]]) -> Any:
-        """
-        Calculate one aggregate over a scoped row subset.
-        """
-        filtered_rows = self._filter_rows(operand, rows)
-        ordered_rows = self._order_rows(operand, filtered_rows)
-        values = self._extract_values(operand, ordered_rows)
-        if values is None:
-            return self._resolve_aggregate_null(operand)
-        if operand.function is AggregateFunction.COUNT:
-            return len(values)
-        if operand.function is AggregateFunction.COUNT_DISTINCT:
-            return len(set(values))
-        if not values:
-            return self._resolve_aggregate_null(operand)
-        if operand.function is AggregateFunction.SUM:
-            return sum(values)
-        if operand.function is AggregateFunction.MEAN:
-            return mean(values)
-        if operand.function is AggregateFunction.MIN:
-            return min(values)
-        if operand.function is AggregateFunction.MAX:
-            return max(values)
-        if operand.function is AggregateFunction.MEDIAN:
-            return median(values)
-        if operand.function is AggregateFunction.STDDEV:
-            return pstdev(values)
-        if operand.function is AggregateFunction.VARIANCE:
-            return pvariance(values)
-        if operand.function is AggregateFunction.QUANTILE:
-            return self._quantile(values, Decimal(str(operand.args["q"])))
-        if operand.function is AggregateFunction.FIRST:
-            return values[0]
-        if operand.function is AggregateFunction.LAST:
-            return values[-1]
-        raise ValueError(f"Unsupported aggregate function: {operand.function.value}")
-
-    def _filter_rows(
-        self,
-        operand: AggregateOperand,
-        rows: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Apply an aggregate's optional row-level filter to candidate rows.
-        """
-        if operand.filter is None:
-            return rows
-        filtered: list[dict[str, Any]] = []
-        for row in rows:
-            predicate_results = [
-                self._evaluate_filter_predicate(predicate, row)
-                for predicate in operand.filter.predicates
-            ]
-            if operand.filter.logical_operator is LogicalOperator.ALL:
-                include = all(predicate_results)
-            else:
-                include = any(predicate_results)
-            if include:
-                filtered.append(row)
-        return filtered
-
-    def _evaluate_filter_predicate(
-        self,
-        predicate: RowFilterPredicate,
-        row: Mapping[str, Any],
-    ) -> bool:
-        """
-        Evaluate one aggregate-filter predicate against one row.
-        """
-        if isinstance(predicate.left, AggregateOperand) or isinstance(predicate.right, AggregateOperand):
-            raise RuntimeError("Nested aggregate in filter predicate at runtime.")
-        left = self._runtime._resolve_operand(predicate.left, row, 0, self)
-        right = (
-            self._runtime._resolve_operand(predicate.right, row, 0, self)
-            if predicate.right is not None
-            else None
-        )
-        result = self._runtime._compare_values(
-            left,
-            predicate.operator,
-            right,
-            predicate.tolerance_abs,
-            predicate.null_input_mode,
-        )
-        return self._runtime._resolve_null_result(
-            result,
-            predicate.null_result_mode,
-            predicate.null_default_value,
-        )
-
-    def _order_rows(
-        self,
-        operand: AggregateOperand,
-        rows: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """
-        Return rows ordered for order-sensitive aggregate functions.
-        """
-        ordered_rows = list(rows)
-        for order in reversed(operand.order_by):
-            ordered_rows.sort(
-                key=lambda row, field=order.field: (
-                    row.get(field) is None,
-                    self._sortable_value(row.get(field)),
-                ),
-            )
-            if order.direction == "desc":
-                non_null_rows = [row for row in ordered_rows if row.get(order.field) is not None]
-                null_rows = [row for row in ordered_rows if row.get(order.field) is None]
-                ordered_rows = list(reversed(non_null_rows)) + null_rows
-        return ordered_rows
-
-    def _sortable_value(self, value: Any) -> Any:
-        """
-        Normalize None for Python sort keys while preserving non-null values.
-        """
-        return "" if value is None else value
-
-    def _extract_values(
-        self,
-        operand: AggregateOperand,
-        rows: list[dict[str, Any]],
-    ) -> list[Any] | None:
-        """
-        Extract aggregate input values while applying null-input behavior.
-        """
-        values: list[Any] = []
-        for row in rows:
-            value = row.get(operand.field_name)
-            if value is None:
-                if operand.null_input_mode is NullInputMode.ERROR:
-                    raise ValueError("Null aggregate input encountered with null_input_mode=error.")
-                if operand.null_input_mode is NullInputMode.ZERO:
-                    values.append(0)
-                elif operand.null_input_mode is NullInputMode.PROPAGATE:
-                    return None
-                else:
-                    continue
-            else:
-                values.append(value)
-        return values
-
-    def _resolve_aggregate_null(self, operand: AggregateOperand) -> Any:
-        """
-        Resolve an empty or null-propagated aggregate result.
-        """
-        if operand.null_result_mode is NullResultMode.ERROR:
-            raise ValueError("Null aggregate result encountered with null_result_mode=error.")
-        if operand.null_result_mode is NullResultMode.DEFAULT:
-            return operand.null_default_value
-        return None
-
-    def _quantile(self, values: list[Any], q: Decimal) -> Any:
-        """
-        Calculate an exact linear-interpolated quantile.
-        """
-        sorted_values = sorted(values)
-        if len(sorted_values) == 1:
-            return sorted_values[0]
-        position = float(q) * (len(sorted_values) - 1)
-        lower_index = int(position)
-        upper_index = min(lower_index + 1, len(sorted_values) - 1)
-        fraction = position - lower_index
-        lower = sorted_values[lower_index]
-        upper = sorted_values[upper_index]
-        return lower + (upper - lower) * fraction
-
-    def _group_key(self, operand: AggregateOperand, row: Mapping[str, Any]) -> tuple[Any, ...]:
-        """
-        Build the group cache key for a group-scoped aggregate.
-        """
-        return tuple(row.get(field_name) for field_name in operand.by)
-
-    def _cache_key(self, operand: AggregateOperand) -> str:
-        """
-        Build the aggregate operand cache key.
-        """
-        return aggregate_key(operand)

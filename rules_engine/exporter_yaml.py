@@ -16,8 +16,6 @@ from typing import Any
 import yaml
 
 from rules_engine.models import (
-    AggregateFilter,
-    AggregateOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -25,8 +23,6 @@ from rules_engine.models import (
     FieldOperand,
     LiteralOperand,
     Operand,
-    OrderBySpec,
-    RowFilterPredicate,
     Rule,
     Ruleset,
 )
@@ -163,69 +159,7 @@ class YamlRulesetExporter:
                     },
                 }
             }
-        if isinstance(operand, AggregateOperand):
-            return {"aggregate": self._export_aggregate(operand)}
         raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
-
-    def _export_aggregate(self, aggregate: AggregateOperand) -> dict[str, Any]:
-        """
-        Export an aggregate operand with explicit scope and runtime metadata.
-        """
-        payload: dict[str, Any] = {
-            "function": aggregate.function.value,
-            "field": aggregate.field_name,
-            "scope": aggregate.scope.value,
-            "by": list(aggregate.by),
-            "args": self._export_value(dict(aggregate.args)),
-            "order_by": [
-                self._export_order_by(order_by)
-                for order_by in aggregate.order_by
-            ],
-            "null_input_mode": aggregate.null_input_mode.value,
-            "null_result_mode": aggregate.null_result_mode.value,
-        }
-        if aggregate.filter is not None:
-            payload["filter"] = self._export_filter(aggregate.filter)
-        if aggregate.null_default_value is not None:
-            payload["null_default_value"] = self._export_value(aggregate.null_default_value)
-        return payload
-
-    def _export_filter(self, aggregate_filter: AggregateFilter) -> dict[str, Any]:
-        """
-        Export a filtered aggregate predicate group.
-        """
-        return {
-            aggregate_filter.logical_operator.value: [
-                self._export_filter_predicate(predicate)
-                for predicate in aggregate_filter.predicates
-            ]
-        }
-
-    def _export_filter_predicate(self, predicate: RowFilterPredicate) -> dict[str, Any]:
-        """
-        Export one row-level filtered aggregate predicate.
-        """
-        payload: dict[str, Any] = {
-            "left": self._export_operand(predicate.left),
-            "operator": predicate.operator.value,
-            "tolerance_abs": self._export_decimal(predicate.tolerance_abs),
-            "null_input_mode": predicate.null_input_mode.value,
-            "null_result_mode": predicate.null_result_mode.value,
-        }
-        if predicate.right is not None:
-            payload["right"] = self._export_operand(predicate.right)
-        if predicate.null_default_value is not None:
-            payload["null_default_value"] = self._export_value(predicate.null_default_value)
-        return payload
-
-    def _export_order_by(self, order_by: OrderBySpec) -> dict[str, str]:
-        """
-        Export one aggregate order-by specification.
-        """
-        return {
-            "field": order_by.field,
-            "direction": order_by.direction,
-        }
 
     def _export_decimal(self, value: Decimal) -> str:
         """
@@ -258,6 +192,6 @@ class YamlRulesetExporter:
         """
         Export custom-function args, preserving nested operand references.
         """
-        if isinstance(value, (FieldOperand, LiteralOperand, CustomFunctionOperand, AggregateOperand)):
+        if isinstance(value, (FieldOperand, LiteralOperand, CustomFunctionOperand)):
             return self._export_operand(value)
         return self._export_value(value)

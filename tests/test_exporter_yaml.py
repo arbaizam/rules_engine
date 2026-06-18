@@ -8,7 +8,7 @@ def test_yaml_export_round_trips_compiled_ruleset():
     """
     What: Exports a compiled ruleset to YAML and recompiles it.
     Why: Governance workflows need stable YAML round-trip authoring support.
-    Fails when: Exported YAML loses metadata, nested groups, aggregates, or assignments.
+    Fails when: Exported YAML loses metadata, nested groups, operands, or assignments.
     """
     compiler = YamlRulesetCompiler()
     original = compiler.compile_payload(
@@ -46,30 +46,7 @@ def test_yaml_export_round_trips_compiled_ruleset():
                                 "any": [
                                     {
                                         "condition_id": "c2",
-                                        "left": {
-                                            "aggregate": {
-                                                "function": "sum",
-                                                "field": "amount",
-                                                "scope": "group",
-                                                "by": ["account"],
-                                                "args": {},
-                                                "filter": {
-                                                    "all": [
-                                                        {
-                                                            "left": {"field": "status"},
-                                                            "operator": "eq",
-                                                            "right": {"literal": "OPEN"},
-                                                            "tolerance_abs": "0",
-                                                            "null_input_mode": "propagate",
-                                                            "null_result_mode": "null",
-                                                        }
-                                                    ]
-                                                },
-                                                "order_by": [],
-                                                "null_input_mode": "ignore",
-                                                "null_result_mode": "null",
-                                            }
-                                        },
+                                        "left": {"field": "account_open_amount_sum"},
                                         "operator": "gt",
                                         "right": {"literal": 100, "value_type": "number"},
                                         "tolerance_abs": "0",

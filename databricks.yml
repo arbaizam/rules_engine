@@ -1,9 +1,6 @@
 bundle:
   name: rules_engine
 
-include:
-  - resources/*.yml
-
 artifacts:
   rules_engine:
     type: whl

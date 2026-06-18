@@ -8,6 +8,7 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+.wheel-install-check*/
 .venv/
 venv/
 *.log

@@ -99,7 +99,7 @@ for column in ["ruleset_id", "ruleset_name", "version", "status", "effective_sta
         "with the current rules_engine table DDL."
     )
 
-for column in ["rule_count", "condition_count", "assignment_count", "aggregate_count", "custom_function_count"]:
+for column in ["rule_count", "condition_count", "assignment_count", "custom_function_count"]:
     expected = rf"\b{column}\b\s+int\s+not\s+null\b"
     assert re.search(expected, ruleset_normalized_sql), (
         f"Expected ruleset_versions column {column} to be declared NOT NULL in table DDL. "
@@ -676,15 +676,16 @@ print(validation.to_text())
 print("PASS: Duplicate condition_group_id values were rejected.")
 
 # COMMAND ----------
-print("ST-020: Aggregate scope rules are enforced")
+print("ST-020: Aggregate operands are rejected")
 print("-" * 80)
-print("Area: Semantic validation")
+print("Area: YAML compilation")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: Validation reports scope-specific aggregate errors.")
+print("Expected Result: Compilation tells authors to precompute aggregate fields upstream.")
 print("")
 
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import CompilationError
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
@@ -732,33 +733,31 @@ rules:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(invalid_yaml)
-validation = service.validator.validate(ruleset)
-check_names = {issue.check_name for issue in validation.issues}
+try:
+    service.compile_yaml_text(invalid_yaml)
+    aggregate_rejected = False
+except CompilationError as exc:
+    aggregate_rejected = True
+    assert "Unsupported operand key: aggregate" in str(exc), str(exc)
 
-assert validation.has_errors(), "Expected aggregate scope validation to fail."
-assert {
-    "AGGREGATE_GROUP_BY_REQUIRED",
-    "AGGREGATE_DATASET_BY_FORBIDDEN",
-} <= check_names, validation.to_text()
+assert aggregate_rejected, "Expected aggregate operand compilation to fail."
 
-print(validation.to_text())
-print("PASS: Aggregate scope rules were enforced.")
+print("PASS: Aggregate operands were rejected at compile time.")
 
 # COMMAND ----------
-print("ST-021: Order-sensitive aggregates require order_by")
+print("ST-021: Precomputed aggregate facts compile as fields")
 print("-" * 80)
-print("Area: Semantic validation")
+print("Area: YAML compilation")
 print("Priority: High")
 print("Owner Role: Engineering")
-print("Expected Result: Validation returns a clear order_by requirement error.")
+print("Expected Result: The field operand compiles and evaluates like any other row-level field.")
 print("")
 
 from rules_engine import RulesEngineService
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-invalid_yaml = """
+valid_yaml = """
 ruleset_id: st_021_ruleset
 ruleset_name: ST-021 Ruleset
 version: "1"
@@ -772,13 +771,8 @@ rules:
       all:
         - condition_id: c1
           left:
-            aggregate:
-              function: first
-              field: amount
-              scope: dataset
-              null_input_mode: ignore
-              null_result_mode: "null"
-          operator: eq
+            field: account_amount_sum
+          operator: gt
           right:
             literal: 100
           null_input_mode: propagate
@@ -787,28 +781,37 @@ rules:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(invalid_yaml)
+ruleset = service.compile_yaml_text(valid_yaml)
 validation = service.validator.validate(ruleset)
-check_names = {issue.check_name for issue in validation.issues}
 
-assert validation.has_errors(), "Expected order-sensitive aggregate validation to fail."
-assert "AGGREGATE_ORDER_BY_REQUIRED" in check_names, validation.to_text()
+assert not validation.has_errors(), validation.to_text()
+assert ruleset.rules[0].root_group.conditions[0].left.field_name == "account_amount_sum"
 
 print(validation.to_text())
-print("PASS: Order-sensitive aggregate without order_by was rejected.")
+print("PASS: Precomputed aggregate field compiled and validated.")
 
 # COMMAND ----------
-print("ST-022: Aggregate filters reject nested aggregate operands")
+print("ST-022: Custom-function argument contracts are enforced")
 print("-" * 80)
 print("Area: Semantic validation")
 print("Priority: High")
 print("Owner Role: Engineering")
-print("Expected Result: Validation rejects the nested aggregate in the filter.")
+print("Expected Result: Validation reports the registered contract mismatch.")
 print("")
 
 from rules_engine import RulesEngineService
+from rules_engine.registry import CustomFunctionSpec
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+service.registry.register(
+    CustomFunctionSpec(
+        function_name="score",
+        implementation_reference="notebook.score",
+        arg_names=("x", "y"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=False,
+    )
+)
 
 invalid_yaml = """
 ruleset_id: st_022_ruleset
@@ -824,27 +827,11 @@ rules:
       all:
         - condition_id: c1
           left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: dataset
-              filter:
-                all:
-                  - condition_id: filter_c1
-                    left:
-                      aggregate:
-                        function: count
-                        field: amount
-                        scope: dataset
-                        null_input_mode: ignore
-                        null_result_mode: "null"
-                    operator: gt
-                    right:
-                      literal: 1
-                    null_input_mode: propagate
-                    null_result_mode: "null"
-              null_input_mode: ignore
-              null_result_mode: "null"
+            custom_function:
+              name: score
+              args:
+                x:
+                  field: amount
           operator: gt
           right:
             literal: 100
@@ -858,11 +845,11 @@ ruleset = service.compile_yaml_text(invalid_yaml)
 validation = service.validator.validate(ruleset)
 check_names = {issue.check_name for issue in validation.issues}
 
-assert validation.has_errors(), "Expected nested aggregate filter validation to fail."
-assert "NESTED_AGGREGATE_FORBIDDEN" in check_names, validation.to_text()
+assert validation.has_errors(), "Expected custom-function argument validation to fail."
+assert "CUSTOM_FUNCTION_ARGS_MISMATCH" in check_names, validation.to_text()
 
 print(validation.to_text())
-print("PASS: Nested aggregate operands inside aggregate filters were rejected.")
+print("PASS: Custom-function argument contract mismatch was rejected.")
 
 # COMMAND ----------
 print("ST-023: Operator arity and literal collection requirements are enforced")
@@ -1034,19 +1021,19 @@ assert not any(issue.check_name.startswith("SPARK_") for issue in validation.iss
 print("PASS: Supported ruleset passed semantic and Spark compatibility validation.")
 
 # COMMAND ----------
-print("ST-026: Spark validator rejects unsupported aggregate semantics")
+print("ST-026: Spark validator follows the supported row-level contract")
 print("-" * 80)
 print("Area: Spark compatibility")
 print("Priority: High")
 print("Owner Role: Engineering")
-print("Expected Result: Validation returns Spark compatibility errors before publish.")
+print("Expected Result: Supported row-level rules validate without Spark-specific errors.")
 print("")
 
 from rules_engine import RulesEngineService
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
-invalid_yaml = """
+valid_yaml = """
 ruleset_id: st_026_ruleset
 ruleset_name: ST-026 Ruleset
 version: "1"
@@ -1060,12 +1047,7 @@ rules:
       all:
         - condition_id: c1
           left:
-            aggregate:
-              function: median
-              field: amount
-              scope: dataset
-              null_input_mode: ignore
-              null_result_mode: "null"
+            field: account_amount_sum
           operator: gt
           right:
             literal: 100
@@ -1073,50 +1055,38 @@ rules:
           null_result_mode: "null"
         - condition_id: c2
           left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: dataset
-              null_input_mode: error
-              null_result_mode: "null"
-          operator: gt
+            field: status
+          operator: eq
           right:
-            literal: 100
+            literal: OPEN
           null_input_mode: propagate
           null_result_mode: "null"
         - condition_id: c3
           left:
-            aggregate:
-              function: first
-              field: event_code
-              scope: dataset
-              order_by:
-                - field: event_sequence
-                  direction: asc
-              null_input_mode: propagate
-              null_result_mode: "null"
+            custom_function:
+              name: upper
+              args:
+                value:
+                  field: account
           operator: eq
           right:
-            literal: OPEN
+            literal: A
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(invalid_yaml)
+ruleset = service.compile_yaml_text(valid_yaml)
 validation = service.validator.validate(ruleset)
-check_names = {issue.check_name for issue in validation.issues}
 
-assert validation.has_errors(), "Expected Spark compatibility validation to fail."
-assert {
-    "SPARK_EXACT_PERCENTILE_UNSUPPORTED",
-    "SPARK_AGGREGATE_NULL_INPUT_ERROR_UNSUPPORTED",
-    "SPARK_FIRST_LAST_PROPAGATE_UNSUPPORTED",
-} <= check_names, validation.to_text()
+assert not validation.has_errors(), validation.to_text()
+assert not any(issue.check_name.startswith("SPARK_") for issue in validation.issues), (
+    validation.to_text()
+)
 
 print(validation.to_text())
-print("PASS: Spark-incompatible aggregate semantics were rejected before publish.")
+print("PASS: Supported row-level ruleset passed Spark validation.")
 
 # COMMAND ----------
 print("ST-027: Publish YAML path compiles, normalizes, validates, and writes metadata")
@@ -1893,23 +1863,22 @@ display(result)
 print("PASS: Runtime evaluation completed for ST-039.")
 
 # COMMAND ----------
-print("ST-040: Python runtime applies null_input_mode and null_result_mode correctly")
+print("ST-040: Spark runtime applies null_input_mode and null_result_mode correctly")
 print("-" * 80)
-print("Area: Runtime Python")
+print("Area: Runtime Spark")
 print("Priority: High")
 print("Owner Role: Engineering")
 print("Expected Result: Results match documented null semantics and errors are emitted only where expected.")
 print("")
 
-from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.registry import FunctionRegistry
-from rules_engine.runtime import RulesEngineRuntime
+from rules_engine.spark_runtime import SparkRulesEngineRuntime
 
 class ST040Repository:
     def load_published(self, ruleset_name, version=None):
         raise NotImplementedError
 
-runtime = RulesEngineRuntime(ST040Repository(), FunctionRegistry())
+runtime = SparkRulesEngineRuntime(ST040Repository(), FunctionRegistry())
 compiler = YamlRulesetCompiler()
 
 ruleset = compiler.compile_text("""
@@ -1968,15 +1937,19 @@ rules:
       zero_bucket: zero_match
 """)
 
-output, traces = runtime.evaluate([{"account": None, "amount": None}], ruleset)
-row = output[0]
-assert row["matched"] is True
-assert row["matched_rule_ids"] == ["default_true", "zero_mode"], row["matched_rule_ids"]
-assert row["assign"] == {"default_bucket": "default_true", "zero_bucket": "zero_match"}
-trace_by_rule = {trace.rule_id: trace for trace in traces}
-assert trace_by_rule["propagate_null"].matched is False
-assert trace_by_rule["default_true"].matched is True
-assert trace_by_rule["zero_mode"].matched is True
+output = runtime.evaluate_dataframe(
+    spark.createDataFrame([{"account": None, "amount": None}], "account string, amount double"),
+    ruleset,
+)
+row = output.collect()[0].asDict(recursive=True)
+assert row["rules_engine_matched"] is True
+assert row["rules_engine_matched_rule_ids"] == ["default_true", "zero_mode"], row["rules_engine_matched_rule_ids"]
+assert row["rules_engine_assign"] == {
+    "bucket": None,
+    "default_bucket": "default_true",
+    "zero_bucket": "zero_match",
+}
+assert row["rules_engine_winning_rule_id"] == "default_true"
 
 error_ruleset = compiler.compile_text("""
 ruleset_id: st_040_error_ruleset
@@ -2003,34 +1976,37 @@ rules:
       bucket: should_error
 """)
 try:
-    runtime.evaluate([{"account": None}], error_ruleset)
+    runtime.evaluate_dataframe(
+        spark.createDataFrame([{"account": None}], "account string"),
+        error_ruleset,
+    )
     error_failed = False
-except ValueError as exc:
+except RuntimeError as exc:
     error_failed = True
     assert "null_result_mode=error" in str(exc), str(exc)
 assert error_failed, "Expected null_result_mode=error to raise on null comparison result."
-print("PASS: Python runtime null semantics matched documented propagate/default/zero/error behavior.")
+print("PASS: Spark runtime null semantics matched documented propagate/default/zero/error behavior.")
 # COMMAND ----------
-print("ST-041: Python runtime evaluates aggregate operands correctly")
+print("ST-041: Spark runtime evaluates precomputed aggregate fields correctly")
 print("-" * 80)
-print("Area: Runtime Python")
+print("Area: Runtime Spark")
 print("Priority: High")
 print("Owner Role: Engineering")
-print("Expected Result: Aggregate comparisons and assignments match manually calculated expected values.")
+print("Expected Result: Precomputed aggregate comparisons and assignments match manually calculated expected values.")
 print("")
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.registry import FunctionRegistry
-from rules_engine.runtime import RulesEngineRuntime
+from rules_engine.spark_runtime import SparkRulesEngineRuntime
 
 class ST041Repository:
     def load_published(self, ruleset_name, version=None):
         raise NotImplementedError
 
-runtime = RulesEngineRuntime(ST041Repository(), FunctionRegistry())
+runtime = SparkRulesEngineRuntime(ST041Repository(), FunctionRegistry())
 ruleset = YamlRulesetCompiler().compile_text("""
 ruleset_id: st_041_ruleset
-ruleset_name: ST-041 Aggregate Ruleset
+ruleset_name: ST-041 Precomputed Aggregate Ruleset
 version: "1"
 status: published
 owner: Rules Team
@@ -2043,12 +2019,7 @@ rules:
       all:
         - condition_id: c_dataset
           left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: dataset
-              null_input_mode: ignore
-              null_result_mode: "null"
+            field: dataset_amount_sum
           operator: eq
           right:
             literal: 35
@@ -2063,14 +2034,7 @@ rules:
       all:
         - condition_id: c_group
           left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: group
-              by:
-                - account
-              null_input_mode: ignore
-              null_result_mode: "null"
+            field: account_amount_sum
           operator: gt
           right:
             literal: 15
@@ -2080,34 +2044,33 @@ rules:
       group_total_check: pass
 """)
 input_rows = [
-    {"record_id": "r1", "account": "A", "amount": 10},
-    {"record_id": "r2", "account": "A", "amount": 20},
-    {"record_id": "r3", "account": "B", "amount": 5},
+    {"record_id": "r1", "account": "A", "amount": 10, "dataset_amount_sum": 35, "account_amount_sum": 30},
+    {"record_id": "r2", "account": "A", "amount": 20, "dataset_amount_sum": 35, "account_amount_sum": 30},
+    {"record_id": "r3", "account": "B", "amount": 5, "dataset_amount_sum": 35, "account_amount_sum": 5},
 ]
 manual_dataset_total = sum(row["amount"] for row in input_rows)
 manual_group_totals = {}
 for item in input_rows:
     manual_group_totals[item["account"]] = manual_group_totals.get(item["account"], 0) + item["amount"]
-output, _ = runtime.evaluate(input_rows, ruleset)
-actual_by_id = {row["row"]["record_id"]: row for row in output}
+output = runtime.evaluate_dataframe(spark.createDataFrame(input_rows), ruleset)
+actual_by_id = {row["record_id"]: row.asDict(recursive=True) for row in output.collect()}
 assert manual_dataset_total == 35
 assert manual_group_totals == {"A": 30, "B": 5}
-assert actual_by_id["r1"]["matched_rule_ids"] == ["dataset_total", "group_total"]
-assert actual_by_id["r2"]["matched_rule_ids"] == ["dataset_total", "group_total"]
-assert actual_by_id["r3"]["matched_rule_ids"] == ["dataset_total"]
-assert actual_by_id["r3"]["assign"] == {"dataset_total_check": "pass"}
-print("PASS: Dataset and group aggregate results matched manual calculations.")
+assert actual_by_id["r1"]["rules_engine_matched_rule_ids"] == ["dataset_total", "group_total"]
+assert actual_by_id["r2"]["rules_engine_matched_rule_ids"] == ["dataset_total", "group_total"]
+assert actual_by_id["r3"]["rules_engine_matched_rule_ids"] == ["dataset_total"]
+assert actual_by_id["r3"]["rules_engine_assign"] == {"dataset_total_check": "pass", "group_total_check": None}
+print("PASS: Precomputed dataset and group aggregate fields matched manual calculations.")
 # COMMAND ----------
 print("ST-042: Spark runtime evaluates a published ruleset against a DataFrame")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: Output DataFrame contains matched, matched_rule_ids, assign, rule_results, and error columns with expected values.")
+print("Expected Result: Output DataFrame contains matched, matched_rule_ids, assign, winning_rule, and error columns with expected values.")
 print("")
 
 from datetime import datetime, timezone
-import json
 from rules_engine import RulesEngineService
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
@@ -2143,7 +2106,6 @@ required_columns = {
     "rules_engine_matched",
     "rules_engine_matched_rule_ids",
     "rules_engine_assign",
-    "rules_engine_rule_results",
     "rules_engine_winning_rule",
     "rules_engine_winning_rule_id",
     "rules_engine_winning_rule_name",
@@ -2154,7 +2116,7 @@ missing_columns = required_columns - set(result.columns)
 assert not missing_columns, f"Missing output columns: {sorted(missing_columns)}"
 assert rows["r1"]["rules_engine_matched"] is True
 assert rows["r1"]["rules_engine_matched_rule_ids"] == ["r1"]
-assert json.loads(rows["r1"]["rules_engine_assign"]) == {"bucket": "A"}
+assert rows["r1"]["rules_engine_assign"] == {"bucket": "A"}
 assert rows["r1"]["rules_engine_winning_rule_id"] == "r1"
 assert rows["r1"]["rules_engine_winning_rule_explanation"] == "account=A == A"
 assert rows["r1"]["rules_engine_error"] is None
@@ -2164,7 +2126,7 @@ assert rows["r2"]["rules_engine_assign"] is None
 assert rows["r2"]["rules_engine_winning_rule"] is None
 assert rows["r2"]["rules_engine_winning_rule_explanation"] is None
 assert rows["r2"]["rules_engine_error"] is None
-assert "r1" in rows["r1"]["rules_engine_rule_results"]
+assert rows["r1"]["rules_engine_winning_rule"]["rule_id"] == "r1"
 display(result)
 print("PASS: Spark runtime output columns and values matched expected results.")
 # COMMAND ----------
@@ -2269,24 +2231,22 @@ result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, versi
 rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
 assert rows["r1"]["rules_engine_matched"] is True
 assert rows["r1"]["rules_engine_matched_rule_ids"] == ["upper_match"]
-assert json.loads(rows["r1"]["rules_engine_assign"]) == {"bucket": "upper_a"}
+assert rows["r1"]["rules_engine_assign"] == {"bucket": "upper_a"}
 assert rows["r2"]["rules_engine_matched"] is False
 assert rows["r2"]["rules_engine_assign"] is None
 display(result)
 print("PASS: Standard upper() function transformed input and produced expected outputs.")
 # COMMAND ----------
-print("ST-045: Spark and Python runtime outputs remain equivalent for shared supported cases")
+print("ST-045: Spark runtime emits native assignment and winning-rule structs")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Medium")
 print("Owner Role: Engineering")
-print("Expected Result: Matched flags, assignments, and rule traces are equivalent after normalizing output representation.")
+print("Expected Result: Matched flags, assignments, and winning-rule trace are Spark-native structs.")
 print("")
 
-import json
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.registry import FunctionRegistry
-from rules_engine.runtime import RulesEngineRuntime
 from rules_engine.spark_runtime import SparkRulesEngineRuntime
 
 class ST045Repository:
@@ -2308,12 +2268,7 @@ rules:
       all:
         - condition_id: c_dataset
           left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: dataset
-              null_input_mode: ignore
-              null_result_mode: "null"
+            field: dataset_amount_sum
           operator: eq
           right:
             literal: 30
@@ -2322,18 +2277,19 @@ rules:
     assign:
       bucket: dataset_match
 """)
-input_rows = [{"row_id": 1, "amount": 10}, {"row_id": 2, "amount": 20}]
+input_rows = [
+    {"row_id": 1, "amount": 10, "dataset_amount_sum": 30},
+    {"row_id": 2, "amount": 20, "dataset_amount_sum": 30},
+]
 registry = FunctionRegistry()
-python_output, python_traces = RulesEngineRuntime(ST045Repository(), registry).evaluate(input_rows, ruleset)
 spark_result = SparkRulesEngineRuntime(ST045Repository(), registry).evaluate_dataframe(spark.createDataFrame(input_rows), ruleset, fail_on_error=True)
-spark_rows = spark_result.orderBy("row_id").collect()
-assert [row["matched"] for row in python_output] == [row["rules_engine_matched"] for row in spark_rows]
-assert [row["matched_rule_ids"] for row in python_output] == [row["rules_engine_matched_rule_ids"] for row in spark_rows]
-assert [row["assign"] for row in python_output] == [json.loads(row["rules_engine_assign"]) for row in spark_rows]
-assert [trace.matched for trace in python_traces] == [True, True]
-assert all("dataset_total" in row["rules_engine_rule_results"] for row in spark_rows)
+spark_rows = [row.asDict(recursive=True) for row in spark_result.orderBy("row_id").collect()]
+assert [row["rules_engine_matched"] for row in spark_rows] == [True, True]
+assert [row["rules_engine_matched_rule_ids"] for row in spark_rows] == [["dataset_total"], ["dataset_total"]]
+assert [row["rules_engine_assign"] for row in spark_rows] == [{"bucket": "dataset_match"}, {"bucket": "dataset_match"}]
+assert [row["rules_engine_winning_rule"]["rule_id"] for row in spark_rows] == ["dataset_total", "dataset_total"]
 display(spark_result)
-print("PASS: Spark and Python runtime outputs were equivalent after normalizing assignment JSON.")
+print("PASS: Spark runtime emitted native assignment and winning-rule structs.")
 # COMMAND ----------
 print("ST-046: Payload JSON excludes mutable lifecycle fields and reconstructs ruleset content")
 print("-" * 80)
@@ -2456,25 +2412,20 @@ owner: Rules Team
 owner_department: ALM Engineering
 rules:
   - rule_id: r1
-    rule_name: Dataset Aggregate Rule
+    rule_name: Precomputed Aggregate Rule
     rule_order: 1
     when:
       all:
         - condition_id: c1
           left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: dataset
-              null_input_mode: ignore
-              null_result_mode: "null"
+            field: dataset_amount_sum
           operator: gt
           right:
             literal: 100
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
-      aggregate_bucket: large
+      precomputed_bucket: large
   - rule_id: r2
     rule_name: Standard Function Rule
     rule_order: 2
@@ -2503,7 +2454,6 @@ expected_assignment_count = sum(len(rule.assignments) for rule in ruleset.rules)
 assert row["rule_count"] == expected_rule_count
 assert row["condition_count"] == expected_condition_count
 assert row["assignment_count"] == expected_assignment_count
-assert row["aggregate_count"] == 1
 assert row["custom_function_count"] == 1
 print("PASS: Persisted summary count columns matched compiled ruleset content.")
 # COMMAND ----------
@@ -2604,11 +2554,10 @@ print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: rule_results and winning_rule expose source columns, evaluated operand values, comparison results, and readable winning-rule output.")
+print("Expected Result: winning_rule exposes source columns, evaluated operand values, comparison results, and readable winning-rule output.")
 print("")
 
 from datetime import datetime, timezone
-import json
 
 from rules_engine import RulesEngineService
 
@@ -2628,13 +2577,7 @@ rules:
       all:
         - condition_id: c_group_sum
           left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: group
-              by: [account]
-              null_input_mode: ignore
-              null_result_mode: "null"
+            field: account_amount_sum
           operator: gt
           right:
             literal: 15
@@ -2666,48 +2609,44 @@ rules:
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
 df = spark.createDataFrame(
     [
-        {"record_id": "r1", "account": "a", "amount": 10, "status": "open"},
-        {"record_id": "r2", "account": "a", "amount": 20, "status": "closed"},
-        {"record_id": "r3", "account": "b", "amount": 5, "status": "open"},
+        {"record_id": "r1", "account": "a", "amount": 10, "account_amount_sum": 30, "status": "open"},
+        {"record_id": "r2", "account": "a", "amount": 20, "account_amount_sum": 30, "status": "closed"},
+        {"record_id": "r3", "account": "b", "amount": 5, "account_amount_sum": 5, "status": "open"},
     ]
 )
 result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
 rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
 
 matched_row = rows["r1"]
-rule_results = json.loads(matched_row["rules_engine_rule_results"])
-winning_rule = json.loads(matched_row["rules_engine_winning_rule"])
-trace_rule = rule_results[0]
-conditions = trace_rule["conditions"]
+winning_rule = matched_row["rules_engine_winning_rule"]
+conditions = winning_rule["conditions"]
 
 assert matched_row["rules_engine_matched"] is True
 assert matched_row["rules_engine_matched_rule_ids"] == ["trace_rule"]
-assert json.loads(matched_row["rules_engine_assign"]) == {"bucket": "traced"}
+assert matched_row["rules_engine_assign"] == {"bucket": "traced"}
 assert matched_row["rules_engine_winning_rule_id"] == "trace_rule"
 assert matched_row["rules_engine_winning_rule_name"] == "Traceability Rule"
 assert matched_row["rules_engine_winning_rule_explanation"] == (
-    "sum(amount) for account=a=30 > 15 AND "
+    "account_amount_sum=30 > 15 AND "
     "upper(value=account=a)=A == A AND "
     "status=open == open"
 )
-assert winning_rule == trace_rule
-assert trace_rule["rule_id"] == "trace_rule"
-assert trace_rule["rule_name"] == "Traceability Rule"
-assert trace_rule["matched"] is True
-assert trace_rule["assignments_applied"] == ["bucket"]
+assert winning_rule["rule_id"] == "trace_rule"
+assert winning_rule["rule_name"] == "Traceability Rule"
+assert winning_rule["matched"] is True
+assert winning_rule["assignments_applied"] == ["bucket"]
 
-aggregate_condition = conditions[0]
-assert aggregate_condition["columns"] == ["amount", "account"]
-assert aggregate_condition["operator"] == "gt"
-assert aggregate_condition["comparison_result"] is True
-assert aggregate_condition["passed"] is True
-assert aggregate_condition["left"]["kind"] == "aggregate"
-assert aggregate_condition["left"]["function"] == "sum"
-assert aggregate_condition["left"]["scope"] == "group"
-assert aggregate_condition["left"]["source_columns"] == ["amount", "account"]
-assert aggregate_condition["left"]["group_key"] == {"account": "a"}
-assert aggregate_condition["left"]["value"] == 30
-assert aggregate_condition["right"] == {"kind": "literal", "value": 15}
+precomputed_condition = conditions[0]
+assert precomputed_condition["columns"] == ["account_amount_sum"]
+assert precomputed_condition["operator"] == "gt"
+assert precomputed_condition["comparison_result"] is True
+assert precomputed_condition["passed"] is True
+assert precomputed_condition["left"]["kind"] == "field"
+assert precomputed_condition["left"]["column"] == "account_amount_sum"
+assert precomputed_condition["left"]["source_columns"] == ["account_amount_sum"]
+assert precomputed_condition["left"]["value"] == "30"
+assert precomputed_condition["right"]["kind"] == "literal"
+assert precomputed_condition["right"]["value"] == "15"
 
 function_condition = conditions[1]
 assert function_condition["columns"] == ["account"]
@@ -2717,15 +2656,18 @@ assert function_condition["passed"] is True
 assert function_condition["left"]["kind"] == "custom_function"
 assert function_condition["left"]["function_name"] == "upper"
 assert function_condition["left"]["source_columns"] == ["account"]
-assert function_condition["left"]["args"]["value"]["column"] == "account"
-assert function_condition["left"]["args"]["value"]["value"] == "a"
+assert function_condition["left"]["arguments"] == {"value": "account=a"}
 assert function_condition["left"]["value"] == "A"
-assert function_condition["right"] == {"kind": "literal", "value": "A"}
+assert function_condition["right"]["kind"] == "literal"
+assert function_condition["right"]["value"] == "A"
 
 field_condition = conditions[2]
 assert field_condition["columns"] == ["status"]
-assert field_condition["left"] == {"kind": "field", "column": "status", "value": "open"}
-assert field_condition["right"] == {"kind": "literal", "value": "open"}
+assert field_condition["left"]["kind"] == "field"
+assert field_condition["left"]["column"] == "status"
+assert field_condition["left"]["value"] == "open"
+assert field_condition["right"]["kind"] == "literal"
+assert field_condition["right"]["value"] == "open"
 assert field_condition["comparison_result"] is True
 assert field_condition["passed"] is True
 
@@ -2793,20 +2735,14 @@ rules:
               null_result_mode: "null"
     assign:
       leaf_key: "15656"
-  - rule_id: aggregate_review
-    rule_name: Aggregate Review
+  - rule_id: precomputed_review
+    rule_name: Precomputed Review
     rule_order: 2
     when:
       all:
         - condition_id: c_sum
           left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: group
-              by: [BK_AccountID]
-              null_input_mode: ignore
-              null_result_mode: "null"
+            field: account_amount_sum
           operator: gt
           right:
             literal: 100
@@ -2842,10 +2778,10 @@ expected_rows = [
         "match_payload": "leaf_key = '15656'",
     },
     {
-        "rule_id": "aggregate_review",
-        "rule_name": "Aggregate Review",
+        "rule_id": "precomputed_review",
+        "rule_name": "Precomputed Review",
         "rule_logic": (
-            "sum(amount) by BK_AccountID > 100 AND "
+            "account_amount_sum > 100 AND "
             "upper(value=status) == 'REVIEW'"
         ),
         "match_payload": "route = 'REVIEW'",
@@ -2910,7 +2846,8 @@ previous_output_columns = {
     "rules_engine_matched",
     "rules_engine_matched_rule_ids",
     "rules_engine_assign",
-    "rules_engine_rule_results",
+    "rules_engine_winning_rule",
+    "rules_engine_winning_rule_id",
     "rules_engine_error",
 }
 missing_columns = (previous_input_columns | previous_output_columns) - set(result.columns)
@@ -2924,10 +2861,9 @@ assert matched["account"] == "A"
 assert matched["amount"] == 10
 assert matched["rules_engine_matched"] is True
 assert matched["rules_engine_matched_rule_ids"] == ["legacy_rule"]
-assert json.loads(matched["rules_engine_assign"]) == {"bucket": "legacy_a"}
-matched_rule_results = json.loads(matched["rules_engine_rule_results"])
-assert matched_rule_results[0]["rule_id"] == "legacy_rule"
-assert matched_rule_results[0]["matched"] is True
+assert matched["rules_engine_assign"] == {"bucket": "legacy_a"}
+assert matched["rules_engine_winning_rule"]["rule_id"] == "legacy_rule"
+assert matched["rules_engine_winning_rule"]["matched"] is True
 assert matched["rules_engine_error"] is None
 
 assert unmatched["record_id"] == "r2"
@@ -2936,13 +2872,11 @@ assert unmatched["amount"] == 20
 assert unmatched["rules_engine_matched"] is False
 assert unmatched["rules_engine_matched_rule_ids"] == []
 assert unmatched["rules_engine_assign"] is None
-unmatched_rule_results = json.loads(unmatched["rules_engine_rule_results"])
-assert unmatched_rule_results[0]["rule_id"] == "legacy_rule"
-assert unmatched_rule_results[0]["matched"] is False
+assert unmatched["rules_engine_winning_rule"] is None
 assert unmatched["rules_engine_error"] is None
 
 display(result)
-print("PASS: Previously available Spark runtime input and output columns remain present and usable.")
+print("PASS: Spark runtime input columns and native output columns remain present and usable.")
 
 # COMMAND ----------
 print("Run automated unit test suite")

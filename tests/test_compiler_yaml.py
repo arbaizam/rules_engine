@@ -1,7 +1,7 @@
 import pytest
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.enums import AggregateFunction, ComparisonOperator, RulesetStatus
+from rules_engine.enums import ComparisonOperator, RulesetStatus
 from rules_engine.exceptions import CompilationError
 
 
@@ -48,11 +48,11 @@ def test_valid_simple_row_rule_compiles_and_validates():
     assert str(condition.tolerance_abs) == "0"
 
 
-def test_valid_group_aggregate_rule_compiles():
+def test_precomputed_aggregate_field_compiles_as_row_field():
     """
-    What: Compiles a group-scoped aggregate with an aggregate filter.
-    Why: Group aggregates are first-class operands and must preserve by/filter shape.
-    Fails when: Aggregate scope, by fields, or filtered aggregate parsing changes.
+    What: Compiles a rule that references an upstream aggregate column as a field.
+    Why: Aggregate calculations now belong outside the rules engine runtime.
+    Fails when: Field operands stop supporting precomputed aggregate facts.
     """
     ruleset = YamlRulesetCompiler().compile_payload(
         {
@@ -62,31 +62,11 @@ def test_valid_group_aggregate_rule_compiles():
             "status": "published",
             "rules": [
                 {
-                    "rule_name": "Group aggregate",
+                    "rule_name": "Precomputed aggregate",
                     "when": {
                         "all": [
                             {
-                                "left": {
-                                    "aggregate": {
-                                        "function": "sum",
-                                        "field": "amount",
-                                        "scope": "group",
-                                        "by": ["account"],
-                                        "filter": {
-                                            "all": [
-                                                {
-                                                    "left": {"field": "status"},
-                                                    "operator": "eq",
-                                                    "right": {"literal": "OPEN"},
-                                                    "null_input_mode": "propagate",
-                                                    "null_result_mode": "null",
-                                                }
-                                            ]
-                                        },
-                                        "null_input_mode": "ignore",
-                                        "null_result_mode": "null",
-                                    }
-                                },
+                                "left": {"field": "account_amount_sum"},
                                 "operator": "gt",
                                 "right": {"literal": 100, "value_type": "number"},
                                 "null_input_mode": "propagate",
@@ -100,55 +80,8 @@ def test_valid_group_aggregate_rule_compiles():
         }
     )
 
-    aggregate = ruleset.rules[0].root_group.conditions[0].left
-    assert aggregate.function is AggregateFunction.SUM
-    assert aggregate.by == ("account",)
-    assert aggregate.filter is not None
-
-
-def test_valid_dataset_aggregate_rule_compiles():
-    """
-    What: Compiles a dataset-scoped aggregate.
-    Why: Dataset aggregates must be expressible without group-by fields.
-    Fails when: Dataset scope is misparsed or implicit group fields leak in.
-    """
-    ruleset = YamlRulesetCompiler().compile_payload(
-        {
-            "ruleset_id": "rs1",
-            "ruleset_name": "Ruleset",
-            "version": "1",
-            "status": "published",
-            "rules": [
-                {
-                    "rule_name": "Dataset aggregate",
-                    "when": {
-                        "all": [
-                            {
-                                "left": {
-                                    "aggregate": {
-                                        "function": "count",
-                                        "field": "amount",
-                                        "scope": "dataset",
-                                        "null_input_mode": "ignore",
-                                        "null_result_mode": "null",
-                                    }
-                                },
-                                "operator": "gt",
-                                "right": {"literal": 0, "value_type": "number"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
-                            }
-                        ]
-                    },
-                    "assign": {"bucket": "nonempty"},
-                }
-            ],
-        }
-    )
-
-    aggregate = ruleset.rules[0].root_group.conditions[0].left
-    assert aggregate.scope.value == "dataset"
-    assert aggregate.by == ()
+    condition = ruleset.rules[0].root_group.conditions[0]
+    assert condition.left.field_name == "account_amount_sum"
 
 
 def test_canonical_string_operators_compile():
@@ -265,11 +198,11 @@ def test_assignments_rule_alias_is_rejected():
         YamlRulesetCompiler().compile_payload(payload)
 
 
-def test_aggregate_field_name_alias_is_rejected():
+def test_aggregate_operand_is_rejected():
     """
-    What: Rejects the non-canonical aggregate key field_name.
-    Why: Aggregate authoring must use field as the single accepted vocabulary.
-    Fails when: Aggregate aliases are accepted or canonical key enforcement weakens.
+    What: Rejects aggregate operands.
+    Why: Spark deployments should consume precomputed aggregate fields instead.
+    Fails when: Aggregate authoring is accidentally reintroduced.
     """
     payload = {
         "ruleset_id": "rs1",
@@ -303,5 +236,54 @@ def test_aggregate_field_name_alias_is_rejected():
         ],
     }
 
-    with pytest.raises(CompilationError, match="Unsupported aggregate key: field_name"):
+    with pytest.raises(CompilationError, match="Unsupported operand key: aggregate"):
+        YamlRulesetCompiler().compile_payload(payload)
+
+
+def test_aggregate_operand_inside_custom_function_arg_is_rejected():
+    """
+    What: Rejects aggregate operands nested inside custom-function args.
+    Why: Aggregate authoring should not be reachable through nested operand shapes.
+    Fails when: Custom-function argument compilation accepts aggregate payloads.
+    """
+    payload = {
+        "ruleset_id": "rs1",
+        "ruleset_name": "Ruleset",
+        "version": "1",
+        "status": "published",
+        "rules": [
+            {
+                "rule_name": "Nested aggregate",
+                "when": {
+                    "all": [
+                        {
+                            "left": {
+                                "custom_function": {
+                                    "name": "score",
+                                    "args": {
+                                        "x": {
+                                            "aggregate": {
+                                                "function": "sum",
+                                                "field": "amount",
+                                                "scope": "dataset",
+                                                "null_input_mode": "ignore",
+                                                "null_result_mode": "null",
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            "operator": "gt",
+                            "right": {"literal": 0},
+                            "null_input_mode": "propagate",
+                            "null_result_mode": "null",
+                        }
+                    ]
+                },
+                "assign": {"bucket": "match"},
+            }
+        ],
+    }
+
+    with pytest.raises(CompilationError, match="Unsupported operand key: aggregate"):
         YamlRulesetCompiler().compile_payload(payload)

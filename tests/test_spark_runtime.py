@@ -1,4 +1,3 @@
-import json
 import os
 
 import pytest
@@ -81,7 +80,7 @@ def test_spark_runtime_evaluates_row_rule(spark):
     """
     What: Evaluates a row-level rule through Spark DataFrame runtime.
     Why: Spark output columns must reflect the same matching/assignment contract.
-    Fails when: UDF result struct, output columns, or assignment JSON regress.
+    Fails when: UDF result struct, output columns, or assignment struct regress.
     """
     ruleset = _compile(
         {
@@ -97,131 +96,43 @@ def test_spark_runtime_evaluates_row_rule(spark):
     rows = _spark_runtime().evaluate_dataframe(df, ruleset).orderBy("account").collect()
 
     assert rows[0]["rules_engine_matched"] is True
-    assert json.loads(rows[0]["rules_engine_assign"]) == {"bucket": "matched"}
-    rule_results = json.loads(rows[0]["rules_engine_rule_results"])
-    winning_rule = json.loads(rows[0]["rules_engine_winning_rule"])
+    assert rows[0]["rules_engine_assign"]["bucket"] == "matched"
+    winning_rule = rows[0]["rules_engine_winning_rule"]
     assert rows[0]["rules_engine_winning_rule_id"] == "r1"
     assert rows[0]["rules_engine_winning_rule_name"] == "Rule 1"
     assert rows[0]["rules_engine_winning_rule_explanation"] == "account=A == A"
     assert winning_rule["rule_id"] == "r1"
-    assert rule_results[0]["rule_id"] == "r1"
-    assert rule_results[0]["conditions"][0]["columns"] == ["account"]
-    assert rule_results[0]["conditions"][0]["left"]["column"] == "account"
-    assert rule_results[0]["conditions"][0]["left"]["value"] == "A"
+    assert winning_rule["conditions"][0]["columns"] == ["account"]
+    assert winning_rule["conditions"][0]["left"]["column"] == "account"
+    assert winning_rule["conditions"][0]["left"]["value"] == "A"
+    assert "rules_engine_rule_results" not in rows[0].asDict()
     assert rows[1]["rules_engine_matched"] is False
     assert rows[1]["rules_engine_winning_rule"] is None
     assert rows[1]["rules_engine_winning_rule_explanation"] is None
 
 
-def test_spark_runtime_evaluates_dataset_aggregate(spark):
+def test_spark_runtime_evaluates_precomputed_aggregate_field(spark):
     """
-    What: Evaluates a dataset aggregate through Spark precompute plus UDF.
-    Why: Spark must join dataset aggregate results back to every input row.
-    Fails when: Dataset aggregate precompute or cross join behavior changes.
+    What: Evaluates a rule using an upstream aggregate column.
+    Why: Spark jobs should precompute cross-row facts before invoking the rules engine.
+    Fails when: Precomputed aggregate fields stop behaving like ordinary row fields.
     """
     ruleset = _compile(
         {
-            "left": {
-                "aggregate": {
-                    "function": "sum",
-                    "field": "amount",
-                    "scope": "dataset",
-                    "null_input_mode": "ignore",
-                    "null_result_mode": "null",
-                }
-            },
+            "left": {"field": "dataset_amount_sum"},
             "operator": "eq",
             "right": {"literal": 30},
             "null_input_mode": "propagate",
             "null_result_mode": "null",
         }
     )
-    df = spark.createDataFrame([{"amount": 10}, {"amount": 20}])
+    df = spark.createDataFrame(
+        [
+            {"amount": 10, "dataset_amount_sum": 30},
+            {"amount": 20, "dataset_amount_sum": 30},
+        ]
+    )
 
     rows = _spark_runtime().evaluate_dataframe(df, ruleset).collect()
 
     assert [row["rules_engine_matched"] for row in rows] == [True, True]
-
-
-def test_spark_runtime_evaluates_group_aggregate(spark):
-    """
-    What: Evaluates a group aggregate through Spark precompute plus UDF.
-    Why: Spark must compute and join aggregate values by explicit group keys.
-    Fails when: Group aggregation, join keys, or per-row lookup regresses.
-    """
-    ruleset = _compile(
-        {
-            "left": {
-                "aggregate": {
-                    "function": "sum",
-                    "field": "amount",
-                    "scope": "group",
-                    "by": ["account"],
-                    "null_input_mode": "ignore",
-                    "null_result_mode": "null",
-                }
-            },
-            "operator": "gt",
-            "right": {"literal": 15},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
-        }
-    )
-    df = spark.createDataFrame(
-        [
-            {"account": "A", "amount": 10},
-            {"account": "A", "amount": 20},
-            {"account": "B", "amount": 5},
-        ]
-    )
-
-    rows = _spark_runtime().evaluate_dataframe(df, ruleset).orderBy("account", "amount").collect()
-
-    assert [row["rules_engine_matched"] for row in rows] == [True, True, False]
-
-
-def test_spark_runtime_evaluates_filtered_aggregate(spark):
-    """
-    What: Evaluates a Spark dataset aggregate with an aggregate filter.
-    Why: Spark precompute must filter aggregate inputs without filtering output rows.
-    Fails when: Filter expression generation or aggregate input selection regresses.
-    """
-    ruleset = _compile(
-        {
-            "left": {
-                "aggregate": {
-                    "function": "sum",
-                    "field": "amount",
-                    "scope": "dataset",
-                    "filter": {
-                        "all": [
-                            {
-                                "left": {"field": "status"},
-                                "operator": "eq",
-                                "right": {"literal": "OPEN"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
-                            }
-                        ]
-                    },
-                    "null_input_mode": "ignore",
-                    "null_result_mode": "null",
-                }
-            },
-            "operator": "eq",
-            "right": {"literal": 30},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
-        }
-    )
-    df = spark.createDataFrame(
-        [
-            {"status": "OPEN", "amount": 10},
-            {"status": "CLOSED", "amount": 50},
-            {"status": "OPEN", "amount": 20},
-        ]
-    )
-
-    rows = _spark_runtime().evaluate_dataframe(df, ruleset).collect()
-
-    assert [row["rules_engine_matched"] for row in rows] == [True, True, True]

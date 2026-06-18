@@ -12,8 +12,6 @@ from dataclasses import replace
 from decimal import Decimal
 
 from rules_engine.models import (
-    AggregateFilter,
-    AggregateOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -21,7 +19,6 @@ from rules_engine.models import (
     FieldOperand,
     LiteralOperand,
     Operand,
-    RowFilterPredicate,
     Rule,
     Ruleset,
 )
@@ -82,59 +79,23 @@ class RulesetNormalizer:
         """
         Rebuild an operand into a fully materialized immutable shape.
 
-        This is especially important for aggregate args and custom function
-        args, which are accepted as mappings but should persist as ordinary
-        dictionaries.
+        This is especially important for custom function args, which are
+        accepted as mappings but should persist as ordinary dictionaries.
         """
-        if isinstance(operand, AggregateOperand):
-            return AggregateOperand.build(
-                function=operand.function,
-                field_name=operand.field_name,
-                scope=operand.scope,
-                by=operand.by,
-                args=dict(operand.args),
-                filter_=self._normalize_aggregate_filter(operand.filter),
-                order_by=operand.order_by,
-                null_input_mode=operand.null_input_mode,
-                null_result_mode=operand.null_result_mode,
-                null_default_value=operand.null_default_value,
-            )
         if isinstance(operand, CustomFunctionOperand):
             return CustomFunctionOperand(
                 function_name=operand.function_name,
-                args=dict(operand.args),
+                args={
+                    str(key): (
+                        self._normalize_operand(value)
+                        if isinstance(value, (FieldOperand, LiteralOperand, CustomFunctionOperand))
+                        else value
+                    )
+                    for key, value in operand.args.items()
+                },
             )
         if isinstance(operand, FieldOperand):
             return operand
         if isinstance(operand, LiteralOperand):
             return operand
         return operand
-
-    def _normalize_aggregate_filter(
-        self,
-        aggregate_filter: AggregateFilter | None,
-    ) -> AggregateFilter | None:
-        """
-        Normalize all predicates in an aggregate filter.
-        """
-        if aggregate_filter is None:
-            return None
-        return AggregateFilter(
-            logical_operator=aggregate_filter.logical_operator,
-            predicates=tuple(
-                RowFilterPredicate(
-                    left=self._normalize_operand(predicate.left),
-                    operator=predicate.operator,
-                    right=(
-                        self._normalize_operand(predicate.right)
-                        if predicate.right is not None
-                        else None
-                    ),
-                    tolerance_abs=Decimal(str(predicate.tolerance_abs or "0")),
-                    null_input_mode=predicate.null_input_mode,
-                    null_result_mode=predicate.null_result_mode,
-                    null_default_value=predicate.null_default_value,
-                )
-                for predicate in aggregate_filter.predicates
-            ),
-        )

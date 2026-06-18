@@ -8,16 +8,13 @@ version = "0.1.0"
 description = "Strict YAML rules engine metadata package for Databricks."
 requires-python = ">=3.10"
 dependencies = [
+    "pyspark>=3.5",
     "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
-spark = [
-    "pyspark>=3.5",
-]
 test = [
     "pytest>=8",
-    "pyspark>=3.5",
 ]
 
 [tool.setuptools.packages.find]

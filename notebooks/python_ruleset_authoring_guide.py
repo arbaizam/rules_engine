@@ -4,7 +4,7 @@
 # MAGIC
 # MAGIC This notebook shows how to create a ruleset directly with the Python
 # MAGIC dataclass API, validate it, export it to canonical YAML, and optionally run
-# MAGIC it against a small in-memory row set.
+# MAGIC it against a small Spark DataFrame.
 # MAGIC
 # MAGIC Use this path when a ruleset is easier to generate from Python code than to
 # MAGIC maintain by hand in YAML. The exported YAML remains the reviewable
@@ -31,7 +31,7 @@ repo_root = Path.cwd()
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from rules_engine import FunctionRegistry, RulesEngineRuntime, YamlRulesetExporter
+from rules_engine import FunctionRegistry, SparkRulesEngineRuntime, YamlRulesetExporter
 from rules_engine.enums import ComparisonOperator, LogicalOperator, NullInputMode, NullResultMode, RulesetStatus
 from rules_engine.models import Assignment, Condition, ConditionGroup, FieldOperand, LiteralOperand, Rule, Ruleset
 from rules_engine.validator import RulesetValidator
@@ -200,10 +200,11 @@ print(output_path.read_text(encoding="utf-8"))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 6. Evaluate With The Pure-Python Runtime
+# MAGIC ## 6. Evaluate With The Spark Runtime
 # MAGIC
-# MAGIC This is useful for quick local checks. Production Databricks workflows should
-# MAGIC publish the ruleset metadata and use the Spark runtime against a DataFrame.
+# MAGIC This is useful for quick checks before publishing the ruleset metadata.
+# MAGIC Production Databricks workflows use the same Spark runtime against managed
+# MAGIC DataFrames.
 
 # COMMAND ----------
 
@@ -212,15 +213,15 @@ class NotebookRepository:
         raise NotImplementedError("This example passes the ruleset directly.")
 
 
-runtime = RulesEngineRuntime(NotebookRepository(), FunctionRegistry())
 rows = [
     {"account": "A", "status": "OPEN", "amount": 150},
     {"account": "B", "status": "OPEN", "amount": 25},
     {"account": "C", "status": "CLOSED", "amount": 5},
 ]
 
-output_rows, traces = runtime.evaluate(rows, ruleset)
-output_rows
+runtime = SparkRulesEngineRuntime(NotebookRepository(), FunctionRegistry())
+output_df = runtime.evaluate_dataframe(spark.createDataFrame(rows), ruleset)
+display(output_df)
 
 # COMMAND ----------
 

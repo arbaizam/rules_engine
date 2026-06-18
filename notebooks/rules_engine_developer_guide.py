@@ -13,7 +13,7 @@
 # MAGIC 3. Validate semantic rules.
 # MAGIC 4. Normalize metadata for persistence.
 # MAGIC 5. Export canonical YAML for round-trip governance.
-# MAGIC 6. Run the pure-Python runtime.
+# MAGIC 6. Prepare sample input data.
 # MAGIC 7. Run Spark compatibility validation.
 # MAGIC 8. Create Delta metadata tables.
 # MAGIC 9. Save, publish, load, evaluate, and retire a ruleset.
@@ -55,7 +55,6 @@ from tempfile import TemporaryDirectory
 
 from rules_engine import (
     FunctionRegistry,
-    RulesEngineRuntime,
     RulesetNormalizer,
     RulesEngineService,
     RulesetValidator,
@@ -79,15 +78,15 @@ from tools.recon_spec_translation.writer_yaml import write_yaml
 # MAGIC - canonical operator names only,
 # MAGIC - explicit null behavior,
 # MAGIC - absolute tolerance only,
-# MAGIC - explicit aggregate scope,
+# MAGIC - precomputed cross-row facts supplied as fields,
 # MAGIC - no expression DSL,
 # MAGIC - no aliases.
 # MAGIC
 # MAGIC This example contains:
 # MAGIC
 # MAGIC - a row-level condition,
-# MAGIC - a group aggregate,
-# MAGIC - a filtered dataset aggregate,
+# MAGIC - a precomputed account-level amount total,
+# MAGIC - a precomputed open-row dataset amount total,
 # MAGIC - an assignment emitted when the rule matches.
 # MAGIC
 # MAGIC What this cell does:
@@ -103,10 +102,8 @@ from tools.recon_spec_translation.writer_yaml import write_yaml
 # MAGIC The rule means:
 # MAGIC
 # MAGIC - `status` must equal `OPEN`.
-# MAGIC - the sum of `amount` within the current `account` group must be greater
-# MAGIC   than `100`.
-# MAGIC - the dataset-level sum of `amount` for rows where `status == OPEN` must
-# MAGIC   be greater than `100`.
+# MAGIC - `account_amount_sum` must be greater than `100`.
+# MAGIC - `open_amount_sum` must be greater than `100`.
 # MAGIC - when all conditions pass, assign `review_bucket = high_value_open`.
 # MAGIC
 # MAGIC What this cell does not do:
@@ -143,15 +140,7 @@ rules:
           null_result_mode: "null"
         - condition_id: c_group_sum_gt_100
           left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: group
-              by: [account]
-              args: {}
-              order_by: []
-              null_input_mode: ignore
-              null_result_mode: "null"
+            field: account_amount_sum
           operator: gt
           right: { literal: 100, value_type: number }
           tolerance_abs: "0"
@@ -159,22 +148,7 @@ rules:
           null_result_mode: "null"
         - condition_id: c_open_dataset_sum_gt_100
           left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: dataset
-              args: {}
-              order_by: []
-              filter:
-                all:
-                  - left: { field: status }
-                    operator: eq
-                    right: { literal: OPEN, value_type: string }
-                    tolerance_abs: "0"
-                    null_input_mode: propagate
-                    null_result_mode: "null"
-              null_input_mode: ignore
-              null_result_mode: "null"
+            field: open_amount_sum
           operator: gt
           right: { literal: 100, value_type: number }
           tolerance_abs: "0"
@@ -264,74 +238,42 @@ print(exported_yaml)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 5. Pure-Python Runtime
-# MAGIC
-# MAGIC The pure-Python runtime is useful for local unit tests, small fixtures, and
-# MAGIC semantic parity checks. It evaluates aggregates over the incoming row set
-# MAGIC exactly as provided.
+# MAGIC ## 5. Prepare Sample Input Data
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
 # MAGIC - Creates a tiny list of Python dictionaries as input rows.
-# MAGIC - Evaluates the normalized ruleset directly in Python.
-# MAGIC - Produces output rows and compact execution traces.
-# MAGIC
-# MAGIC Runtime semantics demonstrated here:
-# MAGIC
-# MAGIC - aggregates are computed over the input row list exactly as supplied,
-# MAGIC - no rows are deduplicated or filtered outside explicit aggregate filters,
-# MAGIC - assignments appear only when a rule matches,
-# MAGIC - traces show which rules matched.
-# MAGIC
-# MAGIC What this cell does not do:
-# MAGIC
-# MAGIC - It does not use Spark.
-# MAGIC - It does not read published metadata from Delta.
-# MAGIC - It does not persist output.
+# MAGIC - Includes aggregate facts that an upstream Spark transform would usually
+# MAGIC   add before rule evaluation.
+# MAGIC - Reuses those rows later to build a Spark DataFrame.
+# MAGIC - Does not evaluate or persist anything yet.
 
 # COMMAND ----------
 
-class NotebookDummyRepository:
-    def load_published(self, ruleset_name, version=None):
-        raise NotImplementedError("This example passes rulesets directly.")
-
-
 input_rows = [
-    {"row_id": 1, "account": "A", "status": "OPEN", "amount": 60},
-    {"row_id": 2, "account": "A", "status": "OPEN", "amount": 50},
-    {"row_id": 3, "account": "B", "status": "OPEN", "amount": 10},
-    {"row_id": 4, "account": "C", "status": "CLOSED", "amount": 500},
+    {"row_id": 1, "account": "A", "status": "OPEN", "amount": 60, "account_amount_sum": 110, "open_amount_sum": 120},
+    {"row_id": 2, "account": "A", "status": "OPEN", "amount": 50, "account_amount_sum": 110, "open_amount_sum": 120},
+    {"row_id": 3, "account": "B", "status": "OPEN", "amount": 10, "account_amount_sum": 10, "open_amount_sum": 120},
+    {"row_id": 4, "account": "C", "status": "CLOSED", "amount": 500, "account_amount_sum": 500, "open_amount_sum": 120},
 ]
 
-python_runtime = RulesEngineRuntime(NotebookDummyRepository(), FunctionRegistry())
-python_output, python_traces = python_runtime.evaluate(input_rows, normalized_ruleset)
-
-for row in python_output:
-    print(row)
+input_rows
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 6. Spark Compatibility Preflight
 # MAGIC
-# MAGIC The Spark compatibility validator catches rules that are valid metadata but
-# MAGIC intentionally unsupported by the current Spark runtime.
+# MAGIC The Spark compatibility validator runs the semantic contract through the
+# MAGIC Spark runtime facade.
 # MAGIC
 # MAGIC Use it before publishing metadata intended for Databricks execution.
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
 # MAGIC - Runs the Spark-specific validation gate against the normalized ruleset.
-# MAGIC - Raises before metadata promotion if Spark execution would fail or weaken
-# MAGIC   semantics.
-# MAGIC
-# MAGIC Examples of rules this validator rejects:
-# MAGIC
-# MAGIC - `median` and `quantile`, because exact Spark implementation is not enabled.
-# MAGIC - aggregate `null_input_mode=error`.
-# MAGIC - aggregate `null_result_mode=error`.
-# MAGIC - aggregate-filter error null modes.
-# MAGIC - `first` or `last` with aggregate `null_input_mode=propagate`.
+# MAGIC - Raises before metadata promotion if the ruleset violates the supported
+# MAGIC   row-level contract.
 # MAGIC
 # MAGIC This is a preflight check. It does not write metadata and does not evaluate
 # MAGIC input data.
@@ -454,11 +396,8 @@ display(spark.table(table_names.ruleset_versions))
 # MAGIC Runtime execution details:
 # MAGIC
 # MAGIC - `load_published()` reads only `status = published` metadata.
-# MAGIC - Aggregate operands are discovered from the ruleset.
-# MAGIC - Spark precomputes group and dataset aggregates.
-# MAGIC - Aggregate values are joined back to the original input rows.
+# MAGIC - Any aggregate facts must already be present as input columns.
 # MAGIC - A Python UDF evaluates final condition and assignment logic per row.
-# MAGIC - Temporary aggregate columns are dropped from the returned DataFrame.
 # MAGIC - `fail_on_error=True` performs an error check and raises if any row has
 # MAGIC   `rules_engine_error`.
 # MAGIC
@@ -487,14 +426,13 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_matched`
 # MAGIC - `rules_engine_matched_rule_ids`
 # MAGIC - `rules_engine_assign`
-# MAGIC - `rules_engine_rule_results`
 # MAGIC - `rules_engine_winning_rule`
 # MAGIC - `rules_engine_winning_rule_id`
 # MAGIC - `rules_engine_winning_rule_name`
 # MAGIC - `rules_engine_winning_rule_explanation`
 # MAGIC - `rules_engine_error`
 # MAGIC
-# MAGIC Assignment, rule result, and winning-rule payloads are JSON strings.
+# MAGIC Assignment output and the winning-rule trace are Spark structs.
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
@@ -507,12 +445,10 @@ display(result_df.orderBy("row_id"))
 # MAGIC
 # MAGIC - `rules_engine_matched`: whether at least one rule matched the row.
 # MAGIC - `rules_engine_matched_rule_ids`: ordered list of matched rule IDs.
-# MAGIC - `rules_engine_assign`: JSON object containing assignments from matched
-# MAGIC   rules, or null when no rule matched.
-# MAGIC - `rules_engine_rule_results`: compact JSON array of per-rule traces with
+# MAGIC - `rules_engine_assign`: struct containing assignments from matched rules,
+# MAGIC   or null when no rule matched.
+# MAGIC - `rules_engine_winning_rule`: struct for the first matched rule, including
 # MAGIC   condition-level source columns, evaluated values, and pass/fail state.
-# MAGIC - `rules_engine_winning_rule`: JSON object for the first matched rule, or
-# MAGIC   null when no rule matched.
 # MAGIC - `rules_engine_winning_rule_id`: ID of the first matched rule.
 # MAGIC - `rules_engine_winning_rule_name`: name of the first matched rule.
 # MAGIC - `rules_engine_winning_rule_explanation`: readable summary of the passed
@@ -724,7 +660,7 @@ translated_ruleset
 # MAGIC
 # MAGIC - run unit tests,
 # MAGIC - run Spark tests on the target Databricks runtime,
-# MAGIC - run the system test against a disposable schema,
+# MAGIC - run Databricks validation against a disposable schema,
 # MAGIC - validate representative production-like rulesets,
 # MAGIC - compare translated reconciliation output against known-good results,
 # MAGIC - review metadata table permissions and retention,

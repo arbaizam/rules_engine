@@ -12,7 +12,6 @@ from rules_engine.exporter_yaml import YamlRulesetExporter
 from rules_engine.models import Ruleset
 from rules_engine.normalizer import RulesetNormalizer
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
-from rules_engine.runtime import RulesEngineRuntime
 from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.standard_functions import register_standard_functions, standard_function_rows
 from rules_engine.validator import RulesetValidator
@@ -30,7 +29,7 @@ _LAZY_EXPORTS = {
 
 def __getattr__(name: str):
     """
-    Lazily import Spark-backed exports so pure-Python use does not require PySpark.
+    Lazily import Spark-backed exports to keep compile-only import paths light.
     """
     if name not in _LAZY_EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -46,7 +45,6 @@ __all__ = [
     "DeltaRowSerializer",
     "FunctionRegistry",
     "PublishService",
-    "RulesEngineRuntime",
     "RulesEngineService",
     "Ruleset",
     "RulesetNormalizer",

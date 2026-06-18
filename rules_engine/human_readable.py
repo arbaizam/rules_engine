@@ -9,13 +9,10 @@ from enum import Enum
 from typing import Any
 
 from rules_engine.enums import (
-    AggregateScope,
     ComparisonOperator,
     LogicalOperator,
 )
 from rules_engine.models import (
-    AggregateFilter,
-    AggregateOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -23,7 +20,6 @@ from rules_engine.models import (
     FieldOperand,
     LiteralOperand,
     Operand,
-    RowFilterPredicate,
     Rule,
     Ruleset,
 )
@@ -109,55 +105,9 @@ class HumanReadableRulesetFormatter:
             return operand.field_name
         if isinstance(operand, LiteralOperand):
             return self._format_value(operand.value)
-        if isinstance(operand, AggregateOperand):
-            return self._format_aggregate(operand)
         if isinstance(operand, CustomFunctionOperand):
             return self._format_custom_function(operand)
         raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
-
-    def _format_aggregate(self, operand: AggregateOperand) -> str:
-        """
-        Render an aggregate operand with scope-defining metadata.
-        """
-        args = [
-            f"{name}={self._format_value(value)}"
-            for name, value in operand.args.items()
-        ]
-        call_args = ", ".join([operand.field_name, *args])
-        expression = f"{operand.function.value}({call_args})"
-        if operand.scope is AggregateScope.GROUP and operand.by:
-            expression = f"{expression} by {', '.join(operand.by)}"
-        elif operand.scope is AggregateScope.DATASET:
-            expression = f"{expression} over dataset"
-        if operand.filter is not None:
-            expression = f"{expression} where {self._format_filter(operand.filter)}"
-        if operand.order_by:
-            order_by = ", ".join(
-                f"{order.field} {order.direction}"
-                for order in operand.order_by
-            )
-            expression = f"{expression} order by {order_by}"
-        return expression
-
-    def _format_filter(self, filter_: AggregateFilter) -> str:
-        """
-        Render aggregate filter predicates.
-        """
-        joiner = " AND " if filter_.logical_operator is LogicalOperator.ALL else " OR "
-        return joiner.join(
-            self._format_row_filter_predicate(predicate)
-            for predicate in filter_.predicates
-        )
-
-    def _format_row_filter_predicate(self, predicate: RowFilterPredicate) -> str:
-        """
-        Render one aggregate row-filter predicate.
-        """
-        left = self._format_operand(predicate.left)
-        operator = self._operator_label(predicate.operator)
-        if predicate.right is None:
-            return f"{left} {operator}"
-        return f"{left} {operator} {self._format_operand(predicate.right)}"
 
     def _format_custom_function(self, operand: CustomFunctionOperand) -> str:
         """
@@ -175,7 +125,7 @@ class HumanReadableRulesetFormatter:
         """
         if isinstance(
             value,
-            (FieldOperand, LiteralOperand, AggregateOperand, CustomFunctionOperand),
+            (FieldOperand, LiteralOperand, CustomFunctionOperand),
         ):
             return self._format_operand(value)
         return self._format_value(value)

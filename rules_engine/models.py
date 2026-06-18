@@ -18,11 +18,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from rules_engine.enums import (
-    AggregateFunction,
-    AggregateScope,
     ComparisonOperator,
     LogicalOperator,
     NullInputMode,
@@ -159,23 +157,6 @@ class ValidationResult:
 
 
 @dataclass(frozen=True)
-class OrderBySpec:
-    """
-    Explicit ordering specification for order-sensitive aggregates.
-
-    Parameters
-    ----------
-    field : str
-        Field used for aggregate ordering.
-    direction : str
-        Ordering direction. Valid values are validated separately.
-    """
-
-    field: str
-    direction: str
-
-
-@dataclass(frozen=True)
 class FieldOperand:
     """
     Field-reference operand resolved against the incoming row set.
@@ -215,107 +196,7 @@ class CustomFunctionOperand:
     kind: OperandKind = field(default=OperandKind.CUSTOM_FUNCTION, init=False)
 
 
-@dataclass(frozen=True)
-class RowFilterPredicate:
-    """
-    Row-level predicate used inside a filtered aggregate.
-
-    Notes
-    -----
-    Aggregate filters intentionally contain only row-level predicates. Nested
-    aggregates are rejected by validation.
-    """
-
-    left: Operand
-    operator: ComparisonOperator
-    right: Operand | None
-    tolerance_abs: Decimal
-    null_input_mode: NullInputMode
-    null_result_mode: NullResultMode
-    null_default_value: Any | None = None
-
-
-@dataclass(frozen=True)
-class AggregateFilter:
-    """
-    Filter applied before aggregate calculation.
-    """
-
-    logical_operator: LogicalOperator
-    predicates: tuple[RowFilterPredicate, ...]
-
-
-@dataclass(frozen=True)
-class AggregateOperand:
-    """
-    Scalar aggregate operand.
-
-    Parameters
-    ----------
-    function : AggregateFunction
-        Aggregate function name.
-    field_name : str
-        Field aggregated over the incoming row set.
-    scope : AggregateScope
-        Explicit aggregate scope, either ``group`` or ``dataset``.
-    by : tuple[str, ...]
-        Grouping fields for ``group`` scope. Empty for ``dataset`` scope.
-    args : Mapping[str, Any]
-        Function-specific arguments such as ``q`` for quantile.
-    filter : AggregateFilter | None
-        Optional row-level aggregate filter.
-    order_by : tuple[OrderBySpec, ...]
-        Explicit ordering for order-sensitive aggregates.
-    null_input_mode : NullInputMode
-        Null handling for aggregate inputs.
-    null_result_mode : NullResultMode
-        Null handling for aggregate results.
-    """
-
-    function: AggregateFunction
-    field_name: str
-    scope: AggregateScope
-    by: tuple[str, ...]
-    args: Mapping[str, Any]
-    filter: AggregateFilter | None
-    order_by: tuple[OrderBySpec, ...]
-    null_input_mode: NullInputMode
-    null_result_mode: NullResultMode
-    null_default_value: Any | None = None
-    kind: OperandKind = field(default=OperandKind.AGGREGATE, init=False)
-
-    @classmethod
-    def build(
-        cls,
-        function: AggregateFunction,
-        field_name: str,
-        scope: AggregateScope,
-        by: Sequence[str] | None,
-        args: Mapping[str, Any] | None,
-        filter_: AggregateFilter | None,
-        order_by: Sequence[OrderBySpec] | None,
-        null_input_mode: NullInputMode,
-        null_result_mode: NullResultMode,
-        null_default_value: Any | None = None,
-    ) -> "AggregateOperand":
-        """
-        Build an aggregate operand while materializing sequence fields.
-        """
-        return cls(
-            function=function,
-            field_name=field_name,
-            scope=scope,
-            by=tuple(by or ()),
-            args=dict(args or {}),
-            filter=filter_,
-            order_by=tuple(order_by or ()),
-            null_input_mode=null_input_mode,
-            null_result_mode=null_result_mode,
-            null_default_value=null_default_value,
-        )
-
-
-Operand = FieldOperand | LiteralOperand | AggregateOperand | CustomFunctionOperand
+Operand = FieldOperand | LiteralOperand | CustomFunctionOperand
 
 
 @dataclass(frozen=True)
@@ -406,7 +287,6 @@ class RulesetVersionRow:
     rule_count: int
     condition_count: int
     assignment_count: int
-    aggregate_count: int
     custom_function_count: int
     owner: str | None
     owner_department: str | None

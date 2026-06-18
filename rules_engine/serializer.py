@@ -11,9 +11,10 @@ from datetime import date
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exporter_yaml import YamlRulesetExporter
 from rules_engine.models import (
-    AggregateOperand,
     ConditionGroup,
     CustomFunctionOperand,
+    FieldOperand,
+    LiteralOperand,
     Operand,
     Ruleset,
     RulesetVersionRow,
@@ -60,7 +61,6 @@ class DeltaRowSerializer:
             rule_count=len(ruleset.rules),
             condition_count=self._count_conditions(ruleset),
             assignment_count=sum(len(rule.assignments) for rule in ruleset.rules),
-            aggregate_count=self._count_operands(ruleset, AggregateOperand),
             custom_function_count=self._count_operands(ruleset, CustomFunctionOperand),
             owner=ruleset.owner,
             owner_department=ruleset.owner_department,
@@ -137,14 +137,13 @@ class DeltaRowSerializer:
 
     def _count_operand_tree(self, operand: Operand, operand_type: type) -> int:
         """
-        Count one operand and any operands nested inside aggregate filters.
+        Count one operand and any operands nested inside custom function args.
         """
         count = 1 if isinstance(operand, operand_type) else 0
-        if isinstance(operand, AggregateOperand) and operand.filter is not None:
-            for predicate in operand.filter.predicates:
-                count += self._count_operand_tree(predicate.left, operand_type)
-                if predicate.right is not None:
-                    count += self._count_operand_tree(predicate.right, operand_type)
+        if isinstance(operand, CustomFunctionOperand):
+            for arg_value in operand.args.values():
+                if isinstance(arg_value, (FieldOperand, LiteralOperand, CustomFunctionOperand)):
+                    count += self._count_operand_tree(arg_value, operand_type)
         return count
 
     def _payload_json(self, ruleset: Ruleset) -> str:

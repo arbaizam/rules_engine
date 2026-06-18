@@ -44,7 +44,6 @@ def test_ruleset_version_schema_contains_payload_provenance_and_hash_fields():
         "rule_count",
         "condition_count",
         "assignment_count",
-        "aggregate_count",
         "custom_function_count",
         "owner",
         "owner_department",

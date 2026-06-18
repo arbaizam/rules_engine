@@ -13,7 +13,7 @@ def test_serializer_persists_canonical_payload_with_explicit_fields():
     """
     What: Serializes a ruleset and inspects explicit canonical payload fields.
     Why: Persisted payload_json is the audit source for runtime reconstruction.
-    Fails when: Scope, tolerance, or null fields are omitted or renamed.
+    Fails when: Operand, tolerance, or null fields are omitted or renamed.
     """
     ruleset = _compile(
         {
@@ -31,15 +31,7 @@ def test_serializer_persists_canonical_payload_with_explicit_fields():
                     "when": {
                         "all": [
                             {
-                                "left": {
-                                    "aggregate": {
-                                        "function": "sum",
-                                        "field": "amount",
-                                        "scope": "dataset",
-                                        "null_input_mode": "ignore",
-                                        "null_result_mode": "null",
-                                    }
-                                },
+                                "left": {"field": "account_amount_sum"},
                                 "operator": "gt",
                                 "right": {"literal": 1},
                                 "null_input_mode": "propagate",
@@ -56,10 +48,8 @@ def test_serializer_persists_canonical_payload_with_explicit_fields():
     row = DeltaRowSerializer().serialize_ruleset_version(ruleset)
     payload = json.loads(row.payload_json)
     condition = payload["rules"][0]["when"]["all"][0]
-    aggregate = condition["left"]["aggregate"]
 
-    assert aggregate["scope"] == "dataset"
-    assert aggregate["by"] == []
+    assert condition["left"] == {"field": "account_amount_sum"}
     assert condition["tolerance_abs"] == "0"
     assert condition["null_input_mode"] == "propagate"
     assert condition["null_result_mode"] == "null"
@@ -111,6 +101,59 @@ def test_serializer_stamps_provenance_hash_and_summary_counts():
     assert row.rule_count == 1
     assert row.condition_count == 1
     assert row.assignment_count == 1
+
+
+def test_serializer_counts_nested_custom_function_operands():
+    """
+    What: Counts custom functions nested inside custom-function arguments.
+    Why: Summary metadata should reflect the full supported operand tree.
+    Fails when: Custom function counts only include top-level operands.
+    """
+    ruleset = _compile(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Ruleset",
+            "version": "1",
+            "status": "published",
+            "owner": "Rules Team",
+            "owner_department": "ALM Engineering",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "Rule 1",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {
+                                    "custom_function": {
+                                        "name": "outer_score",
+                                        "args": {
+                                            "inner": {
+                                                "custom_function": {
+                                                    "name": "inner_score",
+                                                    "args": {"value": {"field": "account"}},
+                                                }
+                                            }
+                                        },
+                                    }
+                                },
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "A"},
+                }
+            ],
+        }
+    )
+
+    row = DeltaRowSerializer().serialize_ruleset_version(ruleset)
+
+    assert row.custom_function_count == 2
 
 
 def test_content_hash_equals_sha256_of_payload_json():

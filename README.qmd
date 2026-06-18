@@ -10,7 +10,7 @@ persists them to Spark/Delta tables, and evaluates them against Python row
 sets or Spark DataFrames.
 
 The design intentionally avoids aliases, expression DSLs, raw persisted
-lambdas, hidden runtime defaults, implicit aggregate behavior, and silent
+lambdas, hidden runtime defaults, hidden cross-row behavior, and silent
 semantic weakening.
 
 ## Contents
@@ -24,7 +24,6 @@ semantic weakening.
 - [Compile, Validate, Normalize](#compile-validate-normalize)
 - [YAML Export And Round Trip](#yaml-export-and-round-trip)
 - [Custom Function Registry](#custom-function-registry)
-- [Pure-Python Runtime](#pure-python-runtime)
 - [Spark Runtime](#spark-runtime)
 - [Spark Compatibility Validation](#spark-compatibility-validation)
 - [Rules Engine Service](#rules-engine-service)
@@ -118,7 +117,6 @@ Operands are one of:
 ```text
 field
 literal
-aggregate
 custom_function
 ```
 
@@ -127,7 +125,7 @@ No operand aliases are accepted.
 ### Assignment
 
 Assignments are emitted when a rule matches. Assignment values may be literals,
-fields, or custom functions. Aggregate assignments are forbidden in v1.
+fields, or custom functions.
 
 ## Package Layout
 
@@ -148,9 +146,6 @@ rules_engine/
   spark_runtime.py        # Spark DataFrame runtime
   spark_validator.py      # Spark compatibility validator
   validator.py            # semantic validator
-
-databricks/
-  system_test_rules_engine.py
 
 notebooks/
   rules_engine_developer_guide.py
@@ -229,11 +224,9 @@ Checks include:
 - duplicate rule and assignment IDs,
 - empty condition groups,
 - unary/binary operand compatibility,
-- aggregate scope rules,
-- quantile `q`,
-- order-sensitive aggregate `order_by`,
 - custom function registry contracts,
-- nested aggregate prohibition.
+- collection literal shape,
+- null default requirements.
 
 Side effects:
 
@@ -243,17 +236,8 @@ Side effects:
 
 Purpose:
 
-- Run base semantic validation plus Spark runtime compatibility checks.
-- Catch metadata that is valid in theory but unsupported by the current Spark
-  execution path.
-
-Additional Spark checks include:
-
-- exact `median` and `quantile` unsupported,
-- aggregate `null_input_mode=error` unsupported,
-- aggregate `null_result_mode=error` unsupported,
-- aggregate-filter error null modes unsupported,
-- `first` / `last` with `null_input_mode=propagate` unsupported.
+- Run the base semantic validation used by the Spark runtime.
+- Preserve a Spark-specific validation entry point for deployment workflows.
 
 Side effects:
 
@@ -265,7 +249,7 @@ Purpose:
 
 - Materialize publish/runtime-ready explicit metadata.
 - Ensure omitted tolerance is represented as `0`.
-- Ensure aggregate payload defaults are explicit.
+- Normalize nested custom-function operand mappings.
 
 Side effects:
 
@@ -370,23 +354,6 @@ Side effects:
 - Does not delete metadata.
 - Makes that version unavailable through `load_published()`.
 
-### `RulesEngineRuntime.evaluate(rows, ruleset)`
-
-Purpose:
-
-- Evaluate a ruleset against an iterable of Python dictionaries.
-
-Side effects:
-
-- None. It returns output rows and traces.
-- Does not write metadata or mutate input rows.
-
-Best use:
-
-- local unit tests,
-- small fixtures,
-- semantic parity checks.
-
 ### `SparkRulesEngineRuntime.evaluate_dataframe(df, ruleset, fail_on_error=True)`
 
 Purpose:
@@ -395,19 +362,15 @@ Purpose:
 
 Detailed sequence:
 
-1. Discover aggregate operands.
-2. Precompute group and dataset aggregates with Spark operations.
-3. Join aggregate values back to original rows.
-4. Use a Python UDF to evaluate final rule and assignment logic per row.
-5. Append `rules_engine_*` result columns.
-6. If `fail_on_error=True`, raise if any row has `rules_engine_error`.
+1. Use a Python UDF to evaluate rule and assignment logic per row.
+2. Append `rules_engine_*` result columns.
+3. If `fail_on_error=True`, raise if any row has `rules_engine_error`.
 
 Returned columns:
 
 - `rules_engine_matched`
 - `rules_engine_matched_rule_ids`
 - `rules_engine_assign`
-- `rules_engine_rule_results`
 - `rules_engine_winning_rule`
 - `rules_engine_winning_rule_id`
 - `rules_engine_winning_rule_name`
@@ -463,19 +426,10 @@ review.
 - Published metadata must be fully resolved and explicit.
 - Delta metadata is shaped for queryability.
 - Runtime reads published metadata.
-- Aggregate conditions are first-class operands.
-- Aggregate scope is required and explicit.
-- Aggregate scopes are exactly `group` and `dataset`.
-- `scope=group` requires non-empty `by`.
-- `scope=dataset` forbids `by`.
-- Aggregates operate on the incoming row set exactly as provided.
-- There is no implicit deduplication, reshaping, filtering, ordering, or
-  cross-run state.
-- Filtered aggregates are supported.
-- Nested aggregates are forbidden.
-- Collection-returning aggregates are not supported.
-- Window/analytic aggregates are not part of v1.
-- Null handling is explicit per condition and aggregate.
+- Rule evaluation is row-local. Cross-row facts must be precomputed upstream
+  and supplied as ordinary input fields.
+- Aggregate operands are not supported by the rules engine runtime.
+- Null handling is explicit per condition.
 - Tolerance is absolute only.
 - Omitted tolerance is normalized and persisted as `0`.
 - Custom logic is allowed only through `FunctionRegistry`.
@@ -529,36 +483,13 @@ is_not_null
 Unary operators must not define a right operand. All other operators require a
 right operand.
 
-## Supported Aggregates
+## Precomputed Aggregate Facts
 
-Aggregate functions:
-
-```text
-sum
-mean
-min
-max
-count
-count_distinct
-quantile
-median
-stddev
-variance
-first
-last
-```
-
-Important aggregate rules:
-
-- `quantile` requires `args.q` within `[0, 1]`.
-- `first` and `last` require explicit `order_by`.
-- `scope=group` requires `by`.
-- `scope=dataset` forbids `by`.
-- Aggregate filters may contain only row-level predicates.
-- Nested aggregates are invalid.
-- Aggregate assignments are invalid.
-- Spark currently fails fast for `median` and `quantile` because Spark's
-  available approximation functions do not match the exact Python semantics.
+Aggregate calculations should be performed before invoking the rules engine.
+After an upstream Spark job adds the aggregate result to each row, rules can
+reference that value with a normal `field` operand. This keeps rule evaluation
+row-local and avoids Spark memory pressure from serializing aggregate trace
+payloads.
 
 ## Authoring YAML
 
@@ -588,7 +519,7 @@ rules:
       review_bucket: trad
 ```
 
-### Group Aggregate Rule
+### Precomputed Aggregate Rule
 
 ```yaml
 ruleset_id: account_rules
@@ -602,16 +533,7 @@ rules:
     rule_order: 1
     when:
       all:
-        - left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: group
-              by: [account_id]
-              args: {}
-              order_by: []
-              null_input_mode: ignore
-              null_result_mode: "null"
+        - left: { field: account_amount_sum }
           operator: gt
           right: { literal: 1000000, value_type: number }
           tolerance_abs: "0"
@@ -621,26 +543,10 @@ rules:
       review_bucket: high_value
 ```
 
-### Filtered Aggregate Rule
+### Precomputed Filtered Total
 
 ```yaml
-left:
-  aggregate:
-    function: sum
-    field: amount
-    scope: dataset
-    args: {}
-    order_by: []
-    filter:
-      all:
-        - left: { field: status }
-          operator: eq
-          right: { literal: OPEN, value_type: string }
-          tolerance_abs: "0"
-          null_input_mode: propagate
-          null_result_mode: "null"
-    null_input_mode: ignore
-    null_result_mode: "null"
+left: { field: open_amount_sum }
 operator: gt
 right: { literal: 0, value_type: number }
 tolerance_abs: "0"
@@ -688,7 +594,7 @@ normalized = RulesetNormalizer().normalize_ruleset(ruleset)
 ```
 
 Normalization makes implicit authoring omissions explicit, including
-`tolerance_abs = 0`, aggregate `args`, `by`, and `order_by` payloads.
+`tolerance_abs = 0` and nested custom-function argument mappings.
 
 ## YAML Export And Round Trip
 
@@ -775,70 +681,6 @@ Validation checks:
 - function is allowed in condition or assignment context,
 - supplied argument names exactly match the registered contract.
 
-## Pure-Python Runtime
-
-Use `RulesEngineRuntime` for iterable row sets.
-
-```python
-from rules_engine import FunctionRegistry, RulesEngineRuntime
-
-runtime = RulesEngineRuntime(repository, FunctionRegistry())
-output_rows, traces = runtime.evaluate(
-    [
-        {"account_type": "TRAD", "account_id": "A", "amount": 10},
-        {"account_type": "AFS", "account_id": "B", "amount": 20},
-    ],
-    ruleset,
-)
-```
-
-Output rows have this shape:
-
-```python
-{
-    "row": {...},
-    "matched": True,
-    "matched_rule_ids": ["high_value_account"],
-    "assign": {"review_bucket": "high_value"},
-    "rule_results": [
-        {
-            "rule_id": "high_value_account",
-            "rule_name": "High Value Account",
-            "matched": True,
-            "assignments_applied": ["review_bucket"],
-            "conditions": [
-                {
-                    "columns": ["amount"],
-                    "left": {
-                        "kind": "field",
-                        "column": "amount",
-                        "value": 100,
-                    },
-                    "operator": "gt",
-                    "right": {
-                        "kind": "literal",
-                        "value": 50,
-                    },
-                    "comparison_result": True,
-                    "passed": True,
-                }
-            ],
-        }
-    ],
-    "winning_rule": {...},
-    "winning_rule_id": "high_value_account",
-    "winning_rule_name": "High Value Account",
-    "winning_rule_explanation": "amount=100 > 50",
-}
-```
-
-The Python runtime is useful for:
-
-- unit tests,
-- local semantic validation,
-- cross-runtime parity checks,
-- small metadata examples.
-
 ## Spark Runtime
 
 Use `SparkRulesEngineRuntime` for Databricks Spark DataFrames.
@@ -860,7 +702,6 @@ The Spark runtime appends:
 rules_engine_matched
 rules_engine_matched_rule_ids
 rules_engine_assign
-rules_engine_rule_results
 rules_engine_winning_rule
 rules_engine_winning_rule_id
 rules_engine_winning_rule_name
@@ -868,22 +709,24 @@ rules_engine_winning_rule_explanation
 rules_engine_error
 ```
 
-`rules_engine_assign`, `rules_engine_rule_results`, and
-`rules_engine_winning_rule` are JSON strings.
-`rules_engine_rule_results` contains compact per-rule, per-condition audit
-payloads with source columns, evaluated operand values, comparison result, and
-final pass/fail state.
+`rules_engine_assign` is a ruleset-derived Spark `STRUCT` containing assignment
+target fields; fields not assigned for a row are null. `rules_engine_winning_rule`
+is a Spark `STRUCT` containing only the first matched rule trace, including
+condition source columns, resolved operand values, comparison result, and final
+pass/fail state.
 `rules_engine_winning_rule_explanation` is a readable summary of the passed
 conditions from the first matched rule.
+When multiple rules match and `stop_on_match` is false, `rules_engine_assign`
+contains the merged assignment output from all matched rules, while
+`rules_engine_winning_rule` remains the first matched rule trace.
 
 Spark evaluation strategy:
 
-1. Discover aggregate operands in the ruleset.
-2. Precompute dataset and group aggregates with Spark DataFrame operations.
-3. Join aggregate values back to the original input DataFrame.
-4. Evaluate final rule logic in a Python UDF using row semantics aligned with
-   the pure-Python runtime.
-5. Fail fast if any row-level evaluator error is produced and `fail_on_error`
+1. Pass the input row into a Python UDF.
+2. Evaluate rule logic and assignments against row-local fields.
+3. Return Spark-native structs
+   for assignment output and the winning-rule trace.
+4. Fail fast if any row-level evaluator error is produced and `fail_on_error`
    is true.
 
 The default is `fail_on_error=True`. This prevents row-level evaluator
@@ -901,20 +744,9 @@ if spark_validation.has_errors():
     raise ValueError(spark_validation.to_text())
 ```
 
-The Spark compatibility validator adds runtime-specific checks for metadata
-that is valid in the abstract but unsupported by the current Spark execution
-path:
-
-- exact `median`,
-- exact `quantile`,
-- aggregate `null_input_mode=error`,
-- aggregate `null_result_mode=error`,
-- aggregate-filter `null_input_mode=error`,
-- aggregate-filter `null_result_mode=error`,
-- ordered `first` / `last` with aggregate `null_input_mode=propagate`.
-
-These are errors by design. The runtime should not approximate or silently
-weaken explicit authoring semantics.
+The Spark compatibility validator currently shares the base semantic contract.
+It remains as a public Spark preflight entry point so deployment notebooks can
+continue to validate through one runtime-specific facade.
 
 ## Rules Engine Service
 
@@ -1300,7 +1132,7 @@ Key lifecycle points:
 
 - `payload_json` is the canonical persisted ruleset content.
 - `content_hash` is SHA-256 of the persisted `payload_json` bytes.
-- `rule_count`, `condition_count`, `assignment_count`, `aggregate_count`, and
+- `rule_count`, `condition_count`, `assignment_count`, and
   `custom_function_count` store derived size/count metadata for queryability.
 - `owner` and `owner_department` identify business ownership authored in YAML
   or Python.
@@ -1319,7 +1151,6 @@ Ruleset metadata rows include:
 rule_count
 condition_count
 assignment_count
-aggregate_count
 custom_function_count
 owner
 owner_department
@@ -1445,20 +1276,6 @@ Join semantics:
   intended.
 - malformed chains fail translation and are reported in the audit.
 
-## Databricks System Test
-
-For an automated promotion gate, run:
-
-```text
-databricks/system_test_rules_engine.py
-```
-
-The system test creates a unique schema in the configured catalog, creates the
-package-owned Delta tables, registers standard functions, saves function
-registry metadata, publishes a ruleset that uses `substring`, evaluates Spark
-runtime output, retires the ruleset, verifies it is no longer loadable, and
-drops the schema in a `finally` block.
-
 ## Supplemental Notebook
 
 The notebook source file is:
@@ -1529,7 +1346,7 @@ python -m pip install ".[spark]"
 The recommended production deployment pattern is wheel-based:
 
 ```text
-source repo -> build wheel -> deploy Asset Bundle -> install wheel on job task -> run system test
+source repo -> build wheel -> deploy Asset Bundle -> install wheel on job task
 ```
 
 This avoids production dependencies on workspace source folders and removes the
@@ -1546,8 +1363,6 @@ The repo includes:
 ```text
 pyproject.toml
 databricks.yml
-resources/rules_engine_system_test.job.yml
-databricks/system_test_rules_engine.py
 ```
 
 The production wheel includes the `rules_engine` package only. Repository
@@ -1601,24 +1416,22 @@ Recommended local workflow:
 1. Edit YAML, dataclasses, or runtime code.
 2. Run compile/validator tests.
 3. Run serializer/exporter tests.
-4. Run pure-Python runtime tests.
+4. Run Spark worker-evaluator tests.
 5. Run default test suite.
 6. Run Spark tests in Databricks or Spark-enabled CI.
-7. Run `databricks/system_test_rules_engine.py`.
-8. Review generated Delta metadata rows.
-9. Promote package artifact or source to the target environment.
+7. Review generated Delta metadata rows from Databricks validation.
+8. Promote package artifact or source to the target environment.
 
 Recommended Databricks workflow:
 
 1. Install or copy the package.
 2. Configure table names in the target catalog/schema.
-3. Run the system test against a disposable schema.
-4. Publish a representative ruleset.
-5. Load published metadata.
-6. Evaluate a representative DataFrame.
-7. Assert `rules_engine_error` is empty.
-8. Validate output counts and assignments against expected results.
-9. Retire test metadata.
+3. Publish a representative ruleset to a disposable schema.
+4. Load published metadata.
+5. Evaluate a representative DataFrame.
+6. Assert `rules_engine_error` is empty.
+7. Validate output counts and assignments against expected results.
+8. Retire test metadata.
 
 ## Logging
 
@@ -1631,10 +1444,9 @@ Useful loggers:
 - `rules_engine.publish`: validation result and publish start/failure/success.
 - `rules_engine.repository`: Delta table creation, lifecycle status
   changes, published metadata loads, and function registry metadata writes.
-- `rules_engine.runtime`: pure-Python/reference evaluation start/end and aggregate
-  cache calculation at debug level.
-- `rules_engine.spark_runtime`: Spark DataFrame evaluation start/end, aggregate
-  precompute columns at debug level, and row-level error detection.
+- `rules_engine.runtime`: worker-side row evaluation helpers.
+- `rules_engine.spark_runtime`: Spark DataFrame evaluation start/end and
+  row-level error detection.
 
 Example notebook/job setup:
 
@@ -1660,7 +1472,8 @@ Common causes:
 
 - unsupported key such as `value` instead of `literal`,
 - unsupported key such as `assignments` instead of `assign`,
-- unsupported aggregate key such as `field_name` instead of `field`,
+- unsupported operand key `aggregate`; precompute the value upstream and
+  reference it with `field`,
 - missing `null_input_mode`,
 - missing `null_result_mode`,
 - malformed condition group with more than one logical operator.
@@ -1677,9 +1490,8 @@ Validation issues have stable `check_name` values for programmatic filtering.
 
 ### Spark Compatibility Fails
 
-Use `SparkRulesetCompatibilityValidator` output. The current Spark runtime
-intentionally rejects exact percentile aggregates and unsupported explicit
-error null modes.
+Use `SparkRulesetCompatibilityValidator` output. It reports the same base
+semantic validation issues through the Spark runtime facade.
 
 ### Spark Evaluation Raises Row-Level Errors
 
@@ -1731,15 +1543,12 @@ the version before publishing a replacement under the same ruleset name.
 - v1 assumes `spark.sql.parser.escapedStringLiterals=false`, the modern Spark
   default.
 - Spark runtime uses a Python UDF for final rule evaluation.
-- Spark runtime emits `assign`, `rule_results`, and `winning_rule` as JSON
-  strings. Downstream Spark consumers should parse them with `from_json()` if
-  they need nested access.
+- Spark runtime emits assignment output and the winning-rule trace as Spark
+  structs. It does not emit all-rule trace payloads for every evaluated row.
 - Spark runtime does not yet compile every row predicate into native Spark
   expressions.
-- Spark aggregate precompute fails fast for explicit modes listed in
-  [Spark Compatibility Validation](#spark-compatibility-validation).
-- Spark `median` and `quantile` are not enabled until exact Spark semantics are
-  implemented.
+- Aggregate operands are not supported. Precompute aggregate facts upstream in
+  Spark and reference them as ordinary fields.
 - `like` and `not_like` support SQL `%` and `_` wildcards. Escape-character
   semantics for literal `%` or `_` are not part of v1.
 - Custom function implementations must be available to Spark workers and must

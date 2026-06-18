@@ -30,15 +30,7 @@ class OperandKind(str, Enum):
 
     FIELD = "field"
     LITERAL = "literal"
-    AGGREGATE = "aggregate"
     CUSTOM_FUNCTION = "custom_function"
-
-
-class AggregateScope(str, Enum):
-    """Supported aggregate scopes."""
-
-    GROUP = "group"
-    DATASET = "dataset"
 
 
 class ComparisonOperator(str, Enum):
@@ -81,23 +73,6 @@ class NullResultMode(str, Enum):
     ERROR = "error"
 
 
-class AggregateFunction(str, Enum):
-    """Scalar aggregate functions supported by v1 metadata."""
-
-    SUM = "sum"
-    MEAN = "mean"
-    MIN = "min"
-    MAX = "max"
-    COUNT = "count"
-    COUNT_DISTINCT = "count_distinct"
-    QUANTILE = "quantile"
-    MEDIAN = "median"
-    STDDEV = "stddev"
-    VARIANCE = "variance"
-    FIRST = "first"
-    LAST = "last"
-
-
 class ValidationSeverity(str, Enum):
     """Validation issue severities."""
 
@@ -114,8 +89,6 @@ class ObjectType(str, Enum):
     ASSIGNMENT = "assignment"
     FUNCTION = "function"
 
-
-ORDER_SENSITIVE_AGGREGATES = {AggregateFunction.FIRST, AggregateFunction.LAST}
 UNARY_OPERATORS = {ComparisonOperator.IS_NULL, ComparisonOperator.IS_NOT_NULL}
 BINARY_OPERATORS = set(ComparisonOperator) - UNARY_OPERATORS
 COLLECTION_LITERAL_OPERATORS = {

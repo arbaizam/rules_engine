@@ -540,7 +540,7 @@ for record_id in UAT_EXPECTED_NON_MATCH_IDS:
     result = results_by_id[record_id]
     print(f"{record_id}: matched={result['rules_engine_matched']}, assign={result['rules_engine_assign']}")
     assert result["rules_engine_matched"] is False, f"Expected record_id={record_id} not to match."
-    assert result["rules_engine_assign"] in (None, "{}"), (
+    assert result["rules_engine_assign"] is None, (
         f"Expected no assignment for record_id={record_id}, found {result['rules_engine_assign']}."
     )
 
@@ -585,7 +585,7 @@ print("PASS: Boundary values produced expected outcomes.")
 print("Business review prompt: Confirm threshold/null/text edge cases are approved.")
 
 # COMMAND ----------
-print("UAT-013: Aggregate-based business rules match manual calculations")
+print("UAT-013: Precomputed aggregate business rules match manual calculations")
 print("-" * 80)
 print("Area: Runtime results")
 print("Priority: High")
@@ -602,7 +602,7 @@ UAT_AGGREGATE_ROWS = globals().get("UAT_AGGREGATE_ROWS")
 UAT_AGGREGATE_EXPECTED_MATCHES = globals().get("UAT_AGGREGATE_EXPECTED_MATCHES")
 
 assert SCHEMA and RULESET_NAME and RULESET_VERSION, "Set RULES_ENGINE_SCHEMA, UAT_RULESET_NAME, and UAT_RULESET_VERSION."
-assert UAT_AGGREGATE_ROWS, "Set UAT_AGGREGATE_ROWS to aggregate sample records with record_id."
+assert UAT_AGGREGATE_ROWS, "Set UAT_AGGREGATE_ROWS to sample records containing precomputed aggregate columns and record_id."
 assert UAT_AGGREGATE_EXPECTED_MATCHES, "Set UAT_AGGREGATE_EXPECTED_MATCHES as {record_id: expected_boolean}."
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
@@ -618,8 +618,8 @@ for record_id, expected_matched in UAT_AGGREGATE_EXPECTED_MATCHES.items():
     print(f"{record_id}: expected={expected_matched}, actual={actual_matched}")
     assert actual_matched == expected_matched
 
-print("PASS: Aggregate-driven outcomes matched manual expectations.")
-print("Business review prompt: Confirm manual aggregate calculations support these outcomes.")
+print("PASS: Precomputed aggregate outcomes matched manual expectations.")
+print("Business review prompt: Confirm upstream aggregate calculations support these outcomes.")
 
 # COMMAND ----------
 print("UAT-014: Standard text/number transformations produce recognizable business outcomes")
@@ -630,7 +630,6 @@ print("Owner Role: Business Owner")
 print("Expected Result: Function-driven outcomes match what business users expect from the source data.")
 print("")
 
-import json
 from rules_engine import RulesEngineService
 
 SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
@@ -652,7 +651,9 @@ result_rows = service.evaluate_dataframe(
 results_by_id = {row["record_id"]: row.asDict(recursive=True) for row in result_rows}
 
 for record_id, expected_assign in UAT_FUNCTION_EXPECTED_ASSIGNMENTS.items():
-    actual_assign = json.loads(results_by_id[record_id]["rules_engine_assign"] or "{}")
+    actual = results_by_id[record_id]["rules_engine_assign"]
+    actual_assign = actual.asDict(recursive=True) if hasattr(actual, "asDict") else dict(actual or {})
+    actual_assign = {key: value for key, value in actual_assign.items() if value is not None}
     print(f"{record_id}: expected={expected_assign}, actual={actual_assign}")
     assert actual_assign == expected_assign
 
@@ -887,7 +888,6 @@ required_columns = {
     "rules_engine_matched",
     "rules_engine_matched_rule_ids",
     "rules_engine_assign",
-    "rules_engine_rule_results",
     "rules_engine_winning_rule",
     "rules_engine_winning_rule_id",
     "rules_engine_winning_rule_name",
@@ -906,15 +906,14 @@ print("PASS: Runtime output schema contains expected downstream columns.")
 print("Business review prompt: Confirm downstream consumers can use these output columns.")
 
 # COMMAND ----------
-print("UAT-020: Assignment JSON can be parsed by downstream Spark consumers")
+print("UAT-020: Assignment struct can be consumed by downstream Spark consumers")
 print("-" * 80)
 print("Area: Downstream readiness")
 print("Priority: High")
 print("Owner Role: Data Consumer")
-print("Expected Result: Assignments can be parsed and consumed without manual cleanup.")
+print("Expected Result: Assignments can be consumed without manual JSON parsing.")
 print("")
 
-import json
 from rules_engine import RulesEngineService
 
 SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
@@ -935,15 +934,19 @@ result_rows = service.evaluate_dataframe(
 parsed_count = 0
 for row in result_rows:
     if row["rules_engine_assign"]:
-        parsed = json.loads(row["rules_engine_assign"])
+        parsed = {
+            key: value
+            for key, value in row["rules_engine_assign"].asDict(recursive=True).items()
+            if value is not None
+        }
         print(f"record_id={row['record_id']}: {parsed}")
         assert isinstance(parsed, dict)
         parsed_count += 1
 
-assert parsed_count > 0, "Expected at least one assigned row to parse."
+assert parsed_count > 0, "Expected at least one assigned row to consume."
 
-print("PASS: Assignment JSON parsed into dictionaries for downstream use.")
-print("Business review prompt: Confirm parsed assignment structure is acceptable to consumers.")
+print("PASS: Assignment structs converted into dictionaries for downstream use.")
+print("Business review prompt: Confirm assignment structure is acceptable to consumers.")
 
 # COMMAND ----------
 print("UAT-021: Runtime error handling is acceptable for business operations")

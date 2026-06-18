@@ -15,8 +15,6 @@ from typing import Any, Mapping
 import yaml
 
 from rules_engine.enums import (
-    AggregateFunction,
-    AggregateScope,
     ComparisonOperator,
     LogicalOperator,
     NullInputMode,
@@ -25,8 +23,6 @@ from rules_engine.enums import (
 )
 from rules_engine.exceptions import CompilationError
 from rules_engine.models import (
-    AggregateFilter,
-    AggregateOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -34,8 +30,6 @@ from rules_engine.models import (
     FieldOperand,
     LiteralOperand,
     Operand,
-    OrderBySpec,
-    RowFilterPredicate,
     Rule,
     Ruleset,
 )
@@ -290,11 +284,15 @@ class YamlRulesetCompiler:
         Compile one operand payload.
 
         Exactly one operand kind is allowed. The accepted keys are canonical:
-        ``field``, ``literal``, ``aggregate``, and ``custom_function``.
+        ``field``, ``literal``, and ``custom_function``.
         """
         if "value" in payload:
             raise CompilationError("Unsupported operand key: value. Use canonical key: literal.")
-        operand_keys = [key for key in ("field", "literal", "aggregate", "custom_function") if key in payload]
+        if "aggregate" in payload:
+            raise CompilationError(
+                "Unsupported operand key: aggregate. Precompute aggregate values upstream and reference them with field."
+            )
+        operand_keys = [key for key in ("field", "literal", "custom_function") if key in payload]
         if len(operand_keys) != 1:
             raise CompilationError(
                 f"Operand must define exactly one operand kind, found: {operand_keys}"
@@ -313,57 +311,6 @@ class YamlRulesetCompiler:
                     for arg_name, arg_value in self._optional_mapping(fn_payload, "args").items()
                 },
             )
-        aggregate_payload = self._require_mapping(payload, "aggregate")
-        return self._compile_aggregate(aggregate_payload)
-
-    def _compile_aggregate(self, payload: Mapping[str, Any]) -> AggregateOperand:
-        """
-        Compile an aggregate operand payload.
-
-        This parses function, field, explicit scope, grouping fields, optional
-        filters, order-by metadata, arguments, and aggregate null behavior.
-        """
-        function = self._enum(
-            AggregateFunction,
-            self._require_str(payload, "function"),
-            "aggregate function",
-        )
-        if "field_name" in payload:
-            raise CompilationError("Unsupported aggregate key: field_name. Use canonical key: field.")
-        field_name = self._require_str(payload, "field")
-        scope = self._enum(AggregateScope, self._require_str(payload, "scope"), "aggregate scope")
-        by = payload.get("by", [])
-        if not isinstance(by, list):
-            raise CompilationError("aggregate by must be a list when provided.")
-        order_by_payload = payload.get("order_by", [])
-        if not isinstance(order_by_payload, list):
-            raise CompilationError("aggregate order_by must be a list when provided.")
-        filter_payload = payload.get("filter")
-        aggregate_filter = (
-            self._compile_aggregate_filter(filter_payload)
-            if filter_payload is not None
-            else None
-        )
-        return AggregateOperand.build(
-            function=function,
-            field_name=field_name,
-            scope=scope,
-            by=tuple(str(item) for item in by),
-            args=self._optional_mapping(payload, "args"),
-            filter_=aggregate_filter,
-            order_by=tuple(self._compile_order_by(item) for item in order_by_payload),
-            null_input_mode=self._enum(
-                NullInputMode,
-                self._require_str(payload, "null_input_mode"),
-                "aggregate null_input_mode",
-            ),
-            null_result_mode=self._enum(
-                NullResultMode,
-                self._require_str(payload, "null_result_mode"),
-                "aggregate null_result_mode",
-            ),
-            null_default_value=payload.get("null_default_value"),
-        )
 
     def _compile_custom_function_arg(self, value: Any) -> Any:
         """
@@ -372,80 +319,16 @@ class YamlRulesetCompiler:
         if isinstance(value, Mapping):
             operand_keys = {
                 key
-                for key in ("field", "literal", "aggregate", "custom_function")
+                for key in ("field", "literal", "custom_function")
                 if key in value
             }
+            if "aggregate" in value:
+                raise CompilationError(
+                    "Unsupported operand key: aggregate. Precompute aggregate values upstream and reference them with field."
+                )
             if operand_keys:
                 return self._compile_operand(value)
         return value
-
-    def _compile_aggregate_filter(self, payload: Any) -> AggregateFilter:
-        """
-        Compile a filtered aggregate logical predicate group.
-
-        The filter structure is intentionally limited to one logical operator
-        containing row-level predicates.
-        """
-        payload = self._ensure_mapping(payload, "aggregate filter")
-        if len(payload) != 1:
-            raise CompilationError("Aggregate filter must define exactly one logical operator.")
-        logical_key = next(iter(payload.keys()))
-        logical_operator = self._enum(LogicalOperator, logical_key, "aggregate filter")
-        raw_predicates = payload[logical_key]
-        if not isinstance(raw_predicates, list):
-            raise CompilationError("Aggregate filter predicates must be a list.")
-        return AggregateFilter(
-            logical_operator=logical_operator,
-            predicates=tuple(
-                self._compile_row_filter_predicate(item, index)
-                for index, item in enumerate(raw_predicates, start=1)
-            ),
-        )
-
-    def _compile_row_filter_predicate(self, payload: Any, index: int) -> RowFilterPredicate:
-        """
-        Compile one row-level predicate inside an aggregate filter.
-
-        Predicate operands use the same compiler path as ordinary conditions,
-        while nested aggregate rejection remains a validator responsibility.
-        """
-        payload = self._ensure_mapping(payload, f"aggregate filter predicate {index}")
-        right_payload = payload.get("right")
-        return RowFilterPredicate(
-            left=self._compile_operand(self._require_mapping(payload, "left")),
-            operator=self._enum(
-                ComparisonOperator,
-                self._require_str(payload, "operator"),
-                f"aggregate filter predicate {index} operator",
-            ),
-            right=(
-                self._compile_operand(self._ensure_mapping(right_payload, "right"))
-                if right_payload is not None
-                else None
-            ),
-            tolerance_abs=self._decimal(payload.get("tolerance_abs", "0"), "tolerance_abs"),
-            null_input_mode=self._enum(
-                NullInputMode,
-                self._require_str(payload, "null_input_mode"),
-                "aggregate filter null_input_mode",
-            ),
-            null_result_mode=self._enum(
-                NullResultMode,
-                self._require_str(payload, "null_result_mode"),
-                "aggregate filter null_result_mode",
-            ),
-            null_default_value=payload.get("null_default_value"),
-        )
-
-    def _compile_order_by(self, payload: Any) -> OrderBySpec:
-        """
-        Compile one order-by entry for an order-sensitive aggregate.
-        """
-        payload = self._ensure_mapping(payload, "order_by entry")
-        return OrderBySpec(
-            field=self._require_str(payload, "field"),
-            direction=self._require_str(payload, "direction"),
-        )
 
     def _enum(self, enum_type: type, value: str, label: str) -> Any:
         """

@@ -8,7 +8,7 @@
 # MAGIC the actual Python callable separately.
 # MAGIC
 # MAGIC Use custom functions when a rule needs logic that is too specific for the
-# MAGIC built-in field, literal, comparison, and aggregate operands.
+# MAGIC built-in field, literal, and comparison operands.
 
 # COMMAND ----------
 
@@ -22,9 +22,9 @@ if str(repo_root) not in sys.path:
 from rules_engine import (  # noqa: E402
     CustomFunctionSpec,
     FunctionRegistry,
-    RulesEngineRuntime,
     RulesEngineService,
     RulesetValidator,
+    SparkRulesEngineRuntime,
     SparkRulesetCompatibilityValidator,
     YamlRulesetCompiler,
     register_standard_functions,
@@ -189,10 +189,11 @@ print(validation.to_text())
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 5. Evaluate With The Callable Registered
+# MAGIC ## 5. Evaluate With The Spark Runtime
 # MAGIC
 # MAGIC Runtime evaluation requires both the function spec and the callable
-# MAGIC implementation. Missing implementations fail at runtime.
+# MAGIC implementation. Missing implementations fail at runtime. Production
+# MAGIC evaluation uses Spark DataFrames.
 
 # COMMAND ----------
 
@@ -201,10 +202,13 @@ class NotebookRepository:
         raise NotImplementedError("This guide passes the ruleset directly.")
 
 
-runtime = RulesEngineRuntime(NotebookRepository(), registry)
-output_rows, traces = runtime.evaluate([{"account_id": "A"}], ruleset)
+runtime = SparkRulesEngineRuntime(NotebookRepository(), registry)
+output_df = runtime.evaluate_dataframe(
+    spark.createDataFrame([{"account_id": "A"}]),
+    ruleset,
+)
 
-output_rows
+display(output_df)
 
 # COMMAND ----------
 
