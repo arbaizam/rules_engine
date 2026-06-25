@@ -1,6 +1,7 @@
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 from rules_engine.spark_runtime import SparkRulesEngineRuntime
+from pyspark.sql import types as T
 
 
 class DummyRepository:
@@ -41,11 +42,18 @@ def _compile(condition, assign=None):
 
 
 def _evaluate_worker(ruleset, row, registry=None, assign_fields=None):
-    assign_field_names = assign_fields or ["bucket"]
-    evaluator = _spark_runtime(registry)._build_row_evaluator(
+    runtime = _spark_runtime(registry)
+    assign_schema = runtime._assignment_schema(ruleset, T.StructType())
+    inferred_types = {field.name: field.dataType for field in assign_schema.fields}
+    assign_field_names = assign_fields or [field.name for field in assign_schema.fields]
+    assign_field_types = {
+        field_name: inferred_types.get(field_name, T.StringType())
+        for field_name in assign_field_names
+    }
+    evaluator = runtime._build_row_evaluator(
         ruleset,
         assign_field_names,
-        set(assign_field_names),
+        assign_field_types,
     )
     return evaluator(FakeSparkRow(row))
 
@@ -140,6 +148,54 @@ def test_spark_row_evaluator_assignment_struct_includes_unassigned_fields_as_nul
     )
 
     assert result["assign"] == {"bucket": "A", "secondary_bucket": None}
+
+
+def test_spark_row_evaluator_preserves_mapping_literal_assignment_as_struct():
+    """
+    What: Preserves a mapping literal assignment as a nested struct payload.
+    Why: Business outputs such as non_modeled flags should be selectable as Spark struct fields.
+    Fails when: Mapping literals are inferred as strings and formatted as trace text.
+    """
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        },
+        assign={
+            "leaf_key": "10110",
+            "non_modeled": {
+                "literal": {
+                    "market_value": True,
+                    "book_value": False,
+                }
+            },
+        },
+    )
+
+    schema = _spark_runtime()._assignment_schema(ruleset, T.StructType())
+    field_types = {field.name: field.dataType for field in schema.fields}
+    non_modeled_type = field_types["non_modeled"]
+    result = _evaluate_worker(
+        ruleset,
+        {"account": "A"},
+        assign_fields=["leaf_key", "non_modeled"],
+    )
+
+    assert isinstance(non_modeled_type, T.StructType)
+    assert {field.name: field.dataType for field in non_modeled_type.fields} == {
+        "market_value": T.BooleanType(),
+        "book_value": T.BooleanType(),
+    }
+    assert result["assign"] == {
+        "leaf_key": "10110",
+        "non_modeled": {
+            "market_value": True,
+            "book_value": False,
+        },
+    }
 
 
 def test_spark_row_evaluator_winning_rule_trace_includes_precomputed_aggregate_field():

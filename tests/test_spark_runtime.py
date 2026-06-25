@@ -136,3 +136,41 @@ def test_spark_runtime_evaluates_precomputed_aggregate_field(spark):
     rows = _spark_runtime().evaluate_dataframe(df, ruleset).collect()
 
     assert [row["rules_engine_matched"] for row in rows] == [True, True]
+
+
+def test_spark_runtime_preserves_mapping_literal_assignment_as_struct(spark):
+    """
+    What: Emits mapping literal assignments as nested Spark structs.
+    Why: Downstream jobs must select fields such as rules_engine_assign.non_modeled.market_value directly.
+    Fails when: Mapping literals are inferred as strings or returned as formatted trace text.
+    """
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        },
+        assign={
+            "leaf_key": "10110",
+            "non_modeled": {
+                "literal": {
+                    "market_value": True,
+                    "book_value": False,
+                }
+            },
+        },
+    )
+    df = spark.createDataFrame([{"account": "A"}])
+
+    output = _spark_runtime().evaluate_dataframe(df, ruleset)
+    assign_type = output.schema["rules_engine_assign"].dataType
+    row = output.collect()[0]
+
+    assert assign_type["non_modeled"].dataType.simpleString() == (
+        "struct<market_value:boolean,book_value:boolean>"
+    )
+    assert row["rules_engine_assign"]["leaf_key"] == "10110"
+    assert row["rules_engine_assign"]["non_modeled"]["market_value"] is True
+    assert row["rules_engine_assign"]["non_modeled"]["book_value"] is False

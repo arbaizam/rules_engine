@@ -1,6 +1,8 @@
+from pyspark.sql import types as T
+
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.registry import FunctionRegistry
+from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.spark_runtime import SparkRulesEngineRuntime
 from rules_engine.standard_functions import (
     register_standard_functions,
@@ -95,7 +97,7 @@ def test_standard_functions_can_be_registered_for_runtime_field_args():
     )._build_row_evaluator(
         ruleset,
         ["account_prefix"],
-        {"account_prefix"},
+        {"account_prefix": T.StringType()},
     )
     output = evaluator(FakeSparkRow({"account_code": "ABCDE"}))
 

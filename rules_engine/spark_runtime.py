@@ -180,17 +180,16 @@ class SparkRulesEngineRuntime:
         )
         assign_schema = self._assignment_schema(ruleset, df.schema)
         assign_field_names = [field.name for field in assign_schema.fields]
-        assign_text_fields = {
-            field.name
+        assign_field_types = {
+            field.name: field.dataType
             for field in assign_schema.fields
-            if isinstance(field.dataType, T.StringType)
         }
 
         result_udf = F.udf(
             self._build_row_evaluator(
                 ruleset,
                 assign_field_names,
-                assign_text_fields,
+                assign_field_types,
             ),
             _result_struct(assign_schema),
         )
@@ -306,6 +305,13 @@ class SparkRulesEngineRuntime:
             return T.TimestampType()
         if isinstance(value, date):
             return T.DateType()
+        if isinstance(value, MappingABC):
+            return T.StructType(
+                [
+                    T.StructField(str(field_name), self._literal_data_type(field_value), True)
+                    for field_name, field_value in value.items()
+                ]
+            )
         return T.StringType()
 
     def _return_hint_data_type(self, return_type_hint: str | None) -> T.DataType:
@@ -318,7 +324,7 @@ class SparkRulesEngineRuntime:
         self,
         ruleset: Ruleset,
         assign_field_names: list[str],
-        assign_text_fields: set[str],
+        assign_field_types: Mapping[str, T.DataType],
     ):
         """Build the serializable Python callable used by the Spark UDF."""
         runtime = _SparkRowUdfEvaluator(
@@ -357,7 +363,7 @@ class SparkRulesEngineRuntime:
                     {
                         field_name: runtime._spark_assignment_value(
                             assignments.get(field_name),
-                            stringify=field_name in assign_text_fields,
+                            assign_field_types[field_name],
                         )
                         for field_name in assign_field_names
                     }
@@ -392,11 +398,32 @@ class SparkRulesEngineRuntime:
 class _SparkRowUdfEvaluator(SparkRowEvaluator):
     """Row evaluator plus Spark-schema trace normalization helpers."""
 
-    def _spark_assignment_value(self, value: Any, *, stringify: bool) -> Any:
+    def _spark_assignment_value(self, value: Any, data_type: T.DataType) -> Any:
         """Return an assignment value compatible with the declared Spark type."""
-        if value is None or not stringify:
+        if value is None:
             return value
-        return self._trace_text(value)
+        if isinstance(data_type, T.StringType):
+            return self._trace_text(value)
+        if isinstance(data_type, T.StructType):
+            if not isinstance(value, MappingABC):
+                return None
+            return {
+                field.name: self._spark_assignment_value(
+                    self._mapping_value(value, field.name),
+                    field.dataType,
+                )
+                for field in data_type.fields
+            }
+        return value
+
+    def _mapping_value(self, value: Mapping[str, Any], field_name: str) -> Any:
+        """Return a mapping value using Spark's stringified struct field name."""
+        if field_name in value:
+            return value[field_name]
+        for key, item in value.items():
+            if str(key) == field_name:
+                return item
+        return None
 
     def _spark_rule_trace_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Normalize a rule trace payload to the declared Spark struct schema."""
