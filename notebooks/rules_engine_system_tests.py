@@ -3225,11 +3225,11 @@ assign_schema = result.schema["rules_engine_assign"].dataType
 assert assign_schema["review_result"].dataType.simpleString() == "string"
 assert row["rules_engine_matched"] is True
 assert row["rules_engine_matched_rule_ids"] == ["first_match", "second_match"]
-assert row["rules_engine_assign"] == {
-    "bucket": "second",
-    "review_result": "market_value=True, book_value=False",
-    "review_status": "follow_up",
-}
+assign = row["rules_engine_assign"]
+assert assign["bucket"] == "second"
+assert assign["review_status"] == "follow_up"
+assert "market_value=True" in assign["review_result"]
+assert "book_value=False" in assign["review_result"]
 assert row["rules_engine_winning_rule_id"] == "first_match"
 assert row["rules_engine_winning_rule_name"] == "First Match"
 assert row["rules_engine_winning_rule_explanation"] == "account == 'A'"

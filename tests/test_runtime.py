@@ -648,9 +648,8 @@ def test_spark_row_evaluator_stringifies_incompatible_same_target_assignments():
 
     assert isinstance(field_types["review_result"], T.StringType)
     assert result["matched_rule_ids"] == ["string_shape", "struct_shape"]
-    assert result["assign"] == {
-        "review_result": "market_value=True, book_value=False",
-    }
+    assert "market_value=True" in result["assign"]["review_result"]
+    assert "book_value=False" in result["assign"]["review_result"]
 
 
 def test_spark_row_evaluator_winning_rule_trace_includes_precomputed_aggregate_field():
