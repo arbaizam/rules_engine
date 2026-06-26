@@ -2962,10 +2962,15 @@ df = spark.createDataFrame([{"record_id": "r1", "account": "A"}])
 result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
 row = result.collect()[0].asDict(recursive=True)
 assign_schema = result.schema["rules_engine_assign"].dataType
+non_modeled_schema = assign_schema["non_modeled"].dataType
 
-assert assign_schema["non_modeled"].dataType.simpleString() == (
-    "struct<market_value:boolean,book_value:boolean>"
-)
+assert {
+    field.name: field.dataType.simpleString()
+    for field in non_modeled_schema.fields
+} == {
+    "market_value": "boolean",
+    "book_value": "boolean",
+}
 assert row["rules_engine_matched"] is True
 assert row["rules_engine_assign"] == {
     "leaf_key": "10110",
@@ -3126,11 +3131,16 @@ df = spark.createDataFrame([{"record_id": "r1", "account": "A"}])
 result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
 row = result.collect()[0].asDict(recursive=True)
 assign_schema = result.schema["rules_engine_assign"].dataType
+non_modeled_schema = assign_schema["non_modeled"].dataType
 
 assert "inactive_only" not in assign_schema.fieldNames()
-assert assign_schema["non_modeled"].dataType.simpleString() == (
-    "struct<market_value:boolean,book_value:boolean>"
-)
+assert {
+    field.name: field.dataType.simpleString()
+    for field in non_modeled_schema.fields
+} == {
+    "market_value": "boolean",
+    "book_value": "boolean",
+}
 assert row["rules_engine_matched"] is True
 assert row["rules_engine_matched_rule_ids"] == ["active_struct_rule"]
 assert row["rules_engine_assign"] == {

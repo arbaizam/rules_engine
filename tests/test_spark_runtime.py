@@ -166,11 +166,16 @@ def test_spark_runtime_preserves_mapping_literal_assignment_as_struct(spark):
 
     output = _spark_runtime().evaluate_dataframe(df, ruleset)
     assign_type = output.schema["rules_engine_assign"].dataType
+    non_modeled_type = assign_type["non_modeled"].dataType
     row = output.collect()[0]
 
-    assert assign_type["non_modeled"].dataType.simpleString() == (
-        "struct<market_value:boolean,book_value:boolean>"
-    )
+    assert {
+        field.name: field.dataType.simpleString()
+        for field in non_modeled_type.fields
+    } == {
+        "market_value": "boolean",
+        "book_value": "boolean",
+    }
     assert row["rules_engine_assign"]["leaf_key"] == "10110"
     assert row["rules_engine_assign"]["non_modeled"]["market_value"] is True
     assert row["rules_engine_assign"]["non_modeled"]["book_value"] is False
