@@ -11,9 +11,9 @@ The current unit suite covers the supported Spark-first contract:
 | Validation | Ownership metadata, duplicate IDs, operator arity, collection literals, null defaults, custom-function contracts, and tolerance rules are enforced. |
 | Repository schema | Ruleset-version metadata stores payload, hash, lifecycle fields, rule/condition/assignment/custom-function counts, and governance ownership. |
 | Serialization | Payload JSON is deterministic, lifecycle fields stay outside payload content, and rows deserialize back to canonical models. |
-| Spark runtime | The row UDF returns native Spark structs for assignments and the winning-rule trace; precomputed aggregate facts are handled as ordinary field operands. |
+| Spark runtime | The row UDF returns native Spark structs for assignments and the winning-rule trace; default-valued condition trace fields remain null; mapping literal assignments remain nested structs; inactive rules do not affect active assignment schemas; multi-match evaluation keeps all matched IDs and last-writer-wins assignments; incompatible active assignments fall back to strings; precomputed aggregate facts are handled as ordinary field operands; winning-rule explanations preserve authored AND/OR group logic and omit failed branches. |
 | Spark compatibility validation | The Spark validator preserves the base row-level ruleset contract. |
-| Service facade | Publish/load/evaluate/describe workflows delegate through the Spark repository and runtime components. |
+| Service facade | Publish/load/evaluate/describe workflows delegate through the Spark repository and runtime components; runtime winning-rule explanations share the same author-facing expression syntax as `describe_rules`. |
 | Recon translation | Source reconciliation specs translate into canonical rules engine YAML and audit artifacts. |
 | Standard functions | Built-in function specs and implementations are registered, persisted, and usable in rules. |
 

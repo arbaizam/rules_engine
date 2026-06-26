@@ -10,7 +10,6 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 import json
-import logging
 import re
 from typing import Any, Iterable, Mapping
 
@@ -21,6 +20,7 @@ from rules_engine.enums import (
     NullResultMode,
     OperandKind,
 )
+from rules_engine.human_readable import HumanReadableRulesetFormatter
 from rules_engine.models import (
     Assignment,
     Condition,
@@ -36,9 +36,6 @@ from rules_engine.models import (
 )
 from rules_engine.registry import FunctionRegistry
 from rules_engine.repository import RulesetRepository
-
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -60,6 +57,7 @@ class SparkRowEvaluator:
         """
         self._repository = repository
         self._function_registry = function_registry
+        self._rule_formatter = HumanReadableRulesetFormatter()
 
     def load_published_ruleset(self, ruleset_name: str, version: str | None = None) -> Ruleset:
         """
@@ -200,66 +198,41 @@ class SparkRowEvaluator:
             rule_order=rule.rule_order,
         )
 
-    def _rule_trace_payload(self, trace: RuleExecutionTrace) -> dict[str, Any]:
+    def _winning_rule_explanation_from_trace(
+        self,
+        rule: Rule,
+        condition_traces: list[ResolvedConditionTrace],
+    ) -> str | None:
         """
-        Convert one rule trace to the runtime result payload.
+        Return a readable winning-rule explanation that preserves group logic.
         """
-        payload: dict[str, Any] = {
-            "rule_id": trace.rule_id,
-            "rule_name": trace.rule_name,
-            "matched": trace.matched,
-            "conditions": [
-                self._condition_trace_payload(condition_trace)
-                for condition_trace in trace.condition_traces
-            ],
+        passed_condition_ids = {
+            trace.condition_id
+            for trace in condition_traces
+            if trace.passed
         }
-        if trace.assignments_applied:
-            payload["assignments_applied"] = list(trace.assignments_applied)
-        return payload
+        return self._rule_formatter.format_winning_rule_explanation(
+            rule,
+            passed_condition_ids,
+        )
 
-    def _winning_rule_explanation(self, winning_rule: Mapping[str, Any] | None) -> str | None:
+    def _operand_trace_summary(self, operand: Any) -> str | None:
         """
-        Return a readable summary of the passed conditions in the winning rule.
-        """
-        if winning_rule is None:
-            return None
-        explanations = [
-            self._condition_explanation(condition)
-            for condition in winning_rule.get("conditions", [])
-            if condition.get("passed") is True
-        ]
-        explanations = [item for item in explanations if item]
-        if not explanations:
-            return None
-        return " AND ".join(explanations)
-
-    def _condition_explanation(self, condition: Mapping[str, Any]) -> str:
-        """
-        Return a readable one-condition expression with resolved values.
-        """
-        left = self._operand_explanation(condition.get("left"))
-        operator = self._operator_label(condition.get("operator"))
-        right = self._operand_explanation(condition.get("right"))
-        if right is None:
-            return f"{left} {operator}"
-        return f"{left} {operator} {right}"
-
-    def _operand_explanation(self, operand: Any) -> str | None:
-        """
-        Return a readable operand representation with its resolved value.
+        Return a compact resolved-value summary for winning-rule trace arguments.
         """
         if not isinstance(operand, MappingABC):
             return None
         kind = operand.get("kind")
         if kind == OperandKind.FIELD.value:
-            return f"{operand.get('column')}={self._display_value(operand.get('value'))}"
+            column = operand.get("column") or operand.get("field_name")
+            return f"{column}={self._trace_display_value(operand.get('value'))}"
         if kind == OperandKind.LITERAL.value:
-            return self._display_value(operand.get("value"))
+            return self._trace_display_value(operand.get("value"))
         if kind == OperandKind.CUSTOM_FUNCTION.value:
             args = operand.get("args")
             if isinstance(args, MappingABC):
                 arg_text = ", ".join(
-                    f"{name}={self._operand_explanation(value)}"
+                    f"{name}={self._operand_trace_summary(value)}"
                     for name, value in args.items()
                 )
             else:
@@ -269,36 +242,11 @@ class SparkRowEvaluator:
                 )
             return (
                 f"{operand.get('function_name')}({arg_text})="
-                f"{self._display_value(operand.get('value'))}"
+                f"{self._trace_display_value(operand.get('value'))}"
             )
-        return self._display_value(operand.get("value"))
+        return self._trace_display_value(operand.get("value"))
 
-    def _operator_label(self, operator: Any) -> str:
-        """
-        Return a readable operator label.
-        """
-        return {
-            ComparisonOperator.EQ.value: "==",
-            ComparisonOperator.NE.value: "!=",
-            ComparisonOperator.GT.value: ">",
-            ComparisonOperator.GE.value: ">=",
-            ComparisonOperator.LT.value: "<",
-            ComparisonOperator.LE.value: "<=",
-            ComparisonOperator.IN.value: "in",
-            ComparisonOperator.NOT_IN.value: "not in",
-            ComparisonOperator.BETWEEN.value: "between",
-            ComparisonOperator.NOT_BETWEEN.value: "not between",
-            ComparisonOperator.LIKE.value: "like",
-            ComparisonOperator.NOT_LIKE.value: "not like",
-            ComparisonOperator.CONTAINS.value: "contains",
-            ComparisonOperator.NOT_CONTAINS.value: "does not contain",
-            ComparisonOperator.STARTS_WITH.value: "starts with",
-            ComparisonOperator.ENDS_WITH.value: "ends with",
-            ComparisonOperator.IS_NULL.value: "is null",
-            ComparisonOperator.IS_NOT_NULL.value: "is not null",
-        }.get(str(operator), str(operator))
-
-    def _display_value(self, value: Any) -> str:
+    def _trace_display_value(self, value: Any) -> str:
         """
         Return a compact user-facing value string.
         """
@@ -307,98 +255,6 @@ class SparkRowEvaluator:
         if isinstance(value, str):
             return value
         return str(value)
-
-    def _condition_trace_payload(self, trace: ResolvedConditionTrace) -> dict[str, Any]:
-        """
-        Convert one condition trace to the compact audit result payload.
-        """
-        left = self._operand_trace_payload(trace.left)
-        right = self._operand_trace_payload(trace.right)
-        columns = self._unique_strings(
-            [
-                *self._trace_columns(trace.left),
-                *self._trace_columns(trace.right),
-            ]
-        )
-        payload: dict[str, Any] = {
-            "left": left,
-            "operator": trace.operator,
-            "comparison_result": trace.comparison_result,
-            "passed": trace.passed,
-        }
-        self._add_present(payload, "columns", columns)
-        if right is not None:
-            payload["right"] = right
-        if trace.tolerance_abs not in (None, "0"):
-            payload["tolerance_abs"] = trace.tolerance_abs
-        if trace.null_input_mode not in (None, NullInputMode.PROPAGATE.value):
-            payload["null_input_mode"] = trace.null_input_mode
-        if trace.null_result_mode not in (None, NullResultMode.NULL.value):
-            payload["null_result_mode"] = trace.null_result_mode
-        if trace.null_default_value is not None:
-            payload["null_default_value"] = trace.null_default_value
-        return payload
-
-    def _operand_trace_payload(self, trace: Mapping[str, Any] | None) -> dict[str, Any] | None:
-        """
-        Convert an operand trace to compact audit fields.
-        """
-        if trace is None:
-            return None
-        kind = trace.get("kind")
-        if kind == OperandKind.FIELD.value:
-            payload = {
-                "kind": kind,
-                "column": trace.get("field_name"),
-            }
-            if "value" in trace:
-                payload["value"] = trace["value"]
-            return payload
-        if kind == OperandKind.LITERAL.value:
-            payload = {
-                "kind": kind,
-                "value": trace.get("value"),
-            }
-            if trace.get("value_type") is not None:
-                payload["value_type"] = trace["value_type"]
-            return payload
-        if kind == OperandKind.CUSTOM_FUNCTION.value:
-            payload = {
-                "kind": kind,
-                "function_name": trace.get("function_name"),
-            }
-            self._add_present(
-                payload,
-                "args",
-                {
-                    str(key): self._operand_trace_payload(value)
-                    for key, value in dict(trace.get("args", {})).items()
-                },
-            )
-            self._add_present(payload, "source_columns", trace.get("columns"))
-            if "value" in trace:
-                payload["value"] = trace["value"]
-            return payload
-        payload = {"kind": kind}
-        if "value" in trace:
-            payload["value"] = trace["value"]
-        return payload
-
-    def _trace_columns(self, trace: Mapping[str, Any] | None) -> list[str]:
-        """
-        Return source columns from an operand trace.
-        """
-        if trace is None:
-            return []
-        return list(trace.get("columns", []))
-
-    def _add_present(self, payload: dict[str, Any], key: str, value: Any) -> None:
-        """
-        Add non-empty values to a compact trace payload.
-        """
-        if value in (None, {}, []):
-            return
-        payload[key] = value
 
     def _condition_trace(
         self,

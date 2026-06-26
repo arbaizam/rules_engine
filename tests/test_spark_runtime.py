@@ -100,7 +100,7 @@ def test_spark_runtime_evaluates_row_rule(spark):
     winning_rule = rows[0]["rules_engine_winning_rule"]
     assert rows[0]["rules_engine_winning_rule_id"] == "r1"
     assert rows[0]["rules_engine_winning_rule_name"] == "Rule 1"
-    assert rows[0]["rules_engine_winning_rule_explanation"] == "account=A == A"
+    assert rows[0]["rules_engine_winning_rule_explanation"] == "account == 'A'"
     assert winning_rule["rule_id"] == "r1"
     assert winning_rule["conditions"][0]["columns"] == ["account"]
     assert winning_rule["conditions"][0]["left"]["column"] == "account"

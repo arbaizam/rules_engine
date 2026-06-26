@@ -69,28 +69,6 @@ class CustomFunctionSpec:
             version=self.version,
         )
 
-    @classmethod
-    def from_row(cls, row: FunctionRegistryRow) -> "CustomFunctionSpec":
-        """
-        Build a function spec from a persisted metadata row.
-        """
-        arg_names = row.arg_contract_payload.get("arg_names", [])
-        if not isinstance(arg_names, list) or not all(isinstance(arg, str) for arg in arg_names):
-            raise RegistryError(
-                f"Function registry row has invalid arg contract: {row.function_name}"
-            )
-        return cls(
-            function_name=row.function_name,
-            implementation_reference=row.implementation_reference,
-            arg_names=tuple(arg_names),
-            allowed_in_condition_flag=row.allowed_in_condition_flag,
-            allowed_in_assignment_flag=row.allowed_in_assignment_flag,
-            active_flag=row.active_flag,
-            return_type_hint=row.return_type_hint,
-            description=row.description,
-            version=row.version,
-        )
-
 
 class FunctionRegistry:
     """
@@ -117,12 +95,6 @@ class FunctionRegistry:
         self._specs[spec.function_name] = spec
         if implementation is not None:
             self._implementations[spec.function_name] = implementation
-
-    def register_row(self, row: FunctionRegistryRow) -> None:
-        """
-        Register persisted function metadata without executable code.
-        """
-        self.register(CustomFunctionSpec.from_row(row))
 
     def get_spec(self, function_name: str) -> CustomFunctionSpec:
         """

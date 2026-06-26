@@ -1,4 +1,5 @@
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.human_readable import HumanReadableRulesetFormatter
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 from rules_engine.spark_runtime import SparkRulesEngineRuntime
 from pyspark.sql import types as T
@@ -34,6 +35,26 @@ def _compile(condition, assign=None):
                     "rule_name": "Rule 1",
                     "rule_order": 1,
                     "when": {"all": [condition]},
+                    "assign": assign or {"bucket": "matched"},
+                }
+            ],
+        }
+    )
+
+
+def _compile_when(when, assign=None):
+    return YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Ruleset",
+            "version": "1",
+            "status": "published",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "Rule 1",
+                    "rule_order": 1,
+                    "when": when,
                     "assign": assign or {"bucket": "matched"},
                 }
             ],
@@ -82,12 +103,37 @@ def test_spark_row_evaluator_returns_native_winning_rule_trace():
     assert "rule_results" not in result
     assert result["winning_rule_id"] == "r1"
     assert result["winning_rule_name"] == "Rule 1"
-    assert result["winning_rule_explanation"] == "account=A == A"
+    assert result["winning_rule_explanation"] == "account == 'A'"
     assert winning_rule["rule_id"] == "r1"
     assert winning_rule["matched"] is True
     assert winning_rule["conditions"][0]["columns"] == ["account"]
     assert winning_rule["conditions"][0]["left"]["column"] == "account"
     assert winning_rule["conditions"][0]["left"]["value"] == "A"
+
+
+def test_spark_row_evaluator_winning_rule_trace_keeps_default_options_null():
+    """
+    What: Leaves default condition options null in the winning-rule Spark trace.
+    Why: The Spark trace struct intentionally omits default-valued metadata.
+    Fails when: Trace simplification starts emitting default values as strings.
+    """
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+
+    result = _evaluate_worker(ruleset, {"account": "A"})
+    condition = result["winning_rule"]["conditions"][0]
+
+    assert condition["tolerance_abs"] is None
+    assert condition["null_input_mode"] is None
+    assert condition["null_result_mode"] is None
+    assert condition["null_default_value"] is None
 
 
 def test_spark_row_evaluator_assignment_struct_includes_unassigned_fields_as_null():
@@ -150,6 +196,207 @@ def test_spark_row_evaluator_assignment_struct_includes_unassigned_fields_as_nul
     assert result["assign"] == {"bucket": "A", "secondary_bucket": None}
 
 
+def test_spark_row_evaluator_winning_rule_explanation_uses_any_joiner():
+    """
+    What: Uses OR when a winning root any group has multiple passed conditions.
+    Why: The readable explanation should preserve the winning rule's boolean logic.
+    Fails when: Passed conditions are flattened and always joined with AND.
+    """
+    ruleset = _compile_when(
+        {
+            "any": [
+                {
+                    "left": {"field": "account"},
+                    "operator": "eq",
+                    "right": {"literal": "A"},
+                    "null_input_mode": "propagate",
+                    "null_result_mode": "null",
+                },
+                {
+                    "left": {"field": "status"},
+                    "operator": "eq",
+                    "right": {"literal": "open"},
+                    "null_input_mode": "propagate",
+                    "null_result_mode": "null",
+                },
+            ]
+        }
+    )
+
+    result = _evaluate_worker(ruleset, {"account": "A", "status": "open"})
+
+    assert result["winning_rule_explanation"] == "account == 'A' OR status == 'open'"
+
+
+def test_spark_row_evaluator_winning_rule_explanation_drops_failing_any_branches():
+    """
+    What: Omits failed OR branches from the winning-rule explanation.
+    Why: The explanation should describe the passed path, not every authored branch.
+    Fails when: Failed sibling conditions appear in the winning-rule explanation.
+    """
+    ruleset = _compile_when(
+        {
+            "any": [
+                {
+                    "left": {"field": "account"},
+                    "operator": "eq",
+                    "right": {"literal": "A"},
+                    "null_input_mode": "propagate",
+                    "null_result_mode": "null",
+                },
+                {
+                    "left": {"field": "status"},
+                    "operator": "eq",
+                    "right": {"literal": "open"},
+                    "null_input_mode": "propagate",
+                    "null_result_mode": "null",
+                },
+            ]
+        }
+    )
+
+    result = _evaluate_worker(ruleset, {"account": "A", "status": "closed"})
+
+    assert result["winning_rule_explanation"] == "account == 'A'"
+
+
+def test_spark_row_evaluator_winning_rule_explanation_preserves_nested_groups():
+    """
+    What: Preserves parentheses and OR joiners for nested winning groups.
+    Why: Explanations should not misstate nested boolean rule logic.
+    Fails when: Nested group conditions are flattened into a single AND list.
+    """
+    ruleset = _compile_when(
+        {
+            "all": [
+                {
+                    "left": {"field": "record_type"},
+                    "operator": "eq",
+                    "right": {"literal": "asset"},
+                    "null_input_mode": "propagate",
+                    "null_result_mode": "null",
+                },
+                {
+                    "any": [
+                        {
+                            "left": {"field": "market_value"},
+                            "operator": "eq",
+                            "right": {"literal": True},
+                            "null_input_mode": "propagate",
+                            "null_result_mode": "null",
+                        },
+                        {
+                            "left": {"field": "book_value"},
+                            "operator": "eq",
+                            "right": {"literal": True},
+                            "null_input_mode": "propagate",
+                            "null_result_mode": "null",
+                        },
+                    ]
+                },
+            ]
+        }
+    )
+
+    result = _evaluate_worker(
+        ruleset,
+        {
+            "record_type": "asset",
+            "market_value": True,
+            "book_value": True,
+        },
+    )
+
+    assert result["winning_rule_explanation"] == (
+        "record_type == 'asset' AND "
+        "(market_value == true OR book_value == true)"
+    )
+
+
+def test_spark_row_evaluator_winning_rule_explanation_drops_failing_nested_or_arm():
+    """
+    What: Omits a failed nested OR arm while preserving the passed nested path.
+    Why: Nested explanations should stay concise without misrepresenting the winning logic.
+    Fails when: Failed nested conditions leak into the winning-rule explanation.
+    """
+    ruleset = _compile_when(
+        {
+            "all": [
+                {
+                    "left": {"field": "record_type"},
+                    "operator": "eq",
+                    "right": {"literal": "asset"},
+                    "null_input_mode": "propagate",
+                    "null_result_mode": "null",
+                },
+                {
+                    "any": [
+                        {
+                            "left": {"field": "market_value"},
+                            "operator": "eq",
+                            "right": {"literal": True},
+                            "null_input_mode": "propagate",
+                            "null_result_mode": "null",
+                        },
+                        {
+                            "left": {"field": "book_value"},
+                            "operator": "eq",
+                            "right": {"literal": True},
+                            "null_input_mode": "propagate",
+                            "null_result_mode": "null",
+                        },
+                    ]
+                },
+            ]
+        }
+    )
+
+    result = _evaluate_worker(
+        ruleset,
+        {
+            "record_type": "asset",
+            "market_value": True,
+            "book_value": False,
+        },
+    )
+
+    assert result["winning_rule_explanation"] == (
+        "record_type == 'asset' AND market_value == true"
+    )
+
+
+def test_spark_row_evaluator_winning_rule_explanation_matches_service_formatter():
+    """
+    What: Uses the same author-facing syntax as the service helper when all branches pass.
+    Why: Runtime explanations and service rule descriptions should not diverge.
+    Fails when: Runtime falls back to trace-value formatting.
+    """
+    ruleset = _compile_when(
+        {
+            "all": [
+                {
+                    "left": {"field": "account"},
+                    "operator": "eq",
+                    "right": {"literal": "A"},
+                    "null_input_mode": "propagate",
+                    "null_result_mode": "null",
+                },
+                {
+                    "left": {"field": "amount"},
+                    "operator": "gt",
+                    "right": {"literal": 100},
+                    "null_input_mode": "propagate",
+                    "null_result_mode": "null",
+                },
+            ]
+        }
+    )
+    result = _evaluate_worker(ruleset, {"account": "A", "amount": 150})
+    service_logic = HumanReadableRulesetFormatter().describe_rules(ruleset)[0]["rule_logic"]
+
+    assert result["winning_rule_explanation"] == service_logic
+
+
 def test_spark_row_evaluator_preserves_mapping_literal_assignment_as_struct():
     """
     What: Preserves a mapping literal assignment as a nested struct payload.
@@ -198,6 +445,214 @@ def test_spark_row_evaluator_preserves_mapping_literal_assignment_as_struct():
     }
 
 
+def test_spark_assignment_schema_ignores_inactive_rules():
+    """
+    What: Infers assignment schema from active rules only.
+    Why: Inactive lifecycle rules must not alter live Spark output types or fields.
+    Fails when: Inactive assignments force string fallback or add null-only fields.
+    """
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Ruleset",
+            "version": "1",
+            "status": "published",
+            "rules": [
+                {
+                    "rule_id": "active_struct",
+                    "rule_name": "Active Struct",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {
+                        "non_modeled": {
+                            "literal": {
+                                "market_value": True,
+                                "book_value": False,
+                            }
+                        }
+                    },
+                },
+                {
+                    "rule_id": "inactive_conflict",
+                    "rule_name": "Inactive Conflict",
+                    "rule_order": 2,
+                    "active_flag": False,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {
+                        "non_modeled": "retired string shape",
+                        "inactive_only": "retired only",
+                    },
+                },
+            ],
+        }
+    )
+
+    schema = _spark_runtime()._assignment_schema(ruleset, T.StructType())
+    field_types = {field.name: field.dataType for field in schema.fields}
+    result = _evaluate_worker(ruleset, {"account": "A"})
+
+    assert isinstance(field_types["non_modeled"], T.StructType)
+    assert "inactive_only" not in field_types
+    assert result["assign"] == {
+        "non_modeled": {
+            "market_value": True,
+            "book_value": False,
+        },
+    }
+
+
+def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
+    """
+    What: Merges assignments from multiple matching rules when evaluation continues.
+    Why: stop_on_match=false should keep all matched IDs and use last-writer-wins assignment values.
+    Fails when: Later matches are skipped, matched IDs are incomplete, or first assignments win.
+    """
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Ruleset",
+            "version": "1",
+            "status": "published",
+            "rules": [
+                {
+                    "rule_id": "first_match",
+                    "rule_name": "First Match",
+                    "rule_order": 1,
+                    "stop_on_match": False,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "first"},
+                },
+                {
+                    "rule_id": "second_match",
+                    "rule_name": "Second Match",
+                    "rule_order": 2,
+                    "stop_on_match": False,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "second", "risk": "high"},
+                },
+            ],
+        }
+    )
+
+    result = _evaluate_worker(ruleset, {"account": "A"})
+
+    assert result["matched_rule_ids"] == ["first_match", "second_match"]
+    assert result["assign"] == {"bucket": "second", "risk": "high"}
+    assert result["winning_rule_id"] == "first_match"
+    assert result["winning_rule_explanation"] == "account == 'A'"
+
+
+def test_spark_row_evaluator_stringifies_incompatible_same_target_assignments():
+    """
+    What: Falls back to string output for incompatible active assignments to one target.
+    Why: Spark requires one declared type per assignment struct field.
+    Fails when: Incompatible assignment values break UDF serialization or silently change schema.
+    """
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Ruleset",
+            "version": "1",
+            "status": "published",
+            "rules": [
+                {
+                    "rule_id": "string_shape",
+                    "rule_name": "String Shape",
+                    "rule_order": 1,
+                    "stop_on_match": False,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {"review_result": "manual"},
+                },
+                {
+                    "rule_id": "struct_shape",
+                    "rule_name": "Struct Shape",
+                    "rule_order": 2,
+                    "stop_on_match": False,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {
+                        "review_result": {
+                            "literal": {
+                                "market_value": True,
+                                "book_value": False,
+                            }
+                        }
+                    },
+                },
+            ],
+        }
+    )
+
+    schema = _spark_runtime()._assignment_schema(ruleset, T.StructType())
+    field_types = {field.name: field.dataType for field in schema.fields}
+    result = _evaluate_worker(ruleset, {"account": "A"})
+
+    assert isinstance(field_types["review_result"], T.StringType)
+    assert result["matched_rule_ids"] == ["string_shape", "struct_shape"]
+    assert result["assign"] == {
+        "review_result": "market_value=True, book_value=False",
+    }
+
+
 def test_spark_row_evaluator_winning_rule_trace_includes_precomputed_aggregate_field():
     """
     What: Emits precomputed aggregate columns like ordinary field operands.
@@ -220,7 +675,7 @@ def test_spark_row_evaluator_winning_rule_trace_includes_precomputed_aggregate_f
     assert left["column"] == "account_amount_sum"
     assert left["source_columns"] == ["account_amount_sum"]
     assert left["value"] == "30"
-    assert result["winning_rule_explanation"] == "account_amount_sum=30 > 15"
+    assert result["winning_rule_explanation"] == "account_amount_sum > 15"
 
 
 def test_spark_row_evaluator_winning_rule_trace_includes_custom_function_args():
@@ -263,7 +718,7 @@ def test_spark_row_evaluator_winning_rule_trace_includes_custom_function_args():
     assert left["source_columns"] == ["amount"]
     assert left["value"] == "5"
     assert left["arguments"] == {"x": "amount=2", "y": "3"}
-    assert result["winning_rule_explanation"] == "score(x=amount=2, y=3)=5 == 5"
+    assert result["winning_rule_explanation"] == "score(x=amount, y=3) == 5"
 
 
 def test_spark_row_evaluator_like_uses_sql_wildcard_semantics():

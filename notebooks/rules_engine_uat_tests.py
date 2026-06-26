@@ -848,7 +848,7 @@ print("-" * 80)
 print("Area: Downstream readiness")
 print("Priority: High")
 print("Owner Role: Data Consumer")
-print("Expected Result: Column names, JSON fields, matched flags, and error field are understood and usable.")
+print("Expected Result: Column names, native struct fields, matched flags, and error field are understood and usable.")
 print("")
 
 from rules_engine import RulesEngineService

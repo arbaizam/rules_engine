@@ -28,6 +28,8 @@ from rules_engine.models import (
     FieldOperand,
     LiteralOperand,
     Operand,
+    ResolvedConditionTrace,
+    RuleExecutionTrace,
     Ruleset,
 )
 from rules_engine.registry import FunctionRegistry
@@ -247,7 +249,10 @@ class SparkRulesEngineRuntime:
     def _assignment_schema(self, ruleset: Ruleset, source_schema: T.StructType) -> T.StructType:
         """Build a ruleset-specific assignment result struct."""
         field_types: dict[str, T.DataType] = {}
-        for rule in ruleset.rules:
+        for rule in sorted(
+            (item for item in ruleset.rules if item.active_flag),
+            key=lambda item: item.rule_order,
+        ):
             for assignment in rule.assignments:
                 inferred = self._assignment_data_type(assignment, source_schema)
                 existing = field_types.get(assignment.target_field)
@@ -339,6 +344,7 @@ class SparkRulesEngineRuntime:
                 matched_rule_ids: list[str] = []
                 assignments: dict[str, Any] = {}
                 winning_rule: dict[str, Any] | None = None
+                winning_rule_explanation: str | None = None
                 for rule in sorted(
                     (item for item in ruleset.rules if item.active_flag),
                     key=lambda item: item.rule_order,
@@ -347,14 +353,16 @@ class SparkRulesEngineRuntime:
                     if matched:
                         matched_rule_ids.append(rule.rule_id)
                         if winning_rule is None:
-                            winning_rule = runtime._spark_rule_trace_payload(
-                                runtime._rule_trace_payload(
-                                    runtime._rule_execution_trace(
-                                        rule,
-                                        matched,
-                                        condition_traces,
-                                    )
+                            winning_rule = runtime._spark_rule_trace(
+                                runtime._rule_execution_trace(
+                                    rule,
+                                    matched,
+                                    condition_traces,
                                 )
+                            )
+                            winning_rule_explanation = runtime._winning_rule_explanation_from_trace(
+                                rule,
+                                condition_traces,
                             )
                         assignments.update(runtime._evaluate_assignments(rule.assignments, row_dict))
                         if rule.stop_on_match:
@@ -377,7 +385,7 @@ class SparkRulesEngineRuntime:
                     "winning_rule": winning_rule,
                     "winning_rule_id": winning_rule.get("rule_id") if winning_rule else None,
                     "winning_rule_name": winning_rule.get("rule_name") if winning_rule else None,
-                    "winning_rule_explanation": runtime._winning_rule_explanation(winning_rule),
+                    "winning_rule_explanation": winning_rule_explanation,
                     "error": None,
                 }
             except Exception as exc:
@@ -425,60 +433,94 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
                 return item
         return None
 
-    def _spark_rule_trace_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        """Normalize a rule trace payload to the declared Spark struct schema."""
+    def _spark_rule_trace(self, trace: RuleExecutionTrace) -> dict[str, Any]:
+        """Convert a rule trace to the declared Spark struct schema."""
         return {
-            "rule_id": payload.get("rule_id"),
-            "rule_name": payload.get("rule_name"),
-            "matched": payload.get("matched"),
-            "assignments_applied": list(payload.get("assignments_applied") or []),
+            "rule_id": trace.rule_id,
+            "rule_name": trace.rule_name,
+            "matched": trace.matched,
+            "assignments_applied": list(trace.assignments_applied),
             "conditions": [
-                self._spark_condition_trace_payload(condition)
-                for condition in payload.get("conditions", [])
+                self._spark_condition_trace(condition)
+                for condition in trace.condition_traces
             ],
         }
 
-    def _spark_condition_trace_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        """Normalize a condition trace payload to the declared Spark struct schema."""
+    def _spark_condition_trace(self, trace: ResolvedConditionTrace) -> dict[str, Any]:
+        """Convert a condition trace to the declared Spark struct schema."""
         return {
-            "columns": [str(column) for column in payload.get("columns", [])],
-            "left": self._spark_operand_trace_payload(payload.get("left")),
-            "right": self._spark_operand_trace_payload(payload.get("right")),
-            "operator": payload.get("operator"),
-            "comparison_result": payload.get("comparison_result"),
-            "passed": payload.get("passed"),
-            "tolerance_abs": self._trace_text(payload.get("tolerance_abs")),
-            "null_input_mode": payload.get("null_input_mode"),
-            "null_result_mode": payload.get("null_result_mode"),
-            "null_default_value": self._trace_text(payload.get("null_default_value")),
+            "columns": self._spark_condition_columns(trace),
+            "left": self._spark_operand_trace(trace.left),
+            "right": self._spark_operand_trace(trace.right),
+            "operator": trace.operator,
+            "comparison_result": trace.comparison_result,
+            "passed": trace.passed,
+            "tolerance_abs": self._non_default_trace_text(trace.tolerance_abs, "0"),
+            "null_input_mode": self._non_default_trace_value(
+                trace.null_input_mode,
+                "propagate",
+            ),
+            "null_result_mode": self._non_default_trace_value(
+                trace.null_result_mode,
+                "null",
+            ),
+            "null_default_value": self._trace_text(trace.null_default_value),
         }
 
-    def _spark_operand_trace_payload(self, payload: Any) -> dict[str, Any] | None:
-        """Normalize one operand trace payload to the declared Spark struct schema."""
-        if not isinstance(payload, MappingABC):
+    def _spark_condition_columns(self, trace: ResolvedConditionTrace) -> list[str]:
+        """Return source columns referenced by a condition trace."""
+        return self._unique_strings(
+            [
+                *self._operand_trace_columns(trace.left),
+                *self._operand_trace_columns(trace.right),
+            ]
+        )
+
+    def _operand_trace_columns(self, trace: Mapping[str, Any] | None) -> list[str]:
+        """Return source columns from one operand trace."""
+        if trace is None:
+            return []
+        return list(trace.get("columns", []))
+
+    def _spark_operand_trace(self, trace: Any) -> dict[str, Any] | None:
+        """Convert one operand trace to the declared Spark struct schema."""
+        if not isinstance(trace, MappingABC):
             return None
-        source_columns = payload.get("source_columns")
-        if source_columns is None and payload.get("column") is not None:
-            source_columns = [payload.get("column")]
+        column = trace.get("column") or trace.get("field_name")
+        source_columns = trace.get("source_columns") or trace.get("columns")
+        if source_columns is None and column is not None:
+            source_columns = [column]
         return {
-            "kind": payload.get("kind"),
-            "column": payload.get("column"),
-            "value": self._trace_text(payload.get("value")),
-            "value_type": payload.get("value_type"),
-            "function_name": payload.get("function_name"),
+            "kind": trace.get("kind"),
+            "column": column,
+            "value": self._trace_text(trace.get("value")),
+            "value_type": trace.get("value_type"),
+            "function_name": trace.get("function_name"),
             "source_columns": [str(column) for column in source_columns or []],
-            "arguments": self._trace_arguments(payload),
+            "arguments": self._trace_arguments(trace),
         }
 
     def _trace_arguments(self, payload: Mapping[str, Any]) -> dict[str, str | None] | None:
         """Return compact string arguments for custom-function operands."""
         args = payload.get("args")
-        if not isinstance(args, MappingABC):
+        if not isinstance(args, MappingABC) or not args:
             return None
         return {
-            str(name): self._operand_explanation(value) or self._trace_text(value)
+            str(name): self._operand_trace_summary(value) or self._trace_text(value)
             for name, value in args.items()
         }
+
+    def _non_default_trace_text(self, value: Any, default: Any) -> str | None:
+        """Return trace text only when a trace value differs from its default."""
+        if value in (None, default):
+            return None
+        return self._trace_text(value)
+
+    def _non_default_trace_value(self, value: Any, default: Any) -> Any | None:
+        """Return a trace value only when it differs from its default."""
+        if value in (None, default):
+            return None
+        return value
 
     def _trace_text(self, value: Any) -> str | None:
         """Convert arbitrary trace values to compact Spark string fields."""

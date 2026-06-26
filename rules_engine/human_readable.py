@@ -39,6 +39,23 @@ class HumanReadableRulesetFormatter:
             for rule in sorted(ruleset.rules, key=lambda item: item.rule_order)
         ]
 
+    def format_winning_rule_explanation(
+        self,
+        rule: Rule,
+        passed_condition_ids: set[str],
+    ) -> str | None:
+        """
+        Render the passed branches of a winning rule using author-facing syntax.
+        """
+        passed, explanation = self._format_passed_group(
+            rule.root_group,
+            passed_condition_ids,
+            nested=False,
+        )
+        if not passed:
+            return None
+        return explanation
+
     def _describe_rule(self, rule: Rule) -> dict[str, str]:
         """
         Return one table-shaped description for a rule.
@@ -70,6 +87,51 @@ class HumanReadableRulesetFormatter:
         if nested and len(parts) > 1:
             return f"({expression})"
         return expression
+
+    def _format_passed_group(
+        self,
+        group: ConditionGroup,
+        passed_condition_ids: set[str],
+        *,
+        nested: bool,
+    ) -> tuple[bool, str | None]:
+        """
+        Render only the passed branches of a condition group.
+        """
+        child_results = [
+            (
+                condition.condition_id in passed_condition_ids,
+                self._format_condition(condition)
+                if condition.condition_id in passed_condition_ids
+                else None,
+            )
+            for condition in group.conditions
+        ]
+        child_results.extend(
+            self._format_passed_group(
+                child_group,
+                passed_condition_ids,
+                nested=True,
+            )
+            for child_group in group.groups
+        )
+
+        if not child_results:
+            return group.logical_operator is LogicalOperator.ALL, None
+        if group.logical_operator is LogicalOperator.ALL:
+            group_passed = all(passed for passed, _ in child_results)
+            joiner = " AND "
+        else:
+            group_passed = any(passed for passed, _ in child_results)
+            joiner = " OR "
+
+        included = [text for passed, text in child_results if passed and text]
+        if not group_passed or not included:
+            return group_passed, None
+        expression = joiner.join(included)
+        if nested and len(included) > 1:
+            expression = f"({expression})"
+        return group_passed, expression
 
     def _format_condition(self, condition: Condition) -> str:
         """

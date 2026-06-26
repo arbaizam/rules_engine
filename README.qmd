@@ -6,8 +6,8 @@ and audit-ready persistence.
 
 The package compiles canonical YAML or code-authored dataclasses into immutable
 ruleset models, validates them, normalizes them into publish-ready metadata,
-persists them to Spark/Delta tables, and evaluates them against Python row
-sets or Spark DataFrames.
+persists them to Spark/Delta tables, and evaluates them against Spark
+DataFrames.
 
 The design intentionally avoids aliases, expression DSLs, raw persisted
 lambdas, hidden runtime defaults, hidden cross-row behavior, and silent
@@ -51,8 +51,7 @@ workflows where rules must be:
 - auditable after the fact,
 - promoted through controlled lifecycle states.
 
-The primary target runtime is Databricks Spark. The pure-Python evaluator exists
-as a reference/test utility for small row sets and semantic parity checks.
+The primary and supported runtime is Databricks Spark.
 
 ## Core Concepts
 
@@ -714,8 +713,10 @@ target fields; fields not assigned for a row are null. `rules_engine_winning_rul
 is a Spark `STRUCT` containing only the first matched rule trace, including
 condition source columns, resolved operand values, comparison result, and final
 pass/fail state.
-`rules_engine_winning_rule_explanation` is a readable summary of the passed
-conditions from the first matched rule.
+`rules_engine_winning_rule_explanation` is an author-facing summary of the
+passed conditions from the first matched rule, using the same expression syntax
+as `RulesEngineService.describe_rules`. Resolved operand values remain available
+in the nested `rules_engine_winning_rule` trace struct.
 When multiple rules match and `stop_on_match` is false, `rules_engine_assign`
 contains the merged assignment output from all matched rules, while
 `rules_engine_winning_rule` remains the first matched rule trace.
@@ -1290,7 +1291,6 @@ Databricks or copy cells into a Databricks notebook. It walks through:
 - YAML authoring,
 - compile/validate/normalize,
 - YAML export,
-- Python runtime execution,
 - Spark compatibility validation,
 - Delta repository setup,
 - publish/load/retire workflow,
@@ -1314,8 +1314,8 @@ notebooks/python_ruleset_authoring_guide.py
 
 It demonstrates code-based ruleset authoring with the public dataclass API,
 validates the resulting model, exports canonical YAML with
-`YamlRulesetExporter`, and evaluates a small fixture with the pure-Python
-runtime. By default, it writes the generated example YAML to `rule_sets/`.
+`YamlRulesetExporter`, and evaluates a small Spark fixture. By default, it
+writes the generated example YAML to `rule_sets/`.
 
 ## Testing
 
@@ -1334,12 +1334,7 @@ python -m pytest -q tests
 ```
 
 Run Spark tests in Databricks before relying on Spark execution in production.
-For a local environment that needs Spark-backed repository or runtime modules,
-install the Spark extra:
-
-```powershell
-python -m pip install ".[spark]"
-```
+Spark is a core package dependency, so no Spark extra is required.
 
 ## Packaging And Asset Bundles
 
@@ -1389,11 +1384,12 @@ CLI authentication:
 ```powershell
 databricks bundle validate --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
 databricks bundle deploy --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
-databricks bundle run rules_engine_system_test --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
 ```
 
-The system-test script uses a unique disposable schema and drops it after the
-test, so it is suited as a repeatable CI/promotion gate.
+Run the Databricks notebook source `notebooks/rules_engine_system_tests.py`
+against a disposable schema as the promotion/system-validation gate. Keep
+`docs/rules_engine_system_test_uat_plan.md` synchronized with the notebook when
+adding, removing, or changing system-test coverage.
 
 For Azure DevOps, keep the same sequence in the pipeline:
 
@@ -1403,7 +1399,7 @@ run pytest
 build wheel
 databricks bundle validate
 databricks bundle deploy
-databricks bundle run rules_engine_system_test
+run notebooks/rules_engine_system_tests.py in Databricks
 ```
 
 Production deployment should use a service principal or your organization's
@@ -1554,7 +1550,5 @@ the version before publishing a replacement under the same ruleset name.
 - Custom function implementations must be available to Spark workers and must
   be serializable by Spark's Python UDF machinery. Prefer named module-level
   functions over lambdas.
-- The pure-Python evaluator is a reference/test utility. Production execution
-  is Databricks Spark.
 - Utilities under `tools/`, notebooks, and sample `rule_sets/` are not included
   in the production wheel.
