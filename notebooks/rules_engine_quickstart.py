@@ -123,6 +123,7 @@ result_df = service.evaluate_dataframe(
     ruleset_name="Quickstart Account Review",
     version="1",
     fail_on_error=True,
+    require_native=True,
 )
 
 display(result_df.orderBy("account"))

@@ -483,24 +483,51 @@ class SparkRowEvaluator:
             return self._equals(left, right, tolerance_abs)
         if operator is ComparisonOperator.NE:
             return not self._equals(left, right, tolerance_abs)
-        if operator is ComparisonOperator.GT:
-            return self._decimal(left) > self._decimal(right) + tolerance_abs
-        if operator is ComparisonOperator.GE:
-            return self._decimal(left) >= self._decimal(right) - tolerance_abs
-        if operator is ComparisonOperator.LT:
-            return self._decimal(left) < self._decimal(right) - tolerance_abs
-        if operator is ComparisonOperator.LE:
-            return self._decimal(left) <= self._decimal(right) + tolerance_abs
+        if operator in {
+            ComparisonOperator.GT,
+            ComparisonOperator.GE,
+            ComparisonOperator.LT,
+            ComparisonOperator.LE,
+        }:
+            return self._ordered_numeric_compare(
+                left,
+                right,
+                operator,
+                tolerance_abs,
+            )
         if operator is ComparisonOperator.IN:
-            return left in right
+            return self._collection_contains(left, right)
         if operator is ComparisonOperator.NOT_IN:
-            return left not in right
+            return not self._collection_contains(left, right)
         if operator is ComparisonOperator.BETWEEN:
             lower, upper = right
-            return self._decimal(lower) <= self._decimal(left) <= self._decimal(upper)
+            return self._ordered_numeric_compare(
+                left,
+                lower,
+                ComparisonOperator.GE,
+                Decimal("0"),
+            ) and self._ordered_numeric_compare(
+                left,
+                upper,
+                ComparisonOperator.LE,
+                Decimal("0"),
+            )
         if operator is ComparisonOperator.NOT_BETWEEN:
             lower, upper = right
-            return not (self._decimal(lower) <= self._decimal(left) <= self._decimal(upper))
+            return not (
+                self._ordered_numeric_compare(
+                    left,
+                    lower,
+                    ComparisonOperator.GE,
+                    Decimal("0"),
+                )
+                and self._ordered_numeric_compare(
+                    left,
+                    upper,
+                    ComparisonOperator.LE,
+                    Decimal("0"),
+                )
+            )
         if operator is ComparisonOperator.CONTAINS:
             return str(right) in str(left)
         if operator is ComparisonOperator.NOT_CONTAINS:
@@ -553,9 +580,71 @@ class SparkRowEvaluator:
         """
         Compare equality, applying absolute tolerance for numeric values.
         """
+        if isinstance(left, str) and isinstance(right, str):
+            return left == right
         if self._is_numeric(left) and self._is_numeric(right):
-            return abs(self._decimal(left) - self._decimal(right)) <= tolerance_abs
+            left_decimal = self._decimal(left)
+            right_decimal = self._decimal(right)
+            if left_decimal.is_nan() or right_decimal.is_nan():
+                return left_decimal.is_nan() and right_decimal.is_nan()
+            return abs(left_decimal - right_decimal) <= tolerance_abs
         return left == right
+
+    def _nan_order_result(
+        self,
+        left: Any,
+        right: Any,
+        operator: ComparisonOperator,
+    ) -> bool | None:
+        """Apply Spark ordering semantics when either numeric operand is NaN."""
+        if not (self._is_numeric(left) and self._is_numeric(right)):
+            return None
+        left_nan = self._decimal(left).is_nan()
+        right_nan = self._decimal(right).is_nan()
+        if not (left_nan or right_nan):
+            return None
+        if operator is ComparisonOperator.GT:
+            return left_nan and not right_nan
+        if operator is ComparisonOperator.GE:
+            return left_nan
+        if operator is ComparisonOperator.LT:
+            return right_nan and not left_nan
+        if operator is ComparisonOperator.LE:
+            return right_nan
+        raise ValueError(f"Unsupported NaN ordering operator: {operator.value}")
+
+    def _ordered_numeric_compare(
+        self,
+        left: Any,
+        right: Any,
+        operator: ComparisonOperator,
+        tolerance_abs: Decimal,
+    ) -> bool:
+        """Compare numeric values with tolerance and Spark NaN ordering."""
+        nan_result = self._nan_order_result(left, right, operator)
+        if nan_result is not None:
+            return nan_result
+        left_decimal = self._decimal(left)
+        right_decimal = self._decimal(right)
+        if operator is ComparisonOperator.GT:
+            return left_decimal > right_decimal + tolerance_abs
+        if operator is ComparisonOperator.GE:
+            return left_decimal >= right_decimal - tolerance_abs
+        if operator is ComparisonOperator.LT:
+            return left_decimal < right_decimal - tolerance_abs
+        if operator is ComparisonOperator.LE:
+            return left_decimal <= right_decimal + tolerance_abs
+        raise ValueError(f"Unsupported numeric ordering operator: {operator.value}")
+
+    def _collection_contains(self, value: Any, collection: Any) -> bool:
+        """Apply Python membership with Spark-compatible NaN equality."""
+        if self._is_nan(value):
+            return any(self._is_nan(item) for item in collection)
+        return value in collection
+
+    def _is_nan(self, value: Any) -> bool:
+        """Return whether a runtime value is a numeric NaN."""
+        return self._is_numeric(value) and self._decimal(value).is_nan()
 
     def _is_numeric(self, value: Any) -> bool:
         """

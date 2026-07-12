@@ -758,3 +758,92 @@ def test_spark_row_evaluator_null_result_default_controls_condition_result():
     )
 
     assert _evaluate_worker(ruleset, {})["matched"] is True
+
+
+def test_spark_row_evaluator_uses_strict_string_equality():
+    """
+    What: Compares two strings as strings even when both contain numeric text.
+    Why: Spark string equality and the Python compatibility path must agree.
+    Fails when: Numeric-looking strings are silently coerced only by the UDF.
+    """
+    ruleset = _compile(
+        {
+            "left": {"field": "code"},
+            "operator": "eq",
+            "right": {"literal": "7"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+
+    assert _evaluate_worker(ruleset, {"code": "7.0"})["matched"] is False
+    assert _evaluate_worker(ruleset, {"code": "7"})["matched"] is True
+
+
+def test_spark_row_evaluator_matches_spark_nan_comparisons():
+    """
+    What: Treats NaN as equal to itself and greater than finite numeric values.
+    Why: Spark has explicit NaN comparison semantics used by the native path.
+    Fails when: The Python compatibility evaluator errors or disagrees for NaN rows.
+    """
+    equals_ruleset = _compile(
+        {
+            "left": {"field": "amount"},
+            "operator": "eq",
+            "right": {"literal": float("nan")},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    greater_ruleset = _compile(
+        {
+            "left": {"field": "amount"},
+            "operator": "gt",
+            "right": {"literal": 1.0},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    between_ruleset = _compile(
+        {
+            "left": {"field": "amount"},
+            "operator": "between",
+            "right": {"literal": [10.0, 20.0]},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    not_between_ruleset = _compile(
+        {
+            "left": {"field": "amount"},
+            "operator": "not_between",
+            "right": {"literal": [10.0, 20.0]},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    in_ruleset = _compile(
+        {
+            "left": {"field": "amount"},
+            "operator": "in",
+            "right": {"literal": [float("nan")]},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    not_in_ruleset = _compile(
+        {
+            "left": {"field": "amount"},
+            "operator": "not_in",
+            "right": {"literal": [float("nan")]},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+
+    assert _evaluate_worker(equals_ruleset, {"amount": float("nan")})["matched"] is True
+    assert _evaluate_worker(greater_ruleset, {"amount": float("nan")})["matched"] is True
+    assert _evaluate_worker(between_ruleset, {"amount": float("nan")})["matched"] is False
+    assert _evaluate_worker(not_between_ruleset, {"amount": float("nan")})["matched"] is True
+    assert _evaluate_worker(in_ruleset, {"amount": float("nan")})["matched"] is True
+    assert _evaluate_worker(not_in_ruleset, {"amount": float("nan")})["matched"] is False

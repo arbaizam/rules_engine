@@ -184,6 +184,36 @@ def test_service_evaluate_dataframe_requires_ruleset_or_name():
         service.evaluate_dataframe(None)
 
 
+def test_service_evaluate_dataframe_forwards_require_native():
+    """
+    What: Passes strict native execution through the public service facade.
+    Why: Production callers should not reach into the runtime to prevent UDF fallback.
+    Fails when: require_native is dropped before runtime capability checking.
+    """
+    service = _service()
+    ruleset = YamlRulesetCompiler().compile_text(_yaml_text())
+    calls = {}
+
+    class RecordingRuntime:
+        def evaluate_dataframe(self, df, supplied_ruleset, **kwargs):
+            calls.update(kwargs)
+            calls["ruleset"] = supplied_ruleset
+            return df
+
+    service.runtime = RecordingRuntime()
+    marker = object()
+
+    result = service.evaluate_dataframe(
+        marker,
+        ruleset=ruleset,
+        require_native=True,
+    )
+
+    assert result is marker
+    assert calls["ruleset"] is ruleset
+    assert calls["require_native"] is True
+
+
 def test_service_describe_rules_formats_supplied_ruleset():
     """
     What: Formats compiled rule metadata into readable table-shaped rows.

@@ -56,6 +56,10 @@ class HumanReadableRulesetFormatter:
             return None
         return explanation
 
+    def format_condition(self, condition: Condition) -> str:
+        """Render one condition in author-facing expression syntax."""
+        return self._format_condition(condition)
+
     def _describe_rule(self, rule: Rule) -> dict[str, str]:
         """
         Return one table-shaped description for a rule.

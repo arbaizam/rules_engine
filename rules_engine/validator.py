@@ -19,6 +19,7 @@ from rules_engine.enums import (
     ObjectType,
     ValidationSeverity,
 )
+from rules_engine.literal_types import literal_value_type_issue
 from rules_engine.models import (
     Assignment,
     Condition,
@@ -347,6 +348,15 @@ class RulesetValidator:
                     object_id,
                 )
         elif isinstance(operand, LiteralOperand):
+            issue = literal_value_type_issue(operand.value, operand.value_type)
+            if issue is not None:
+                self._add(
+                    result,
+                    "LITERAL_VALUE_TYPE_INVALID",
+                    issue,
+                    object_type,
+                    object_id,
+                )
             return
         elif isinstance(operand, CustomFunctionOperand):
             self._validate_custom_function(operand, result, object_id, in_assignment=in_assignment)

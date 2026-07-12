@@ -105,6 +105,60 @@ def test_null_result_mode_default_without_default_fails_validation():
     assert result.passed is False
 
 
+def test_literal_value_type_must_match_runtime_value():
+    """
+    What: Rejects a literal whose explicit type hint contradicts its runtime value.
+    Why: Spark must not rely on ANSI-sensitive implicit casts from inaccurate hints.
+    Fails when: A numeric hint can approve a string literal for native execution.
+    """
+    result = _validate_condition(
+        {
+            "left": {"field": "amount"},
+            "operator": "eq",
+            "right": {"literal": "not-a-number", "value_type": "number"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+
+    assert any(
+        issue.check_name == "LITERAL_VALUE_TYPE_INVALID"
+        for issue in result.issues
+    )
+
+
+def test_literal_value_type_accepts_compatible_numeric_and_list_values():
+    """
+    What: Accepts established number and list hints when their values agree.
+    Why: Hint validation must preserve canonical YAML already used by the package.
+    Fails when: Valid numeric thresholds or collection literals are rejected.
+    """
+    numeric = _validate_condition(
+        {
+            "left": {"field": "amount"},
+            "operator": "eq",
+            "right": {"literal": 5, "value_type": "number"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    collection = _validate_condition(
+        {
+            "left": {"field": "account"},
+            "operator": "in",
+            "right": {"literal": ["A", "B"], "value_type": "list"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+
+    assert not any(
+        issue.check_name == "LITERAL_VALUE_TYPE_INVALID"
+        for result in (numeric, collection)
+        for issue in result.issues
+    )
+
+
 def test_valid_string_operators_validate():
     """
     What: Validates a condition using a canonical string operator.
