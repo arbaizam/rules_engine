@@ -1412,6 +1412,11 @@ against a disposable schema as the promotion/system-validation gate. Keep
 `docs/rules_engine_system_test_uat_plan.md` synchronized with the notebook when
 adding, removing, or changing system-test coverage.
 
+Use `notebooks/rules_engine_serverless_performance.py` for cache-free
+Databricks serverless benchmarks. It materializes every timed case to Delta and
+stores durable comparison metrics. Configuration and acceptance guidance are in
+`docs/rules_engine_serverless_performance.md`.
+
 For Azure DevOps, keep the same sequence in the pipeline:
 
 ```text
@@ -1437,7 +1442,8 @@ Recommended local workflow:
 5. Run default test suite.
 6. Run Spark tests in Databricks or Spark-enabled CI.
 7. Review generated Delta metadata rows from Databricks validation.
-8. Promote package artifact or source to the target environment.
+8. Run the serverless performance notebook for runtime-sensitive changes.
+9. Promote package artifact or source to the target environment.
 
 Recommended Databricks workflow:
 
