@@ -397,7 +397,7 @@ display(spark.table(table_names.ruleset_versions))
 # MAGIC
 # MAGIC - `load_published()` reads only `status = published` metadata.
 # MAGIC - Any aggregate facts must already be present as input columns.
-# MAGIC - Field/literal rules compile to native Spark expressions; Python custom functions and row-level error capture use the compatibility UDF.
+# MAGIC - A Python UDF evaluates final condition and assignment logic per row.
 # MAGIC - `fail_on_error=True` performs an error check and raises if any row has
 # MAGIC   `rules_engine_error`.
 # MAGIC
@@ -412,7 +412,6 @@ result_df = service.evaluate_dataframe(
     ruleset_name="Account Review Rules",
     version="1",
     fail_on_error=True,
-    require_native=True,
 )
 
 display(result_df.orderBy("row_id"))

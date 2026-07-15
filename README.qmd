@@ -135,17 +135,14 @@ rules_engine/
   enums.py                # canonical vocabulary
   exceptions.py           # package exceptions
   exporter_yaml.py        # dataclasses -> canonical YAML
-  literal_types.py        # literal value_type validation
   models.py               # domain and persistence row dataclasses
   normalizer.py           # publish-ready explicit metadata
   publish.py              # lifecycle orchestration
   registry.py             # custom function registry
   repository.py           # Spark/Delta metadata repository
-  runtime.py              # row evaluator used by Spark's Python compatibility path
+  runtime.py              # reference/test row evaluator used by Spark row UDF
   serializer.py           # dataclasses <-> persisted payload rows
-  spark_native.py         # native Spark expression compiler
-  spark_runtime.py        # execution selection and Python UDF compatibility path
-  spark_types.py          # shared Spark result schemas
+  spark_runtime.py        # Spark DataFrame runtime
   spark_validator.py      # Spark compatibility validator
   validator.py            # semantic validator
 
@@ -356,7 +353,7 @@ Side effects:
 - Does not delete metadata.
 - Makes that version unavailable through `load_published()`.
 
-### `SparkRulesEngineRuntime.evaluate_dataframe(df, ruleset, fail_on_error=True, require_native=False)`
+### `SparkRulesEngineRuntime.evaluate_dataframe(df, ruleset, fail_on_error=True)`
 
 Purpose:
 
@@ -364,15 +361,9 @@ Purpose:
 
 Detailed sequence:
 
-1. Compile supported field/literal rules into native Spark column expressions.
-2. Use the Python UDF compatibility path only for Python custom functions or
-   row-level error semantics that cannot be represented natively.
-3. Append `rules_engine_*` result columns.
-4. On the compatibility path, raise if any row has `rules_engine_error` and
-   `fail_on_error=True`.
-
-Set `require_native=True` for high-volume production jobs. Planning then fails
-with the compatibility reason instead of silently selecting the Python UDF.
+1. Use a Python UDF to evaluate rule and assignment logic per row.
+2. Append `rules_engine_*` result columns.
+3. If `fail_on_error=True`, raise if any row has `rules_engine_error`.
 
 Returned columns:
 
@@ -701,7 +692,6 @@ result_df = spark_runtime.evaluate_dataframe(
     input_df,
     ruleset,
     fail_on_error=True,
-    require_native=True,
 )
 ```
 
@@ -733,37 +723,15 @@ contains the merged assignment output from all matched rules, while
 
 Spark evaluation strategy:
 
-1. Compile compatible field/literal conditions, assignments, rule ordering,
-   stop behavior, and winning-rule trace output into Spark column expressions.
-2. Execute that plan in Spark without a Python row UDF.
-3. Fall back to the Python UDF for registered Python custom functions,
-   missing source fields, nonzero tolerance, unsafe mixed numeric coercions,
-   or behavior that requires row-level Python error capture.
-4. On the fallback path, fail fast if any row-level evaluator error is produced
-   and `fail_on_error` is true.
-
-Because the common path is expressed as Spark columns, downstream projections
-can prune unused outputs such as the winning trace when a job selects only
-assignment fields.
+1. Pass the input row into a Python UDF.
+2. Evaluate rule logic and assignments against row-local fields.
+3. Return Spark-native structs
+   for assignment output and the winning-rule trace.
+4. Fail fast if any row-level evaluator error is produced and `fail_on_error`
+   is true.
 
 The default is `fail_on_error=True`. This prevents row-level evaluator
-exceptions from silently becoming false non-matches. On the UDF path this
-performs an error-detection Spark action before returning the DataFrame; a later
-consumer action can evaluate the UDF again. Use `require_native=True` for
-performance-sensitive jobs, or explicitly account for this validation cost.
-
-String-to-string `eq` and `ne` comparisons are strict and do not coerce
-numeric-looking strings. Numeric NaN values follow Spark semantics: NaN equals
-NaN, sorts above finite numeric values, and uses the same equality in
-`in`/`not_in` and ordering in `between`/`not_between`.
-
-When a literal declares `value_type`, its runtime value must agree with that
-hint. Validation rejects mismatches before Spark planning so execution never
-depends on ANSI-sensitive implicit casts.
-
-Winning-trace `value` fields are human-readable display strings. Their exact
-timestamp and floating-point formatting can differ on the Python compatibility
-path and must not be parsed as a stable machine-readable value contract.
+exceptions from silently becoming false non-matches.
 
 ## Spark Compatibility Validation
 
@@ -808,7 +776,6 @@ result_df = service.evaluate_dataframe(
     input_df,
     ruleset_name=ruleset.ruleset_name,
     version=ruleset.version,
-    require_native=True,
 )
 
 service.retire(
@@ -1358,12 +1325,11 @@ Run the default local suite:
 python -m pytest -q tests -p no:cacheprovider --basetemp pytest-cache-files-local
 ```
 
-Spark tests run by default when a Spark session or local Java runtime is
-available. They skip only when local Spark cannot start. To disable them
-explicitly:
+Spark tests are skipped by default because local Spark startup can be
+environment-sensitive. To run them:
 
 ```powershell
-$env:RULES_ENGINE_RUN_SPARK_TESTS = "0"
+$env:RULES_ENGINE_RUN_SPARK_TESTS = "1"
 python -m pytest -q tests
 ```
 
@@ -1572,17 +1538,15 @@ the version before publishing a replacement under the same ruleset name.
 - v1 supports Databricks Unity Catalog and Hive metastore-backed Delta tables.
 - v1 assumes `spark.sql.parser.escapedStringLiterals=false`, the modern Spark
   default.
-- Spark runtime compiles supported field/literal rules to native Spark
-  expressions and uses a Python UDF compatibility path for Python custom
-  functions, nonzero tolerance, and row-level error capture. Use
-  `require_native=True` to reject fallback for performance-sensitive jobs.
+- Spark runtime uses a Python UDF for final rule evaluation.
 - Spark runtime emits assignment output and the winning-rule trace as Spark
   structs. It does not emit all-rule trace payloads for every evaluated row.
+- Spark runtime does not yet compile every row predicate into native Spark
+  expressions.
 - Aggregate operands are not supported. Precompute aggregate facts upstream in
   Spark and reference them as ordinary fields.
 - `like` and `not_like` support SQL `%` and `_` wildcards. Escape-character
-  semantics for literal `%` or `_` are not part of v1; patterns containing a
-  backslash use the Python compatibility path.
+  semantics for literal `%` or `_` are not part of v1.
 - Custom function implementations must be available to Spark workers and must
   be serializable by Spark's Python UDF machinery. Prefer named module-level
   functions over lambdas.

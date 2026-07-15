@@ -221,7 +221,6 @@ class RulesEngineService:
         version: str | None = None,
         column_prefix: str = "rules_engine",
         fail_on_error: bool = True,
-        require_native: bool = False,
     ) -> DataFrame:
         """
         Evaluate a Spark DataFrame using a supplied or loaded ruleset.
@@ -235,7 +234,6 @@ class RulesEngineService:
             ruleset,
             column_prefix=column_prefix,
             fail_on_error=fail_on_error,
-            require_native=require_native,
         )
 
     def retire(
