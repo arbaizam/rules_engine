@@ -353,6 +353,20 @@ Side effects:
 - Does not delete metadata.
 - Makes that version unavailable through `load_published()`.
 
+### `required_source_columns(ruleset)`
+
+Purpose:
+
+- Return the ordered, deduplicated source fields required by active rules.
+- Include active condition operands, nested custom-function arguments, and
+  assignment operands.
+- Exclude inactive rules and inactive conditions whose values are not resolved.
+
+`SparkRulesEngineRuntime.evaluate_dataframe()` uses this helper to serialize
+only required fields that exist in the input DataFrame. The helper is also
+available to callers through `from rules_engine import required_source_columns`
+for source projection, dependency inspection, and validation workflows.
+
 ### `SparkRulesEngineRuntime.evaluate_dataframe(df, ruleset, fail_on_error=True)`
 
 Purpose:
@@ -361,9 +375,17 @@ Purpose:
 
 Detailed sequence:
 
-1. Use a Python UDF to evaluate rule and assignment logic per row.
-2. Append `rules_engine_*` result columns.
-3. If `fail_on_error=True`, raise if any row has `rules_engine_error`.
+1. Identify active source dependencies with `required_source_columns()`.
+2. Serialize only available required fields into the Python UDF.
+3. Evaluate losing rules through a match-only path without constructing trace
+   payloads; all conditions still execute so row-level errors remain observable.
+4. Build the complete condition trace only for the winning rule. Rules with
+   active custom-function conditions use a single traced pass so functions are
+   not invoked twice.
+5. Resolve assignments without constructing unused operand traces and return
+   common scalar trace values without JSON serialization.
+6. Append `rules_engine_*` result columns in one Spark projection.
+7. If `fail_on_error=True`, raise if any row has `rules_engine_error`.
 
 Returned columns:
 

@@ -24,6 +24,7 @@ from pyspark.sql import types as T
 
 from rules_engine.models import (
     Assignment,
+    ConditionGroup,
     CustomFunctionOperand,
     FieldOperand,
     LiteralOperand,
@@ -38,6 +39,50 @@ from rules_engine.runtime import SparkRowEvaluator
 
 
 logger = logging.getLogger(__name__)
+
+
+def required_source_columns(ruleset: Ruleset) -> tuple[str, ...]:
+    """Return source columns required to evaluate active rules.
+
+    Columns are returned once, in rule evaluation and operand traversal order.
+    Inactive rules and conditions are excluded because their values are never
+    resolved against an input row.
+    """
+    columns: list[str] = []
+
+    def add_operand(operand: Operand | None) -> None:
+        if isinstance(operand, FieldOperand):
+            columns.append(operand.field_name)
+        elif isinstance(operand, CustomFunctionOperand):
+            for argument in operand.args.values():
+                if isinstance(
+                    argument,
+                    (FieldOperand, LiteralOperand, CustomFunctionOperand),
+                ):
+                    add_operand(argument)
+
+    def add_group(group: ConditionGroup) -> None:
+        for condition in group.conditions:
+            if condition.active_flag:
+                add_operand(condition.left)
+                add_operand(condition.right)
+        for nested_group in group.groups:
+            add_group(nested_group)
+
+    for rule in sorted(
+        (item for item in ruleset.rules if item.active_flag),
+        key=lambda item: item.rule_order,
+    ):
+        add_group(rule.root_group)
+        for assignment in rule.assignments:
+            add_operand(assignment.value)
+    return tuple(dict.fromkeys(columns))
+
+
+def _source_column(column_name: str):
+    """Return a top-level Spark column with its literal source name preserved."""
+    escaped_name = column_name.replace("`", "``")
+    return F.col(f"`{escaped_name}`").alias(column_name)
 
 
 OPERAND_TRACE_STRUCT = T.StructType(
@@ -195,27 +240,42 @@ class SparkRulesEngineRuntime:
             ),
             _result_struct(assign_schema),
         )
-        row_struct = F.struct(*[F.col(column_name) for column_name in df.columns])
+        available_columns = set(df.columns)
+        serialized_columns = [
+            column_name
+            for column_name in required_source_columns(ruleset)
+            if column_name in available_columns
+        ]
+        row_struct = F.struct(
+            *(
+                [_source_column(column_name) for column_name in serialized_columns]
+                or [F.lit(None).alias("__rules_engine_empty")]
+            )
+        )
         result_col = f"{column_prefix}_result"
         evaluated = df.withColumn(result_col, result_udf(row_struct))
-
-        output = (
-            evaluated.withColumn(f"{column_prefix}_matched", F.col(f"{result_col}.matched"))
-            .withColumn(
-                f"{column_prefix}_matched_rule_ids",
-                F.col(f"{result_col}.matched_rule_ids"),
-            )
-            .withColumn(f"{column_prefix}_assign", F.col(f"{result_col}.assign"))
-            .withColumn(f"{column_prefix}_winning_rule", F.col(f"{result_col}.winning_rule"))
-            .withColumn(f"{column_prefix}_winning_rule_id", F.col(f"{result_col}.winning_rule_id"))
-            .withColumn(f"{column_prefix}_winning_rule_name", F.col(f"{result_col}.winning_rule_name"))
-            .withColumn(
-                f"{column_prefix}_winning_rule_explanation",
-                F.col(f"{result_col}.winning_rule_explanation"),
-            )
-            .withColumn(f"{column_prefix}_error", F.col(f"{result_col}.error"))
-            .drop(result_col)
+        result = F.col(result_col)
+        output = evaluated.withColumns(
+            {
+                f"{column_prefix}_matched": result.getField("matched"),
+                f"{column_prefix}_matched_rule_ids": result.getField(
+                    "matched_rule_ids"
+                ),
+                f"{column_prefix}_assign": result.getField("assign"),
+                f"{column_prefix}_winning_rule": result.getField("winning_rule"),
+                f"{column_prefix}_winning_rule_id": result.getField(
+                    "winning_rule_id"
+                ),
+                f"{column_prefix}_winning_rule_name": result.getField(
+                    "winning_rule_name"
+                ),
+                f"{column_prefix}_winning_rule_explanation": result.getField(
+                    "winning_rule_explanation"
+                ),
+                f"{column_prefix}_error": result.getField("error"),
+            }
         )
+        output = output.drop(result_col)
         if fail_on_error:
             self._raise_if_row_errors(output, f"{column_prefix}_error")
         logger.info(
@@ -336,6 +396,13 @@ class SparkRulesEngineRuntime:
             _SparkRowNoOpRepository(),
             self._function_registry,
         )
+        active_rules = [
+            (rule, runtime._rule_has_custom_condition(rule))
+            for rule in sorted(
+                (item for item in ruleset.rules if item.active_flag),
+                key=lambda item: item.rule_order,
+            )
+        ]
 
         def evaluate(row: Any) -> dict[str, Any]:
             """Evaluate one Spark row struct and return the declared result struct."""
@@ -345,14 +412,25 @@ class SparkRulesEngineRuntime:
                 assignments: dict[str, Any] = {}
                 winning_rule: dict[str, Any] | None = None
                 winning_rule_explanation: str | None = None
-                for rule in sorted(
-                    (item for item in ruleset.rules if item.active_flag),
-                    key=lambda item: item.rule_order,
-                ):
-                    matched, condition_traces = runtime._evaluate_rule(rule, row_dict)
+                for rule, has_custom_condition in active_rules:
+                    condition_traces = None
+                    # Keep custom conditions single-pass because implementations
+                    # are not required to be pure or idempotent.
+                    if winning_rule is None and has_custom_condition:
+                        matched, condition_traces = runtime._evaluate_rule(
+                            rule,
+                            row_dict,
+                        )
+                    else:
+                        matched = runtime._rule_matches(rule, row_dict)
                     if matched:
                         matched_rule_ids.append(rule.rule_id)
                         if winning_rule is None:
+                            if condition_traces is None:
+                                _, condition_traces = runtime._evaluate_rule(
+                                    rule,
+                                    row_dict,
+                                )
                             winning_rule = runtime._spark_rule_trace(
                                 runtime._rule_execution_trace(
                                     rule,

@@ -81,6 +81,84 @@ class SparkRowEvaluator:
         )
         return matched, condition_traces
 
+    def _rule_matches(
+        self,
+        rule: Rule,
+        row: Mapping[str, Any],
+    ) -> bool:
+        """Evaluate one rule without constructing trace payloads."""
+        return self._group_matches(rule.root_group, row)
+
+    def _group_matches(
+        self,
+        group: ConditionGroup,
+        row: Mapping[str, Any],
+    ) -> bool:
+        """Evaluate a group without trace allocation while preserving errors."""
+        if group.logical_operator is LogicalOperator.ALL:
+            matched = True
+            for condition in group.conditions:
+                if not self._condition_matches(condition, row):
+                    matched = False
+            for nested_group in group.groups:
+                if not self._group_matches(nested_group, row):
+                    matched = False
+            return matched
+
+        matched = False
+        for condition in group.conditions:
+            if self._condition_matches(condition, row):
+                matched = True
+        for nested_group in group.groups:
+            if self._group_matches(nested_group, row):
+                matched = True
+        return matched
+
+    def _condition_matches(
+        self,
+        condition: Condition,
+        row: Mapping[str, Any],
+    ) -> bool:
+        """Evaluate one condition without resolving trace metadata."""
+        if not condition.active_flag:
+            return False
+        left = self._resolve_operand(condition.left, row)
+        right = (
+            self._resolve_operand(condition.right, row)
+            if condition.right is not None
+            else None
+        )
+        result = self._compare_values(
+            left,
+            condition.operator,
+            right,
+            condition.tolerance_abs,
+            condition.null_input_mode,
+        )
+        return self._resolve_null_result(
+            result,
+            condition.null_result_mode,
+            condition.null_default_value,
+        )
+
+    def _rule_has_custom_condition(self, rule: Rule) -> bool:
+        """Return whether an active condition can invoke a custom function."""
+        return self._group_has_custom_condition(rule.root_group)
+
+    def _group_has_custom_condition(self, group: ConditionGroup) -> bool:
+        """Return whether a group contains an active custom-function operand."""
+        return any(
+            condition.active_flag
+            and (
+                isinstance(condition.left, CustomFunctionOperand)
+                or isinstance(condition.right, CustomFunctionOperand)
+            )
+            for condition in group.conditions
+        ) or any(
+            self._group_has_custom_condition(nested_group)
+            for nested_group in group.groups
+        )
+
     def _evaluate_group(
         self,
         group: ConditionGroup,
@@ -293,7 +371,27 @@ class SparkRowEvaluator:
         """
         Resolve one operand against the current row.
         """
-        return self._resolve_operand_resolution(operand, row).value
+        if isinstance(operand, FieldOperand):
+            return row.get(operand.field_name)
+        if isinstance(operand, LiteralOperand):
+            return operand.value
+        if isinstance(operand, CustomFunctionOperand):
+            args = {
+                str(key): (
+                    self._resolve_operand(value, row)
+                    if isinstance(
+                        value,
+                        (FieldOperand, LiteralOperand, CustomFunctionOperand),
+                    )
+                    else value
+                )
+                for key, value in operand.args.items()
+            }
+            implementation = self._function_registry.get_implementation(
+                operand.function_name
+            )
+            return implementation(**args)
+        raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
 
     def _resolve_operand_resolution(
         self,
@@ -435,6 +533,8 @@ class SparkRowEvaluator:
             return value.value
         if isinstance(value, (datetime, date)):
             return value.isoformat()
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
         if isinstance(value, MappingABC):
             return {
                 str(key): self._trace_value(item)

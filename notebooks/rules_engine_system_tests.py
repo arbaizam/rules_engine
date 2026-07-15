@@ -3239,6 +3239,163 @@ display(result)
 print("PASS: Spark runtime merged continued multi-match assignments.")
 
 # COMMAND ----------
+print("ST-058: Spark runtime serializes only required source fields")
+print("-" * 80)
+print("Area: Runtime Spark")
+print("Priority: High")
+print("Owner Role: Engineering")
+print("Expected Result: Required dependencies exclude inactive and unrelated fields while dotted source names evaluate correctly.")
+print("")
+
+from rules_engine import RulesEngineService, required_source_columns
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+ruleset = service.compile_yaml_text(
+    """
+ruleset_id: st_058_required_columns
+ruleset_name: ST-058 Required Source Columns
+version: "1"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: required_fields
+    rule_name: Required Fields
+    rule_order: 1
+    stop_on_match: true
+    when:
+      any:
+        - left:
+            field: risk.score
+          operator: eq
+          right:
+            literal: A
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - active_flag: false
+          left:
+            field: inactive_source
+          operator: eq
+          right:
+            literal: ignored
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      copied_value:
+        field: source_value
+"""
+)
+
+assert required_source_columns(ruleset) == ("risk.score", "source_value")
+
+df = spark.createDataFrame(
+    [("A", "assigned", "not serialized")],
+    ["risk.score", "source_value", "unused_payload"],
+)
+result = service.evaluate_dataframe(df, ruleset=ruleset)
+row = result.collect()[0].asDict(recursive=True)
+
+assert row["unused_payload"] == "not serialized"
+assert row["rules_engine_matched"] is True
+assert row["rules_engine_assign"] == {"copied_value": "assigned"}
+assert row["rules_engine_winning_rule"]["conditions"][0]["left"]["value"] == "A"
+assert row["rules_engine_error"] is None
+
+display(result)
+print("PASS: Spark runtime serialized only required source fields.")
+
+# COMMAND ----------
+print("ST-059: Match-only evaluation preserves trace and errors")
+print("-" * 80)
+print("Area: Runtime Spark")
+print("Priority: High")
+print("Owner Role: Engineering")
+print("Expected Result: Losing rules avoid trace output without hiding later-condition errors, while the winner retains full traceability.")
+print("")
+
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+ruleset = service.compile_yaml_text(
+    """
+ruleset_id: st_059_match_only
+ruleset_name: ST-059 Match-Only Evaluation
+version: "1"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: losing_rule
+    rule_name: Losing Rule
+    rule_order: 1
+    stop_on_match: true
+    when:
+      all:
+        - condition_id: losing_false
+          left:
+            field: account
+          operator: eq
+          right:
+            literal: B
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - condition_id: losing_error_check
+          left:
+            field: status
+          operator: eq
+          right:
+            literal: open
+          null_input_mode: propagate
+          null_result_mode: error
+    assign:
+      bucket: losing
+  - rule_id: winning_rule
+    rule_name: Winning Rule
+    rule_order: 2
+    stop_on_match: true
+    when:
+      all:
+        - condition_id: winning_condition
+          left:
+            field: account
+          operator: eq
+          right:
+            literal: A
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      bucket: winning
+"""
+)
+
+df = spark.createDataFrame(
+    [
+        ("normal", "A", "open"),
+        ("error", "A", None),
+    ],
+    ["record_id", "account", "status"],
+)
+result = service.evaluate_dataframe(df, ruleset=ruleset, fail_on_error=False)
+rows = {
+    row["record_id"]: row.asDict(recursive=True)
+    for row in result.collect()
+}
+
+normal = rows["normal"]
+assert normal["rules_engine_matched"] is True
+assert normal["rules_engine_matched_rule_ids"] == ["winning_rule"]
+assert normal["rules_engine_assign"] == {"bucket": "winning"}
+assert normal["rules_engine_winning_rule_id"] == "winning_rule"
+assert len(normal["rules_engine_winning_rule"]["conditions"]) == 1
+assert normal["rules_engine_winning_rule"]["conditions"][0]["left"]["column"] == "account"
+assert normal["rules_engine_error"] is None
+
+error = rows["error"]
+assert error["rules_engine_matched"] is False
+assert "null_result_mode=error" in error["rules_engine_error"]
+
+display(result)
+print("PASS: Match-only evaluation preserved winning trace and losing-rule errors.")
+
+# COMMAND ----------
 print("Run automated unit test suite")
 print("-" * 80)
 print("Purpose: Execute the repository pytest suite.")

@@ -20,6 +20,10 @@ _LAZY_EXPORTS = {
     "PublishService": ("rules_engine.publish", "PublishService"),
     "RulesEngineService": ("rules_engine.service", "RulesEngineService"),
     "SparkRulesEngineRuntime": ("rules_engine.spark_runtime", "SparkRulesEngineRuntime"),
+    "required_source_columns": (
+        "rules_engine.spark_runtime",
+        "required_source_columns",
+    ),
     "SparkRulesetCompatibilityValidator": (
         "rules_engine.spark_validator",
         "SparkRulesetCompatibilityValidator",
@@ -54,5 +58,6 @@ __all__ = [
     "YamlRulesetCompiler",
     "YamlRulesetExporter",
     "register_standard_functions",
+    "required_source_columns",
     "standard_function_rows",
 ]

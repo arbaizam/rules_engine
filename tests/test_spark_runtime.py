@@ -4,7 +4,7 @@ import pytest
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.registry import FunctionRegistry
-from rules_engine.spark_runtime import SparkRulesEngineRuntime
+from rules_engine.spark_runtime import SparkRulesEngineRuntime, required_source_columns
 
 
 pytest.importorskip("pyspark")
@@ -136,6 +136,62 @@ def test_spark_runtime_evaluates_precomputed_aggregate_field(spark):
     rows = _spark_runtime().evaluate_dataframe(df, ruleset).collect()
 
     assert [row["rules_engine_matched"] for row in rows] == [True, True]
+
+
+def test_spark_runtime_serializes_only_required_literal_source_columns(spark):
+    """
+    What: Evaluates a dotted source field while retaining an unrelated input column.
+    Why: The UDF should receive only required fields without changing output columns.
+    Fails when: Literal column names are misread or source projection drops input data.
+    """
+    ruleset = _compile(
+        {
+            "left": {"field": "risk.score"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        },
+        assign={"copied": {"field": "source_value"}},
+    )
+    df = spark.createDataFrame(
+        [("A", "kept", "assigned")],
+        ["risk.score", "unused_payload", "source_value"],
+    )
+
+    assert required_source_columns(ruleset) == ("risk.score", "source_value")
+
+    row = _spark_runtime().evaluate_dataframe(df, ruleset).collect()[0]
+
+    assert row["unused_payload"] == "kept"
+    assert row["rules_engine_matched"] is True
+    assert row["rules_engine_assign"]["copied"] == "assigned"
+    assert row["rules_engine_winning_rule"]["conditions"][0]["left"]["value"] == "A"
+
+
+def test_spark_runtime_evaluates_literal_only_rule_without_source_dependencies(spark):
+    """
+    What: Evaluates a literal-only rule with an empty dependency set.
+    Why: The optimized UDF input struct must support rules requiring no source fields.
+    Fails when: Empty source projection produces an invalid Spark struct or row payload.
+    """
+    ruleset = _compile(
+        {
+            "left": {"literal": "A"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    df = spark.createDataFrame([{"unused_payload": "kept"}])
+
+    assert required_source_columns(ruleset) == ()
+
+    row = _spark_runtime().evaluate_dataframe(df, ruleset).collect()[0]
+
+    assert row["unused_payload"] == "kept"
+    assert row["rules_engine_matched"] is True
 
 
 def test_spark_runtime_preserves_mapping_literal_assignment_as_struct(spark):

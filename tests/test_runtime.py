@@ -1,7 +1,9 @@
+from rules_engine import required_source_columns as public_required_source_columns
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.human_readable import HumanReadableRulesetFormatter
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
-from rules_engine.spark_runtime import SparkRulesEngineRuntime
+from rules_engine.runtime import SparkRowEvaluator
+from rules_engine.spark_runtime import SparkRulesEngineRuntime, required_source_columns
 from pyspark.sql import types as T
 
 
@@ -77,6 +79,128 @@ def _evaluate_worker(ruleset, row, registry=None, assign_fields=None):
         assign_field_types,
     )
     return evaluator(FakeSparkRow(row))
+
+
+def test_required_source_columns_returns_only_active_runtime_dependencies():
+    """
+    What: Reports active condition, custom-function, and assignment source fields.
+    Why: Spark should serialize only input values the row evaluator can resolve.
+    Fails when: Inactive, duplicate, nested, or assignment dependencies are mishandled.
+    """
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "dependencies",
+            "ruleset_name": "Dependencies",
+            "version": "1",
+            "status": "published",
+            "rules": [
+                {
+                    "rule_id": "later",
+                    "rule_name": "Later",
+                    "rule_order": 20,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "later_field"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {"copy": {"field": "later_assignment"}},
+                },
+                {
+                    "rule_id": "first",
+                    "rule_name": "First",
+                    "rule_order": 10,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            },
+                            {
+                                "left": {
+                                    "custom_function": {
+                                        "name": "score",
+                                        "args": {
+                                            "value": {"field": "risk.score"},
+                                            "duplicate": {"field": "account"},
+                                        },
+                                    }
+                                },
+                                "operator": "eq",
+                                "right": {"literal": 1},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            },
+                            {
+                                "active_flag": False,
+                                "left": {"field": "inactive_condition"},
+                                "operator": "eq",
+                                "right": {"literal": "ignored"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            },
+                        ]
+                    },
+                    "assign": {"source_copy": {"field": "assignment_source"}},
+                },
+                {
+                    "rule_id": "inactive",
+                    "rule_name": "Inactive",
+                    "rule_order": 1,
+                    "active_flag": False,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "inactive_rule"},
+                                "operator": "eq",
+                                "right": {"literal": "ignored"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {"hidden": {"field": "inactive_assignment"}},
+                },
+            ],
+        }
+    )
+
+    assert required_source_columns(ruleset) == (
+        "account",
+        "risk.score",
+        "assignment_source",
+        "later_field",
+        "later_assignment",
+    )
+    assert public_required_source_columns is required_source_columns
+
+
+def test_required_source_columns_can_return_no_dependencies():
+    """
+    What: Returns an empty tuple for literal-only rules and assignments.
+    Why: Literal rules must evaluate without serializing an unrelated source value.
+    Fails when: Dependency discovery invents a field or requires a nonempty projection.
+    """
+    ruleset = _compile(
+        {
+            "left": {"literal": "A"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        },
+        assign={"bucket": "matched"},
+    )
+
+    assert required_source_columns(ruleset) == ()
 
 
 def test_spark_row_evaluator_returns_native_winning_rule_trace():
@@ -582,6 +706,151 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
     assert result["winning_rule_explanation"] == "account == 'A'"
 
 
+def test_spark_row_evaluator_builds_condition_traces_only_for_winner(monkeypatch):
+    """
+    What: Builds condition trace objects only for the first matching rule.
+    Why: Losing-rule trace allocation is discarded output and a major row-level cost.
+    Fails when: Match-only evaluation regresses to tracing every tested rule.
+    """
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "trace_efficiency",
+            "ruleset_name": "Trace Efficiency",
+            "version": "1",
+            "status": "published",
+            "rules": [
+                {
+                    "rule_id": "loser",
+                    "rule_name": "Loser",
+                    "rule_order": 1,
+                    "stop_on_match": True,
+                    "when": {
+                        "all": [
+                            {
+                                "condition_id": "loser_first",
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "B"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            },
+                            {
+                                "condition_id": "loser_second",
+                                "left": {"field": "status"},
+                                "operator": "eq",
+                                "right": {"literal": "open"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            },
+                        ]
+                    },
+                    "assign": {"bucket": "loser"},
+                },
+                {
+                    "rule_id": "winner",
+                    "rule_name": "Winner",
+                    "rule_order": 2,
+                    "stop_on_match": True,
+                    "when": {
+                        "all": [
+                            {
+                                "condition_id": "winner_condition",
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                                "null_input_mode": "propagate",
+                                "null_result_mode": "null",
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "winner"},
+                },
+            ],
+        }
+    )
+    traced_condition_ids = []
+    original = SparkRowEvaluator._condition_trace
+
+    def record_trace(self, **kwargs):
+        traced_condition_ids.append(kwargs["condition"].condition_id)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(SparkRowEvaluator, "_condition_trace", record_trace)
+
+    result = _evaluate_worker(ruleset, {"account": "A", "status": "open"})
+
+    assert result["winning_rule_id"] == "winner"
+    assert traced_condition_ids == ["winner_condition"]
+
+
+def test_match_only_losing_rule_preserves_later_condition_errors():
+    """
+    What: Evaluates every condition in a losing group when a later one errors.
+    Why: Optimization must not hide row errors that the traced evaluator surfaced.
+    Fails when: Match-only evaluation short-circuits after the first false condition.
+    """
+    ruleset = _compile_when(
+        {
+            "all": [
+                {
+                    "left": {"field": "account"},
+                    "operator": "eq",
+                    "right": {"literal": "B"},
+                    "null_input_mode": "propagate",
+                    "null_result_mode": "null",
+                },
+                {
+                    "left": {"field": "amount"},
+                    "operator": "gt",
+                    "right": {"literal": 10},
+                    "null_input_mode": "propagate",
+                    "null_result_mode": "null",
+                },
+            ]
+        }
+    )
+
+    result = _evaluate_worker(ruleset, {"account": "A", "amount": "invalid"})
+
+    assert result["matched"] is False
+    assert "decimal" in result["error"].lower()
+
+
+def test_match_only_and_traced_paths_agree_on_inactive_condition_groups():
+    """
+    What: Pins inactive conditions as false in both ALL and ANY groups.
+    Why: Match-only optimization must preserve the traced evaluator's semantics.
+    Fails when: Inactive conditions are skipped or the two evaluation paths diverge.
+    """
+    condition_items = [
+        {
+            "condition_id": "active_true",
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        },
+        {
+            "condition_id": "inactive_false",
+            "active_flag": False,
+            "left": {"field": "inactive_source"},
+            "operator": "eq",
+            "right": {"literal": "ignored"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        },
+    ]
+    evaluator = SparkRowEvaluator(DummyRepository(), FunctionRegistry())
+    row = {"account": "A", "inactive_source": "ignored"}
+
+    for operator, expected in (("all", False), ("any", True)):
+        rule = _compile_when({operator: condition_items}).rules[0]
+
+        assert evaluator._rule_matches(rule, row) is expected
+        assert evaluator._evaluate_rule(rule, row)[0] is expected
+
+
 def test_spark_row_evaluator_stringifies_incompatible_same_target_assignments():
     """
     What: Falls back to string output for incompatible active assignments to one target.
@@ -684,6 +953,12 @@ def test_spark_row_evaluator_winning_rule_trace_includes_custom_function_args():
     Fails when: Custom function source columns or resolved argument values disappear.
     """
     registry = FunctionRegistry()
+    calls = []
+
+    def score(**kwargs):
+        calls.append(dict(kwargs))
+        return kwargs["x"] + kwargs["y"]
+
     registry.register(
         CustomFunctionSpec(
             function_name="score",
@@ -692,7 +967,7 @@ def test_spark_row_evaluator_winning_rule_trace_includes_custom_function_args():
             allowed_in_condition_flag=True,
             allowed_in_assignment_flag=False,
         ),
-        implementation=lambda **kwargs: kwargs["x"] + kwargs["y"],
+        implementation=score,
     )
     ruleset = _compile(
         {
@@ -718,6 +993,30 @@ def test_spark_row_evaluator_winning_rule_trace_includes_custom_function_args():
     assert left["value"] == "5"
     assert left["arguments"] == {"x": "amount=2", "y": "3"}
     assert result["winning_rule_explanation"] == "score(x=amount, y=3) == 5"
+    assert calls == [{"x": 2, "y": 3}]
+
+
+def test_trace_value_returns_common_scalars_without_json_serialization(monkeypatch):
+    """
+    What: Returns primitive trace values without invoking the JSON encoder.
+    Why: Scalar operands dominate row evaluation and are already Spark-safe values.
+    Fails when: Common trace values regain repeated JSON serialization overhead.
+    """
+    evaluator = SparkRowEvaluator(DummyRepository(), FunctionRegistry())
+
+    def unexpected_json_serialization(value):
+        raise AssertionError(f"Unexpected JSON serialization for {value!r}")
+
+    monkeypatch.setattr(
+        "rules_engine.runtime.json.dumps",
+        unexpected_json_serialization,
+    )
+
+    assert evaluator._trace_value(None) is None
+    assert evaluator._trace_value("A") == "A"
+    assert evaluator._trace_value(10) == 10
+    assert evaluator._trace_value(1.5) == 1.5
+    assert evaluator._trace_value(True) is True
 
 
 def test_spark_row_evaluator_like_uses_sql_wildcard_semantics():
