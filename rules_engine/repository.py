@@ -10,22 +10,27 @@ environment-level metadata rather than ruleset-version metadata.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import json
 import logging
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Protocol
 from uuid import uuid4
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import BooleanType, IntegerType, StringType, StructField, StructType
+from pyspark.sql.types import (
+    BooleanType,
+    IntegerType,
+    StringType,
+    StructField,
+    StructType,
+)
 
 from rules_engine.enums import RulesetStatus
 from rules_engine.exceptions import RepositoryError
 from rules_engine.models import FunctionRegistryRow, Ruleset, RulesetVersionRow
 from rules_engine.serializer import DeltaRowSerializer
-
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +45,7 @@ class RulesEngineTableNames:
     function_registry: str
 
     @classmethod
-    def from_schema(cls, schema: str) -> "RulesEngineTableNames":
+    def from_schema(cls, schema: str) -> RulesEngineTableNames:
         """
         Build the standard rules engine table names under a catalog.schema path.
         """

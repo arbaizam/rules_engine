@@ -16,9 +16,10 @@ hashing, and summary counts.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any
 
 from rules_engine.enums import (
     ComparisonOperator,
@@ -225,7 +226,7 @@ class ConditionGroup:
     condition_group_id: str
     logical_operator: LogicalOperator
     conditions: tuple[Condition, ...] = ()
-    groups: tuple["ConditionGroup", ...] = ()
+    groups: tuple[ConditionGroup, ...] = ()
 
 
 @dataclass(frozen=True)

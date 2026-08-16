@@ -5,6 +5,7 @@ from rules_engine.exceptions import RepositoryError
 from rules_engine.registry import FunctionRegistry
 from rules_engine.repository import RulesEngineTableNames
 from rules_engine.service import RulesEngineService
+from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
 from rules_engine.standard_functions import standard_function_rows
 
 
@@ -76,6 +77,19 @@ def _service(repository=None):
     )
 
 
+def test_service_runtime_reuses_injected_compatibility_validator():
+    """Publish and runtime schema checks share the configured validator."""
+    validator = SparkRulesetCompatibilityValidator(FunctionRegistry())
+
+    service = RulesEngineService(
+        repository=RecordingRepository(),
+        registry=FunctionRegistry(),
+        validator=validator,
+    )
+
+    assert service.runtime._compatibility_validator is validator
+
+
 def test_service_from_schema_uses_standard_table_names():
     """
     What: Builds a service from schema and checks repository table names.
@@ -138,7 +152,7 @@ def test_service_create_tables_save_standard_functions_and_retire():
 
     assert repository.created_mode == "ignore"
     assert any(row.function_name == "substring" for row in repository.saved_function_rows)
-    assert repository.update_existing is False
+    assert repository.update_existing is True
     assert repository.retired == ("rs1", "1", "tester", None)
 
 
@@ -158,18 +172,18 @@ def test_service_saves_supplied_function_registry_rows():
     assert repository.update_existing is True
 
 
-def test_service_can_upsert_standard_function_registry_when_requested():
+def test_service_can_preserve_standard_function_registry_when_requested():
     """
-    What: Allows standard function metadata to update existing registry rows by explicit request.
-    Why: Deployment setup defaults to insert-only, but controlled upgrades may need upsert behavior.
+    What: Allows callers to preserve existing standard registry rows explicitly.
+    Why: Package upgrades upsert by default, but controlled deployments may pin metadata.
     Fails when: The update_existing option is not passed through.
     """
     repository = RecordingRepository()
     service = _service(repository)
 
-    service.save_standard_function_registry(update_existing=True)
+    service.save_standard_function_registry(update_existing=False)
 
-    assert repository.update_existing is True
+    assert repository.update_existing is False
 
 
 def test_service_evaluate_dataframe_requires_ruleset_or_name():
@@ -182,6 +196,33 @@ def test_service_evaluate_dataframe_requires_ruleset_or_name():
 
     with pytest.raises(ValueError, match="ruleset or ruleset_name"):
         service.evaluate_dataframe(None)
+
+
+def test_service_passes_runtime_error_options_through(monkeypatch):
+    ruleset = YamlRulesetCompiler().compile_text(_yaml_text())
+    service = _service()
+    captured = {}
+
+    def evaluate_dataframe(df, supplied_ruleset, **kwargs):
+        captured.update(kwargs)
+        assert supplied_ruleset is ruleset
+        return "evaluated"
+
+    monkeypatch.setattr(service.runtime, "evaluate_dataframe", evaluate_dataframe)
+
+    result = service.evaluate_dataframe(
+        "input",
+        ruleset=ruleset,
+        fail_on_error=False,
+        include_error_traceback=True,
+    )
+
+    assert result == "evaluated"
+    assert captured == {
+        "column_prefix": "rules_engine",
+        "fail_on_error": False,
+        "include_error_traceback": True,
+    }
 
 
 def test_service_describe_rules_formats_supplied_ruleset():

@@ -4,6 +4,7 @@ Human-readable formatting for compiled ruleset metadata.
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
@@ -35,9 +36,21 @@ class HumanReadableRulesetFormatter:
         Return one readable metadata row per rule.
         """
         return [
-            self._describe_rule(rule)
+            self.describe_rule(rule)
             for rule in sorted(ruleset.rules, key=lambda item: item.rule_order)
         ]
+
+    def describe_rule(self, rule: Rule) -> dict[str, str]:
+        """Return one table-shaped description for a rule."""
+        rule_logic = self._format_group(rule.root_group)
+        if not rule.active_flag:
+            rule_logic = f"[inactive rule] {rule_logic}"
+        return {
+            "rule_id": rule.rule_id,
+            "rule_name": rule.rule_name,
+            "rule_logic": rule_logic,
+            "match_payload": self._format_assignments(rule.assignments),
+        }
 
     def format_winning_rule_explanation(
         self,
@@ -55,20 +68,6 @@ class HumanReadableRulesetFormatter:
         if not passed:
             return None
         return explanation
-
-    def _describe_rule(self, rule: Rule) -> dict[str, str]:
-        """
-        Return one table-shaped description for a rule.
-        """
-        rule_logic = self._format_group(rule.root_group)
-        if not rule.active_flag:
-            rule_logic = f"[inactive rule] {rule_logic}"
-        return {
-            "rule_id": rule.rule_id,
-            "rule_name": rule.rule_name,
-            "rule_logic": rule_logic,
-            "match_payload": self._format_assignments(rule.assignments),
-        }
 
     def _format_group(self, group: ConditionGroup, *, nested: bool = False) -> str:
         """
@@ -143,7 +142,7 @@ class HumanReadableRulesetFormatter:
             expression = f"{left} {operator}"
         else:
             expression = f"{left} {operator} {self._format_operand(condition.right)}"
-        if condition.tolerance_abs != Decimal("0"):
+        if condition.tolerance_abs != Decimal(0):
             tolerance = self._format_value(condition.tolerance_abs)
             expression = f"{expression} (tolerance_abs={tolerance})"
         if not condition.active_flag:
@@ -155,9 +154,13 @@ class HumanReadableRulesetFormatter:
         Render the assignment payload emitted when a rule matches.
         """
         return ", ".join(
-            f"{assignment.target_field} = {self._format_operand(assignment.value)}"
+            self.format_assignment_expression(assignment)
             for assignment in assignments
         )
+
+    def format_assignment_expression(self, assignment: Assignment) -> str:
+        """Render one complete assignment expression for audit output."""
+        return f"{assignment.target_field} = {self._format_operand(assignment.value)}"
 
     def _format_operand(self, operand: Operand) -> str:
         """
@@ -230,8 +233,19 @@ class HumanReadableRulesetFormatter:
             return f"'{escaped}'"
         if isinstance(value, Decimal):
             return format(value, "f")
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
         if isinstance(value, Enum):
             return value.value
+        if isinstance(value, set):
+            return (
+                "{"
+                + ", ".join(
+                    self._format_value(item)
+                    for item in sorted(value, key=repr)
+                )
+                + "}"
+            )
         if isinstance(value, tuple):
             return "[" + ", ".join(self._format_value(item) for item in value) + "]"
         if isinstance(value, list):

@@ -20,7 +20,7 @@ The cases are:
 | `input_floor` | Reads every column the tested runtime serializes, computes one `xxhash64` value per row, and writes it. The baseline runtime reads all source columns; the optimized runtime reads only rule dependencies. This is context, not a value to subtract mechanically from other cases. |
 | `assignment_only` | Evaluates the ruleset with `fail_on_error=False` and writes only the configured assignment field. This most closely represents leaf-key production use. |
 | `full_output` | Evaluates once and writes every documented rules-engine output, including the winning trace. Materialized output supplies error and winner-distribution evidence. |
-| `assignment_only_fail_on_error` | Runs assignment-only output with the current eager `fail_on_error=True` contract. Its difference from `assignment_only` quantifies the duplicate UDF pass on clean data. |
+| `assignment_only_fail_on_error` | Runs assignment-only output with the lazy single-pass `fail_on_error=True` contract. Its difference from `assignment_only` measures worker exception-checking overhead on clean data. |
 
 ## Required Parameters
 
@@ -42,7 +42,7 @@ globals before running the notebook.
 | `PERF_REPETITIONS` | No | `5` | Number of randomized measured runs per case. |
 | `PERF_WARMUP_REPETITIONS` | No | `1` | Warm-up runs per case, retained in metrics but excluded from summaries. |
 | `PERF_RANDOM_SEED` | No | `20260715` | Reproducible measured-case ordering. |
-| `PERF_INCLUDE_FAIL_ON_ERROR` | No | `true` | Include the current eager error-validation case. Use only clean benchmark data. |
+| `PERF_INCLUDE_FAIL_ON_ERROR` | No | `true` | Include the fail-fast worker case. Use only clean benchmark data. |
 | `PERF_CLEANUP_OUTPUTS` | No | `true` | Drop temporary result tables after durable metrics are written. |
 | `PERF_METRICS_TABLE` | No | `<output_schema>.rules_engine_performance_results` | Durable Delta metrics table. |
 | `PERF_OUTPUT_PREFIX` | No | `rules_engine_perf` | Prefix for temporary managed tables. |
@@ -84,7 +84,7 @@ Accept an optimization only when:
 - the query profile does not reveal increased retries, spill, or skew that the
   wall-clock median conceals.
 
-The notebook measures the existing `fail_on_error=True` double evaluation but
-does not solve it. On serverless, cache-based workarounds are unavailable. A
-future single-pass mode should either raise from the UDF during the caller's
-materializing action or write once and validate the materialized Delta output.
+`fail_on_error=True` now raises from the UDF during the notebook's materializing
+write, so it does not launch a separate validation action or require caching.
+`fail_on_error=False` remains the appropriate case for measuring a governed
+write-once/quarantine workflow.

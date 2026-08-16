@@ -1,8 +1,16 @@
 import hashlib
 import json
+from datetime import date, datetime, timezone
+from decimal import Decimal
+
+import pytest
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.serializer import DeltaRowSerializer
+from rules_engine.serializer import (
+    DeltaRowSerializer,
+    _canonical_json_dumps,
+    _decode_json_types,
+)
 
 
 def _compile(payload):
@@ -276,6 +284,147 @@ def test_deserializer_reconstructs_canonical_models():
     )
 
     assert reconstructed == original
+
+
+def test_serializer_round_trips_exact_decimal_scalars_and_collections():
+    """Persisted JSON keeps financial Decimals numeric and lossless."""
+    original = _compile(
+        {
+            "ruleset_id": "decimal_rules",
+            "ruleset_name": "Decimal Rules",
+            "version": "1",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "Exact membership",
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "rate"},
+                                "operator": "in",
+                                "right": {
+                                    "literal": [
+                                        Decimal("0.042500000000000000001"),
+                                        Decimal(1),
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                    "assign": {
+                        "factors": [
+                            Decimal("0.10"),
+                            Decimal("0.250000000000000000001"),
+                        ]
+                    },
+                }
+            ],
+        }
+    )
+    serializer = DeltaRowSerializer()
+
+    row = serializer.serialize_ruleset_version(original)
+    payload = json.loads(row.payload_json, parse_float=Decimal)
+    reconstructed = serializer.deserialize_ruleset_version(row)
+
+    condition_values = payload["rules"][0]["when"]["all"][0]["right"]["literal"]
+    assignment_values = payload["rules"][0]["assign"][0]["value"]["literal"]
+    assert condition_values == [Decimal("0.042500000000000000001"), Decimal(1)]
+    assert isinstance(condition_values[1], Decimal)
+    assert condition_values[1].as_tuple() == Decimal(1).as_tuple()
+    assert assignment_values == [
+        Decimal("0.10"),
+        Decimal("0.250000000000000000001"),
+    ]
+    assert reconstructed == original
+    reconstructed_values = (
+        reconstructed.rules[0].root_group.conditions[0].right.value
+    )
+    assert reconstructed_values[1].as_tuple() == Decimal(1).as_tuple()
+    assert len(row.content_hash) == 64
+    assert serializer.content_hash(reconstructed) == row.content_hash
+
+
+@pytest.mark.parametrize(
+    ("envelope", "type_name"),
+    [
+        ({"$rules_engine_type": "date", "value": 123}, "date"),
+        ({"$rules_engine_type": "date", "value": "not-a-date"}, "date"),
+        ({"$rules_engine_type": "datetime", "value": []}, "datetime"),
+        ({"$rules_engine_type": "tuple", "value": "abc"}, "tuple"),
+        ({"$rules_engine_type": "set", "value": [[1, 2]]}, "set"),
+        ({"$rules_engine_type": "mapping", "value": []}, "mapping"),
+    ],
+)
+def test_malformed_extended_json_envelopes_fail_uniformly(envelope, type_name):
+    """Corrupt persisted values produce one diagnosable ValueError contract."""
+    with pytest.raises(ValueError, match=type_name):
+        _decode_json_types(envelope)
+
+
+def test_canonical_json_rejects_nonfinite_float():
+    """The persistence encoder never emits non-standard Infinity or NaN tokens."""
+    with pytest.raises(ValueError, match="finite"):
+        _canonical_json_dumps(float("inf"))
+
+
+def test_serializer_round_trips_temporal_and_python_collection_literals():
+    """Extended JSON preserves supported values that plain JSON cannot encode."""
+    event_at = datetime(2026, 5, 1, 14, 30, tzinfo=timezone.utc)
+    reserved_mapping = {
+        "$rules_engine_type": "date",
+        "value": "ordinary user metadata",
+    }
+    original = _compile(
+        {
+            "ruleset_id": "typed_literals",
+            "ruleset_name": "Typed Literals",
+            "version": "1",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "Typed persistence",
+                    "when": {
+                        "all": [
+                            {
+                                "left": {
+                                    "custom_function": {
+                                        "name": "typed_probe",
+                                        "args": {
+                                            "as_of_date": date(2026, 5, 1),
+                                            "event_at": event_at,
+                                            "codes": {"A", "B"},
+                                            "window": (
+                                                date(2026, 1, 1),
+                                                date(2026, 12, 31),
+                                            ),
+                                            "metadata": reserved_mapping,
+                                        },
+                                    }
+                                },
+                                "operator": "eq",
+                                "right": {"literal": True},
+                            }
+                        ]
+                    },
+                    "assign": {
+                        "review_date": date(2026, 5, 1),
+                        "event_at": event_at,
+                        "codes": {"A", "B"},
+                        "bounds": (date(2026, 1, 1), date(2026, 12, 31)),
+                    },
+                }
+            ],
+        }
+    )
+    serializer = DeltaRowSerializer()
+
+    row = serializer.serialize_ruleset_version(original)
+    reconstructed = serializer.deserialize_ruleset_version(row)
+
+    assert "$rules_engine_type" in row.payload_json
+    assert reconstructed == original
+    assert serializer.content_hash(reconstructed) == row.content_hash
 
 
 def test_persisted_payload_excludes_lifecycle_status():

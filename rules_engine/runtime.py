@@ -4,14 +4,14 @@ Worker-side row evaluation helpers for the Spark runtime.
 
 from __future__ import annotations
 
-from collections.abc import Mapping as MappingABC
-from dataclasses import dataclass
-from datetime import date, datetime
-from decimal import Decimal
-from enum import Enum
 import json
 import re
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
+from enum import Enum
+from typing import Any
 
 from rules_engine.enums import (
     ComparisonOperator,
@@ -298,7 +298,7 @@ class SparkRowEvaluator:
         """
         Return a compact resolved-value summary for winning-rule trace arguments.
         """
-        if not isinstance(operand, MappingABC):
+        if not isinstance(operand, Mapping):
             return None
         kind = operand.get("kind")
         if kind == OperandKind.FIELD.value:
@@ -308,7 +308,7 @@ class SparkRowEvaluator:
             return self._trace_display_value(operand.get("value"))
         if kind == OperandKind.CUSTOM_FUNCTION.value:
             args = operand.get("args")
-            if isinstance(args, MappingABC):
+            if isinstance(args, Mapping):
                 arg_text = ", ".join(
                     f"{name}={self._operand_trace_summary(value)}"
                     for name, value in args.items()
@@ -535,7 +535,7 @@ class SparkRowEvaluator:
             return value.isoformat()
         if value is None or isinstance(value, (str, int, float, bool)):
             return value
-        if isinstance(value, MappingABC):
+        if isinstance(value, Mapping):
             return {
                 str(key): self._trace_value(item)
                 for key, item in value.items()
@@ -583,24 +583,26 @@ class SparkRowEvaluator:
             return self._equals(left, right, tolerance_abs)
         if operator is ComparisonOperator.NE:
             return not self._equals(left, right, tolerance_abs)
-        if operator is ComparisonOperator.GT:
-            return self._decimal(left) > self._decimal(right) + tolerance_abs
-        if operator is ComparisonOperator.GE:
-            return self._decimal(left) >= self._decimal(right) - tolerance_abs
-        if operator is ComparisonOperator.LT:
-            return self._decimal(left) < self._decimal(right) - tolerance_abs
-        if operator is ComparisonOperator.LE:
-            return self._decimal(left) <= self._decimal(right) + tolerance_abs
+        if operator in {
+            ComparisonOperator.GT,
+            ComparisonOperator.GE,
+            ComparisonOperator.LT,
+            ComparisonOperator.LE,
+        }:
+            return self._compare_ordered(
+                left,
+                operator,
+                right,
+                tolerance_abs,
+            )
         if operator is ComparisonOperator.IN:
-            return left in right
+            return self._contains(left, right, tolerance_abs)
         if operator is ComparisonOperator.NOT_IN:
-            return left not in right
+            return not self._contains(left, right, tolerance_abs)
         if operator is ComparisonOperator.BETWEEN:
-            lower, upper = right
-            return self._decimal(lower) <= self._decimal(left) <= self._decimal(upper)
+            return self._between(left, right, tolerance_abs)
         if operator is ComparisonOperator.NOT_BETWEEN:
-            lower, upper = right
-            return not (self._decimal(lower) <= self._decimal(left) <= self._decimal(upper))
+            return not self._between(left, right, tolerance_abs)
         if operator is ComparisonOperator.CONTAINS:
             return str(right) in str(left)
         if operator is ComparisonOperator.NOT_CONTAINS:
@@ -614,6 +616,63 @@ class SparkRowEvaluator:
         if operator is ComparisonOperator.NOT_LIKE:
             return not self._sql_like(str(left), str(right))
         raise ValueError(f"Unsupported comparison operator at runtime: {operator.value}")
+
+    def _contains(
+        self,
+        left: Any,
+        right: Any,
+        tolerance_abs: Decimal,
+    ) -> bool:
+        """Apply equality semantics consistently to membership operators."""
+        if isinstance(right, (str, bytes, Mapping)) or not isinstance(
+            right,
+            Iterable,
+        ):
+            raise TypeError(
+                "Operators in/not_in require a collection-valued right operand. "
+                "Use contains/not_contains for substring checks."
+            )
+        numeric_left = self._numeric_decimal_or_none(left)
+        if numeric_left is not None:
+            for item in right:
+                numeric_item = self._numeric_decimal_or_none(item)
+                if numeric_item is not None:
+                    if abs(numeric_left - numeric_item) <= tolerance_abs:
+                        return True
+                elif self._equals(left, item, tolerance_abs):
+                    return True
+            return False
+        if self._is_temporal(left):
+            for item in right:
+                temporal_left, temporal_item = self._temporal_pair(
+                    left,
+                    item,
+                    tolerance_abs,
+                )
+                if temporal_left == temporal_item:
+                    return True
+            return False
+        return any(self._equals(left, item, tolerance_abs) for item in right)
+
+    def _between(
+        self,
+        left: Any,
+        right: Any,
+        tolerance_abs: Decimal,
+    ) -> bool:
+        """Return whether ``left`` falls within the inclusive bound pair."""
+        lower, upper = right
+        ordered_lower, ordered_left = self._ordered_pair(
+            lower,
+            left,
+            tolerance_abs,
+        )
+        ordered_left_again, ordered_upper = self._ordered_pair(
+            left,
+            upper,
+            tolerance_abs,
+        )
+        return ordered_lower <= ordered_left and ordered_left_again <= ordered_upper
 
     def _apply_null_input_mode(
         self,
@@ -646,7 +705,12 @@ class SparkRowEvaluator:
         if null_result_mode is NullResultMode.ERROR:
             raise ValueError("Null result encountered with null_result_mode=error.")
         if null_result_mode is NullResultMode.DEFAULT:
-            return bool(null_default_value)
+            if not isinstance(null_default_value, bool):
+                raise TypeError(
+                    "null_default_value must be a boolean when "
+                    "null_result_mode=default."
+                )
+            return null_default_value
         return False
 
     def _equals(self, left: Any, right: Any, tolerance_abs: Decimal) -> bool:
@@ -655,23 +719,121 @@ class SparkRowEvaluator:
         """
         if self._is_numeric(left) and self._is_numeric(right):
             return abs(self._decimal(left) - self._decimal(right)) <= tolerance_abs
+        if self._is_temporal(left) or self._is_temporal(right):
+            temporal_left, temporal_right = self._temporal_pair(
+                left,
+                right,
+                tolerance_abs,
+            )
+            return temporal_left == temporal_right
         return left == right
+
+    def _ordered_pair(
+        self,
+        left: Any,
+        right: Any,
+        tolerance_abs: Decimal,
+    ) -> tuple[Any, Any]:
+        """Return a compatible temporal pair or Decimal numeric pair."""
+        if self._is_temporal(left) or self._is_temporal(right):
+            return self._temporal_pair(left, right, tolerance_abs)
+        return self._decimal(left), self._decimal(right)
+
+    def _compare_ordered(
+        self,
+        left: Any,
+        operator: ComparisonOperator,
+        right: Any,
+        tolerance_abs: Decimal,
+    ) -> bool:
+        """Apply one ordered comparison to numeric or temporal operands."""
+        ordered_left, ordered_right = self._ordered_pair(
+            left,
+            right,
+            tolerance_abs,
+        )
+        tolerance = self._ordered_tolerance(ordered_left, tolerance_abs)
+        if operator is ComparisonOperator.GT:
+            return ordered_left > ordered_right + tolerance
+        if operator is ComparisonOperator.GE:
+            return ordered_left >= ordered_right - tolerance
+        if operator is ComparisonOperator.LT:
+            return ordered_left < ordered_right - tolerance
+        if operator is ComparisonOperator.LE:
+            return ordered_left <= ordered_right + tolerance
+        raise ValueError(f"Unsupported ordered comparison: {operator.value}")
+
+    def _ordered_tolerance(
+        self,
+        value: Any,
+        tolerance_abs: Decimal,
+    ) -> Decimal | timedelta:
+        """Return numeric tolerance; temporal comparisons require zero."""
+        return timedelta(0) if self._is_temporal(value) else tolerance_abs
+
+    def _temporal_pair(
+        self,
+        left: Any,
+        right: Any,
+        tolerance_abs: Decimal,
+    ) -> tuple[date | datetime, date | datetime]:
+        """Validate a lossless date or timestamp comparison pair."""
+        if tolerance_abs != Decimal(0):
+            raise ValueError("Date and timestamp comparisons require tolerance_abs=0.")
+        left_kind = self._temporal_kind(left)
+        right_kind = self._temporal_kind(right)
+        if left_kind is None or right_kind is None or left_kind != right_kind:
+            raise TypeError(
+                "Date comparisons require two dates and timestamp comparisons "
+                "require two timestamps. Use to_date for explicit conversion."
+            )
+        if left_kind == "timestamp":
+            left_aware = left.utcoffset() is not None
+            right_aware = right.utcoffset() is not None
+            if left_aware != right_aware:
+                raise TypeError(
+                    "Timestamp comparisons cannot mix timezone-aware and naive values."
+                )
+        return left, right
+
+    def _is_temporal(self, value: Any) -> bool:
+        """Return whether a value is a date or timestamp."""
+        return self._temporal_kind(value) is not None
+
+    def _temporal_kind(self, value: Any) -> str | None:
+        """Return the strict temporal kind, accounting for datetime subclassing date."""
+        if isinstance(value, datetime):
+            return "timestamp"
+        if isinstance(value, date):
+            return "date"
+        return None
 
     def _is_numeric(self, value: Any) -> bool:
         """
         Return whether a value can be safely treated as a non-boolean number.
         """
+        return self._numeric_decimal_or_none(value) is not None
+
+    def _numeric_decimal_or_none(self, value: Any) -> Decimal | None:
+        """Return a finite numeric value, or ``None`` for non-numeric input."""
+        if isinstance(value, bool):
+            return None
         try:
-            Decimal(str(value))
-        except Exception:
-            return False
-        return not isinstance(value, bool)
+            converted = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        if not converted.is_finite():
+            raise ValueError("Numeric comparison values must be finite.")
+        return converted
 
     def _decimal(self, value: Any) -> Decimal:
         """
         Convert a runtime value to ``Decimal`` for numeric comparison.
         """
-        return Decimal(str(value))
+        converted = Decimal(str(value))
+        if not converted.is_finite():
+            raise ValueError("Numeric comparison values must be finite.")
+        return converted
 
     def _sql_like(self, value: str, pattern: str) -> bool:
         """

@@ -10,18 +10,21 @@ ordinary input columns.
 
 from __future__ import annotations
 
-from collections.abc import Mapping as MappingABC
+import logging
+import math
+import traceback
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-import logging
-import traceback
-from typing import Any, Mapping
+from typing import Any
 
+from pyspark.serializers import CloudPickleSerializer
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
+from rules_engine.exceptions import ValidationFailedError
 from rules_engine.models import (
     Assignment,
     ConditionGroup,
@@ -30,13 +33,20 @@ from rules_engine.models import (
     LiteralOperand,
     Operand,
     ResolvedConditionTrace,
+    Rule,
     RuleExecutionTrace,
     Ruleset,
 )
 from rules_engine.registry import FunctionRegistry
 from rules_engine.repository import RulesetRepository
 from rules_engine.runtime import SparkRowEvaluator
-
+from rules_engine.spark_types import (
+    INTEGRAL_LIMITS,
+    INTEGRAL_TYPES,
+    TIMESTAMP_TYPES,
+    decimal_value_fits,
+)
+from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +132,34 @@ WINNING_RULE_TRACE_STRUCT = T.StructType(
     ]
 )
 
+MATCHED_RULE_SUMMARY_STRUCT = T.StructType(
+    [
+        T.StructField("rule_id", T.StringType(), True),
+        T.StructField("rule_name", T.StringType(), True),
+        T.StructField("rule_order", T.LongType(), True),
+        T.StructField("human_readable_condition", T.StringType(), True),
+        T.StructField("human_readable_assignment", T.StringType(), True),
+        T.StructField("assigned_fields", T.ArrayType(T.StringType(), False), False),
+    ]
+)
+
+ASSIGNMENT_RESULT_STRUCT = T.StructType(
+    [
+        T.StructField("assignment_id", T.StringType(), True),
+        T.StructField("rule_id", T.StringType(), True),
+        T.StructField("rule_name", T.StringType(), True),
+        T.StructField("rule_order", T.LongType(), True),
+        T.StructField("target_field", T.StringType(), True),
+        T.StructField("authored_expression", T.StringType(), False),
+        T.StructField("old_value", T.StringType(), True),
+        T.StructField("proposed_value", T.StringType(), True),
+        T.StructField("changed", T.BooleanType(), False),
+        T.StructField("effective", T.BooleanType(), False),
+        T.StructField("overridden_by_rule_id", T.StringType(), True),
+        T.StructField("overridden_by_assignment_id", T.StringType(), True),
+    ]
+)
+
 
 def _result_struct(assign_schema: T.StructType) -> T.StructType:
     """Build the Spark UDF result schema for one ruleset."""
@@ -130,6 +168,21 @@ def _result_struct(assign_schema: T.StructType) -> T.StructType:
             T.StructField("matched", T.BooleanType(), False),
             T.StructField("matched_rule_ids", T.ArrayType(T.StringType(), False), False),
             T.StructField("assign", assign_schema, True),
+            T.StructField("first_matched_rule", WINNING_RULE_TRACE_STRUCT, True),
+            T.StructField("first_matched_rule_id", T.StringType(), True),
+            T.StructField("first_matched_rule_name", T.StringType(), True),
+            T.StructField("first_matched_rule_explanation", T.StringType(), True),
+            T.StructField(
+                "matched_rules",
+                T.ArrayType(MATCHED_RULE_SUMMARY_STRUCT, False),
+                False,
+            ),
+            T.StructField("last_matched_rule", MATCHED_RULE_SUMMARY_STRUCT, True),
+            T.StructField(
+                "assignment_results",
+                T.ArrayType(ASSIGNMENT_RESULT_STRUCT, False),
+                False,
+            ),
             T.StructField("winning_rule", WINNING_RULE_TRACE_STRUCT, True),
             T.StructField("winning_rule_id", T.StringType(), True),
             T.StructField("winning_rule_name", T.StringType(), True),
@@ -139,28 +192,13 @@ def _result_struct(assign_schema: T.StructType) -> T.StructType:
     )
 
 
-FUNCTION_RETURN_TYPES = {
-    "string": T.StringType(),
-    "str": T.StringType(),
-    "integer": T.LongType(),
-    "int": T.LongType(),
-    "long": T.LongType(),
-    "number": T.DoubleType(),
-    "float": T.DoubleType(),
-    "double": T.DoubleType(),
-    "decimal": T.DoubleType(),
-    "boolean": T.BooleanType(),
-    "bool": T.BooleanType(),
-    "date": T.DateType(),
-    "timestamp": T.TimestampType(),
-}
-
-
 EMPTY_ASSIGN_STRUCT = T.StructType(
     [
         T.StructField("__empty", T.StringType(), True),
     ]
 )
+
+RESULT_FIELD_NAMES = tuple(_result_struct(EMPTY_ASSIGN_STRUCT).fieldNames())
 
 
 class _SparkRowNoOpRepository:
@@ -181,10 +219,19 @@ class _SparkRowNoOpRepository:
 class SparkRulesEngineRuntime:
     """Spark DataFrame runtime for ruleset evaluation."""
 
-    def __init__(self, repository: RulesetRepository, function_registry: FunctionRegistry) -> None:
+    def __init__(
+        self,
+        repository: RulesetRepository,
+        function_registry: FunctionRegistry,
+        compatibility_validator: SparkRulesetCompatibilityValidator | None = None,
+    ) -> None:
         """Initialize the Spark runtime with metadata and function registries."""
         self._repository = repository
         self._function_registry = function_registry
+        self._compatibility_validator = (
+            compatibility_validator
+            or SparkRulesetCompatibilityValidator(function_registry)
+        )
 
     def load_published_ruleset(self, ruleset_name: str, version: str | None = None) -> Ruleset:
         """Load published metadata through the configured repository."""
@@ -197,6 +244,7 @@ class SparkRulesEngineRuntime:
         *,
         column_prefix: str = "rules_engine",
         fail_on_error: bool = True,
+        include_error_traceback: bool = False,
     ) -> DataFrame:
         """
         Evaluate a Spark DataFrame against a ruleset.
@@ -206,11 +254,19 @@ class SparkRulesEngineRuntime:
         df : pyspark.sql.DataFrame
             Incoming rows. Any cross-row facts must already exist as columns.
         ruleset : Ruleset
-            Ruleset metadata to evaluate.
+            Ruleset metadata to evaluate. Direct runtime callers are responsible
+            for base metadata validation; published rulesets loaded through the
+            service have already passed that gate. This method always performs
+            incoming-schema compatibility validation before building the UDF.
         column_prefix : str, default "rules_engine"
             Prefix for appended output columns.
         fail_on_error : bool, default True
-            Raise when any row-level evaluator error is produced.
+            Raise from the worker during the caller's first materializing Spark
+            action when a row-level evaluator error is produced. Building the
+            returned DataFrame does not start a hidden validation job.
+        include_error_traceback : bool, default False
+            Include full Python tracebacks in row error payloads. Keep disabled
+            for production data because tracebacks substantially enlarge rows.
 
         Returns
         -------
@@ -225,6 +281,15 @@ class SparkRulesEngineRuntime:
             len(ruleset.rules),
             fail_on_error,
         )
+        compatibility = self._compatibility_validator.validate_schema(
+            ruleset,
+            df.schema,
+        )
+        if compatibility.has_errors():
+            raise ValidationFailedError(
+                "Ruleset is incompatible with the incoming Spark schema.\n"
+                + compatibility.to_text()
+            )
         assign_schema = self._assignment_schema(ruleset, df.schema)
         assign_field_names = [field.name for field in assign_schema.fields]
         assign_field_types = {
@@ -232,18 +297,27 @@ class SparkRulesEngineRuntime:
             for field in assign_schema.fields
         }
 
-        result_udf = F.udf(
-            self._build_row_evaluator(
-                ruleset,
-                assign_field_names,
-                assign_field_types,
-            ),
-            _result_struct(assign_schema),
+        row_evaluator = self._build_row_evaluator(
+            ruleset,
+            assign_field_names,
+            assign_field_types,
+            raise_on_error=fail_on_error,
+            include_error_traceback=include_error_traceback,
         )
+        self._validate_worker_serializable(row_evaluator)
+        result_udf = F.udf(row_evaluator, _result_struct(assign_schema))
         available_columns = set(df.columns)
+        assignment_target_columns = [
+            assignment.target_field
+            for rule in sorted(ruleset.rules, key=lambda item: item.rule_order)
+            if rule.active_flag
+            for assignment in rule.assignments
+        ]
         serialized_columns = [
             column_name
-            for column_name in required_source_columns(ruleset)
+            for column_name in dict.fromkeys(
+                (*required_source_columns(ruleset), *assignment_target_columns)
+            )
             if column_name in available_columns
         ]
         row_struct = F.struct(
@@ -257,27 +331,11 @@ class SparkRulesEngineRuntime:
         result = F.col(result_col)
         output = evaluated.withColumns(
             {
-                f"{column_prefix}_matched": result.getField("matched"),
-                f"{column_prefix}_matched_rule_ids": result.getField(
-                    "matched_rule_ids"
-                ),
-                f"{column_prefix}_assign": result.getField("assign"),
-                f"{column_prefix}_winning_rule": result.getField("winning_rule"),
-                f"{column_prefix}_winning_rule_id": result.getField(
-                    "winning_rule_id"
-                ),
-                f"{column_prefix}_winning_rule_name": result.getField(
-                    "winning_rule_name"
-                ),
-                f"{column_prefix}_winning_rule_explanation": result.getField(
-                    "winning_rule_explanation"
-                ),
-                f"{column_prefix}_error": result.getField("error"),
+                f"{column_prefix}_{field_name}": result.getField(field_name)
+                for field_name in RESULT_FIELD_NAMES
             }
         )
         output = output.drop(result_col)
-        if fail_on_error:
-            self._raise_if_row_errors(output, f"{column_prefix}_error")
         logger.info(
             "Spark runtime evaluation DataFrame built: ruleset_id=%s version=%s output_prefix=%s",
             ruleset.ruleset_id,
@@ -286,137 +344,90 @@ class SparkRulesEngineRuntime:
         )
         return output
 
-    def _raise_if_row_errors(self, df: DataFrame, error_column: str) -> None:
-        """Collect a small sample of row-level errors and raise when any exist."""
-        error_rows = (
-            df.where(F.col(error_column).isNotNull())
-            .select(error_column)
-            .limit(5)
-            .collect()
-        )
-        if error_rows:
-            samples = [row[error_column] for row in error_rows]
-            logger.error(
-                "Spark runtime row-level errors detected: error_column=%s sample_count=%s",
-                error_column,
-                len(samples),
-            )
-            raise RuntimeError(
-                "Rules engine Spark evaluation produced row-level errors: "
-                + "; ".join(samples)
-            )
+    def _validate_worker_serializable(self, evaluator: Any) -> None:
+        """Fail before job submission when a UDF closure cannot be serialized."""
+        try:
+            CloudPickleSerializer().dumps(evaluator)
+        except Exception as exc:
+            raise ValidationFailedError(
+                "Rules engine custom function implementations must be "
+                "Spark-worker-serializable. Register top-level callables and "
+                "avoid captured objects that cloudpickle cannot serialize. "
+                f"Serialization failed with {type(exc).__name__}: {exc}"
+            ) from exc
 
     def _assignment_schema(self, ruleset: Ruleset, source_schema: T.StructType) -> T.StructType:
         """Build a ruleset-specific assignment result struct."""
-        field_types: dict[str, T.DataType] = {}
-        for rule in sorted(
-            (item for item in ruleset.rules if item.active_flag),
-            key=lambda item: item.rule_order,
-        ):
-            for assignment in rule.assignments:
-                inferred = self._assignment_data_type(assignment, source_schema)
-                existing = field_types.get(assignment.target_field)
-                if existing is None:
-                    field_types[assignment.target_field] = inferred
-                elif existing != inferred:
-                    field_types[assignment.target_field] = T.StringType()
-
-        if not field_types:
-            return EMPTY_ASSIGN_STRUCT
-        return T.StructType(
-            [
-                T.StructField(field_name, data_type, True)
-                for field_name, data_type in field_types.items()
-            ]
+        assign_schema = self._compatibility_validator.assignment_schema(
+            ruleset,
+            source_schema,
         )
-
-    def _assignment_data_type(
-        self,
-        assignment: Assignment,
-        source_schema: T.StructType,
-    ) -> T.DataType:
-        """Infer a Spark output type for one assignment target."""
-        return self._operand_data_type(assignment.value, source_schema)
-
-    def _operand_data_type(self, operand: Operand, source_schema: T.StructType) -> T.DataType:
-        """Infer a Spark output type for an assignment operand."""
-        if isinstance(operand, LiteralOperand):
-            return self._literal_data_type(operand.value, operand.value_type)
-        if isinstance(operand, FieldOperand):
-            for field in source_schema.fields:
-                if field.name == operand.field_name:
-                    return field.dataType
-            return T.StringType()
-        if isinstance(operand, CustomFunctionOperand):
-            if self._function_registry.has_spec(operand.function_name):
-                hint = self._function_registry.get_spec(operand.function_name).return_type_hint
-                return self._return_hint_data_type(hint)
-            return T.StringType()
-        return T.StringType()
-
-    def _literal_data_type(self, value: Any, value_type: str | None = None) -> T.DataType:
-        """Infer a Spark data type for a literal assignment value."""
-        if value_type:
-            hinted = self._return_hint_data_type(value_type)
-            if not isinstance(hinted, T.StringType) or value_type.lower() in {"string", "str"}:
-                return hinted
-        if isinstance(value, bool):
-            return T.BooleanType()
-        if isinstance(value, int):
-            return T.LongType()
-        if isinstance(value, (float, Decimal)):
-            return T.DoubleType()
-        if isinstance(value, datetime):
-            return T.TimestampType()
-        if isinstance(value, date):
-            return T.DateType()
-        if isinstance(value, MappingABC):
-            return T.StructType(
-                [
-                    T.StructField(str(field_name), self._literal_data_type(field_value), True)
-                    for field_name, field_value in value.items()
-                ]
-            )
-        return T.StringType()
-
-    def _return_hint_data_type(self, return_type_hint: str | None) -> T.DataType:
-        """Map registry return-type hints to Spark output types."""
-        if return_type_hint is None:
-            return T.StringType()
-        return FUNCTION_RETURN_TYPES.get(return_type_hint.lower(), T.StringType())
+        if not assign_schema.fields:
+            return EMPTY_ASSIGN_STRUCT
+        return assign_schema
 
     def _build_row_evaluator(
         self,
         ruleset: Ruleset,
         assign_field_names: list[str],
         assign_field_types: Mapping[str, T.DataType],
+        *,
+        raise_on_error: bool = False,
+        include_error_traceback: bool = False,
     ):
         """Build the serializable Python callable used by the Spark UDF."""
         runtime = _SparkRowUdfEvaluator(
             _SparkRowNoOpRepository(),
             self._function_registry,
         )
-        active_rules = [
-            (rule, runtime._rule_has_custom_condition(rule))
-            for rule in sorted(
-                (item for item in ruleset.rules if item.active_flag),
-                key=lambda item: item.rule_order,
+        ordered_rules = sorted(ruleset.rules, key=lambda item: item.rule_order)
+        active_rules = []
+        for rule in (item for item in ordered_rules if item.active_flag):
+            description = runtime._rule_formatter.describe_rule(rule)
+            assignment_specs = tuple(
+                (
+                    assignment,
+                    runtime._rule_formatter.format_assignment_expression(assignment),
+                )
+                for assignment in rule.assignments
             )
-        ]
+            active_rules.append(
+                (
+                    rule,
+                    runtime._rule_has_custom_condition(rule),
+                    assignment_specs,
+                    {
+                        "rule_id": rule.rule_id,
+                        "rule_name": rule.rule_name,
+                        "rule_order": rule.rule_order,
+                        "human_readable_condition": description["rule_logic"],
+                        "human_readable_assignment": description["match_payload"],
+                        "assigned_fields": [
+                            assignment.target_field
+                            for assignment in rule.assignments
+                        ],
+                    },
+                )
+            )
 
         def evaluate(row: Any) -> dict[str, Any]:
             """Evaluate one Spark row struct and return the declared result struct."""
             try:
                 row_dict = row.asDict(recursive=True)
                 matched_rule_ids: list[str] = []
+                matched_rules: list[dict[str, Any]] = []
                 assignments: dict[str, Any] = {}
-                winning_rule: dict[str, Any] | None = None
-                winning_rule_explanation: str | None = None
-                for rule, has_custom_condition in active_rules:
+                assignment_events: list[dict[str, Any]] = []
+                first_matched_rule: dict[str, Any] | None = None
+                first_matched_rule_explanation: str | None = None
+                for rule, has_custom_condition, assignment_specs, rule_summary in active_rules:
                     condition_traces = None
-                    # Keep custom conditions single-pass because implementations
-                    # are not required to be pure or idempotent.
-                    if winning_rule is None and has_custom_condition:
+                    # Preserve eager evaluation through stop_on_match so later
+                    # condition errors are visible. Losing pure rules use the
+                    # allocation-light match path; only the pure winner is
+                    # reevaluated for its trace. Custom conditions remain
+                    # single-pass to avoid repeating user code or side effects.
+                    if first_matched_rule is None and has_custom_condition:
                         matched, condition_traces = runtime._evaluate_rule(
                             rule,
                             row_dict,
@@ -425,58 +436,67 @@ class SparkRulesEngineRuntime:
                         matched = runtime._rule_matches(rule, row_dict)
                     if matched:
                         matched_rule_ids.append(rule.rule_id)
-                        if winning_rule is None:
+                        matched_rules.append(rule_summary)
+                        if first_matched_rule is None:
                             if condition_traces is None:
                                 _, condition_traces = runtime._evaluate_rule(
                                     rule,
                                     row_dict,
                                 )
-                            winning_rule = runtime._spark_rule_trace(
+                            first_matched_rule = runtime._spark_rule_trace(
                                 runtime._rule_execution_trace(
                                     rule,
                                     matched,
                                     condition_traces,
                                 )
                             )
-                            winning_rule_explanation = runtime._winning_rule_explanation_from_trace(
-                                rule,
-                                condition_traces,
+                            first_matched_rule_explanation = (
+                                runtime._winning_rule_explanation_from_trace(
+                                    rule,
+                                    condition_traces,
+                                )
                             )
-                        assignments.update(runtime._evaluate_assignments(rule.assignments, row_dict))
+                        for assignment, authored_expression in assignment_specs:
+                            event = runtime._typed_assignment_event(
+                                rule,
+                                assignment,
+                                authored_expression,
+                                row_dict,
+                                assign_field_types[assignment.target_field],
+                            )
+                            assignments[assignment.target_field] = event[
+                                "proposed_value"
+                            ]
+                            assignment_events.append(event)
                         if rule.stop_on_match:
                             break
+                assignment_results = runtime._assignment_results(assignment_events)
                 assign_payload = (
                     {
-                        field_name: runtime._spark_assignment_value(
-                            assignments.get(field_name),
-                            assign_field_types[field_name],
-                        )
+                        field_name: assignments.get(field_name)
                         for field_name in assign_field_names
                     }
                     if assignments
                     else None
                 )
-                return {
-                    "matched": bool(matched_rule_ids),
-                    "matched_rule_ids": matched_rule_ids,
-                    "assign": assign_payload,
-                    "winning_rule": winning_rule,
-                    "winning_rule_id": winning_rule.get("rule_id") if winning_rule else None,
-                    "winning_rule_name": winning_rule.get("rule_name") if winning_rule else None,
-                    "winning_rule_explanation": winning_rule_explanation,
-                    "error": None,
-                }
+                return runtime._success_payload(
+                    matched_rule_ids=matched_rule_ids,
+                    matched_rules=matched_rules,
+                    assign_payload=assign_payload,
+                    first_matched_rule=first_matched_rule,
+                    first_matched_rule_explanation=first_matched_rule_explanation,
+                    assignment_results=assignment_results,
+                )
             except Exception as exc:
-                return {
-                    "matched": False,
-                    "matched_rule_ids": [],
-                    "assign": None,
-                    "winning_rule": None,
-                    "winning_rule_id": None,
-                    "winning_rule_name": None,
-                    "winning_rule_explanation": None,
-                    "error": f"{exc}\n{traceback.format_exc()}",
-                }
+                if raise_on_error:
+                    raise RuntimeError(
+                        f"Rules engine row evaluation failed with "
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
+                return runtime._error_payload(
+                    exc,
+                    include_traceback=include_error_traceback,
+                )
 
         return evaluate
 
@@ -484,23 +504,245 @@ class SparkRulesEngineRuntime:
 class _SparkRowUdfEvaluator(SparkRowEvaluator):
     """Row evaluator plus Spark-schema trace normalization helpers."""
 
+    def _typed_assignment_event(
+        self,
+        rule: Rule,
+        assignment: Assignment,
+        authored_expression: str,
+        row: Mapping[str, Any],
+        data_type: T.DataType,
+    ) -> dict[str, Any]:
+        """Resolve and normalize both sides of one assignment audit event."""
+        proposed_value = self._resolve_operand(assignment.value, row)
+        return {
+            "assignment_id": assignment.assignment_id,
+            "rule_id": rule.rule_id,
+            "rule_name": rule.rule_name,
+            "rule_order": rule.rule_order,
+            "target_field": assignment.target_field,
+            "authored_expression": authored_expression,
+            "old_value": self._spark_assignment_value(
+                row.get(assignment.target_field),
+                data_type,
+            ),
+            "proposed_value": self._spark_assignment_value(
+                proposed_value,
+                data_type,
+            ),
+        }
+
+    def _assignment_results(
+        self,
+        events: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Build ordered provenance and override metadata for assignments."""
+        effective_event_indexes = {
+            event["target_field"]: index for index, event in enumerate(events)
+        }
+        results: list[dict[str, Any]] = []
+        for index, event in enumerate(events):
+            effective_index = effective_event_indexes[event["target_field"]]
+            effective_event = events[effective_index]
+            effective = index == effective_index
+            results.append(
+                {
+                    "assignment_id": event["assignment_id"],
+                    "rule_id": event["rule_id"],
+                    "rule_name": event["rule_name"],
+                    "rule_order": event["rule_order"],
+                    "target_field": event["target_field"],
+                    "authored_expression": event["authored_expression"],
+                    "old_value": self._trace_text(event["old_value"]),
+                    "proposed_value": self._trace_text(event["proposed_value"]),
+                    "changed": self._values_changed(
+                        event["old_value"],
+                        event["proposed_value"],
+                    ),
+                    "effective": effective,
+                    "overridden_by_rule_id": (
+                        None if effective else effective_event["rule_id"]
+                    ),
+                    "overridden_by_assignment_id": (
+                        None if effective else effective_event["assignment_id"]
+                    ),
+                }
+            )
+        return results
+
+    def _success_payload(
+        self,
+        *,
+        matched_rule_ids: list[str],
+        matched_rules: list[dict[str, Any]],
+        assign_payload: dict[str, Any] | None,
+        first_matched_rule: dict[str, Any] | None,
+        first_matched_rule_explanation: str | None,
+        assignment_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Build the stable Spark result payload and its compatibility aliases."""
+        first_rule_id = (
+            first_matched_rule.get("rule_id") if first_matched_rule else None
+        )
+        first_rule_name = (
+            first_matched_rule.get("rule_name") if first_matched_rule else None
+        )
+        payload = self._base_payload()
+        payload.update(
+            matched=bool(matched_rule_ids),
+            matched_rule_ids=matched_rule_ids,
+            assign=assign_payload,
+            first_matched_rule=first_matched_rule,
+            first_matched_rule_id=first_rule_id,
+            first_matched_rule_name=first_rule_name,
+            first_matched_rule_explanation=first_matched_rule_explanation,
+            matched_rules=matched_rules,
+            last_matched_rule=matched_rules[-1] if matched_rules else None,
+            assignment_results=assignment_results,
+            winning_rule=first_matched_rule,
+            winning_rule_id=first_rule_id,
+            winning_rule_name=first_rule_name,
+            winning_rule_explanation=first_matched_rule_explanation,
+        )
+        return payload
+
+    def _error_payload(
+        self,
+        exc: Exception,
+        *,
+        include_traceback: bool,
+    ) -> dict[str, Any]:
+        """Build a compact production error, optionally with a debug traceback."""
+        error = f"{type(exc).__name__}: {exc}"
+        if include_traceback:
+            error = f"{error}\n{traceback.format_exc()}"
+        payload = self._base_payload()
+        payload["error"] = error
+        return payload
+
+    def _base_payload(self) -> dict[str, Any]:
+        """Return schema-derived defaults shared by success and error rows."""
+        payload = dict.fromkeys(RESULT_FIELD_NAMES)
+        payload.update(
+            matched=False,
+            matched_rule_ids=[],
+            matched_rules=[],
+            assignment_results=[],
+        )
+        return payload
+
     def _spark_assignment_value(self, value: Any, data_type: T.DataType) -> Any:
         """Return an assignment value compatible with the declared Spark type."""
         if value is None:
             return value
         if isinstance(data_type, T.StringType):
             return self._trace_text(value)
+        if isinstance(data_type, INTEGRAL_TYPES):
+            return self._spark_integral_value(value, data_type)
+        if isinstance(data_type, (T.FloatType, T.DoubleType)):
+            return self._spark_float_value(value)
+        if isinstance(data_type, T.DecimalType):
+            return self._spark_decimal_value(value, data_type)
+        if isinstance(data_type, T.BooleanType):
+            return self._spark_boolean_value(value)
+        if isinstance(data_type, TIMESTAMP_TYPES):
+            return (
+                datetime.fromisoformat(value)
+                if isinstance(value, str)
+                else value
+            )
+        if isinstance(data_type, T.DateType):
+            if isinstance(value, datetime):
+                return value.date()
+            return date.fromisoformat(value) if isinstance(value, str) else value
+        if isinstance(data_type, T.ArrayType):
+            if isinstance(value, set):
+                value = sorted(value, key=repr)
+            return [
+                self._spark_assignment_value(item, data_type.elementType)
+                for item in value
+            ]
         if isinstance(data_type, T.StructType):
-            if not isinstance(value, MappingABC):
-                return None
-            return {
-                field.name: self._spark_assignment_value(
-                    self._mapping_value(value, field.name),
-                    field.dataType,
-                )
-                for field in data_type.fields
-            }
+            return self._spark_struct_value(value, data_type)
         return value
+
+    def _spark_integral_value(
+        self,
+        value: Any,
+        data_type: T.DataType,
+    ) -> int:
+        """Return a lossless, in-range Spark integral value."""
+        if isinstance(value, bool):
+            raise TypeError("Boolean assignment values are not integers.")
+        converted = int(value)
+        if isinstance(value, (float, Decimal)) and value != converted:
+            raise ValueError(
+                f"Assignment value {value!r} cannot be converted to an integer "
+                "without losing its fractional component."
+            )
+        limits = INTEGRAL_LIMITS[type(data_type)]
+        if not limits[0] <= converted <= limits[1]:
+            raise OverflowError(
+                f"Assignment value {value!r} is outside the range for "
+                f"{data_type.simpleString()}."
+            )
+        return converted
+
+    def _spark_float_value(self, value: Any) -> float:
+        """Return a finite Spark floating-point assignment value."""
+        converted = float(value)
+        if not math.isfinite(converted):
+            raise ValueError("Floating-point assignment values must be finite.")
+        return converted
+
+    def _spark_decimal_value(
+        self,
+        value: Any,
+        data_type: T.DecimalType,
+    ) -> Decimal:
+        """Return a Decimal that fits the declared Spark precision and scale."""
+        converted = value if isinstance(value, Decimal) else Decimal(str(value))
+        if not decimal_value_fits(converted, data_type):
+            raise ValueError(
+                f"Assignment value {value!r} does not fit "
+                f"{data_type.simpleString()} without rounding or overflow."
+            )
+        return converted
+
+    def _spark_boolean_value(self, value: Any) -> bool:
+        """Return a canonical Spark boolean assignment value."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.lower() in {"true", "false"}:
+            return value.lower() == "true"
+        raise TypeError(
+            f"Assignment value {value!r} is not a boolean or a canonical "
+            "'true'/'false' string."
+        )
+
+    def _spark_struct_value(
+        self,
+        value: Any,
+        data_type: T.StructType,
+    ) -> dict[str, Any]:
+        """Return a recursively coerced Spark struct assignment value."""
+        if not isinstance(value, Mapping):
+            raise TypeError(
+                f"Assignment value {value!r} must be a mapping for "
+                f"{data_type.simpleString()}."
+            )
+        return {
+            field.name: self._spark_assignment_value(
+                self._mapping_value(value, field.name),
+                field.dataType,
+            )
+            for field in data_type.fields
+        }
+
+    def _values_changed(self, old_value: Any, proposed_value: Any) -> bool:
+        """Compare audit values with null-safe equality semantics."""
+        if old_value is None or proposed_value is None:
+            return (old_value is None) != (proposed_value is None)
+        return old_value != proposed_value
 
     def _mapping_value(self, value: Mapping[str, Any], field_name: str) -> Any:
         """Return a mapping value using Spark's stringified struct field name."""
@@ -562,7 +804,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
 
     def _spark_operand_trace(self, trace: Any) -> dict[str, Any] | None:
         """Convert one operand trace to the declared Spark struct schema."""
-        if not isinstance(trace, MappingABC):
+        if not isinstance(trace, Mapping):
             return None
         column = trace.get("column") or trace.get("field_name")
         source_columns = trace.get("source_columns") or trace.get("columns")
@@ -581,7 +823,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
     def _trace_arguments(self, payload: Mapping[str, Any]) -> dict[str, str | None] | None:
         """Return compact string arguments for custom-function operands."""
         args = payload.get("args")
-        if not isinstance(args, MappingABC) or not args:
+        if not isinstance(args, Mapping) or not args:
             return None
         return {
             str(name): self._operand_trace_summary(value) or self._trace_text(value)
@@ -610,11 +852,13 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
             return str(value.value)
         if isinstance(value, (datetime, date)):
             return value.isoformat()
-        if isinstance(value, MappingABC):
+        if isinstance(value, Mapping):
             return ", ".join(
                 f"{key}={self._trace_text(item)}"
                 for key, item in value.items()
             )
-        if isinstance(value, (list, tuple, set)):
+        if isinstance(value, set):
+            value = sorted(value, key=repr)
+        if isinstance(value, (list, tuple)):
             return "[" + ", ".join(self._trace_text(item) or "" for item in value) + "]"
         return str(value)

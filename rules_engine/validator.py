@@ -8,6 +8,7 @@ can be published.
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 from typing import Any
 
@@ -19,6 +20,7 @@ from rules_engine.enums import (
     ObjectType,
     ValidationSeverity,
 )
+from rules_engine.exceptions import RegistryError
 from rules_engine.models import (
     Assignment,
     Condition,
@@ -112,6 +114,7 @@ class RulesetValidator:
         seen_rule_ids: set[str] = set()
         seen_condition_ids: set[str] = set()
         seen_condition_group_ids: set[str] = set()
+        seen_assignment_ids: dict[str, str] = {}
         for rule in ruleset.rules:
             if rule.rule_id in seen_rule_ids:
                 self._add(
@@ -131,7 +134,14 @@ class RulesetValidator:
                     rule.rule_id,
                 )
             seen_rule_orders.add(rule.rule_order)
-            self._validate_rule(rule, result, seen_condition_ids, seen_condition_group_ids)
+            self._validate_rule(
+                rule,
+                result,
+                seen_condition_ids,
+                seen_condition_group_ids,
+                seen_assignment_ids,
+                ruleset,
+            )
 
     def _validate_rule(
         self,
@@ -139,6 +149,8 @@ class RulesetValidator:
         result: ValidationResult,
         seen_condition_ids: set[str],
         seen_condition_group_ids: set[str],
+        seen_assignment_ids: dict[str, str],
+        ruleset: Ruleset,
     ) -> None:
         """
         Validate one rule and its condition tree and assignments.
@@ -159,17 +171,58 @@ class RulesetValidator:
                 ObjectType.RULE,
                 rule.rule_id,
             )
-        seen_assignment_ids: set[str] = set()
+        assignments_by_target: dict[str, list[str]] = {}
         for assignment in rule.assignments:
             if assignment.assignment_id in seen_assignment_ids:
+                first_rule_id = seen_assignment_ids[assignment.assignment_id]
+                duplicate_location = (
+                    f"more than once in rule {rule.rule_id}"
+                    if first_rule_id == rule.rule_id
+                    else f"by rules {first_rule_id} and {rule.rule_id}"
+                )
                 self._add(
                     result,
                     "ASSIGNMENT_ID_DUPLICATE",
-                    f"Duplicate assignment_id detected: {assignment.assignment_id}",
+                    "assignment_id must be unique within a ruleset version: "
+                    f"{assignment.assignment_id} is used {duplicate_location}.",
                     ObjectType.ASSIGNMENT,
                     assignment.assignment_id,
+                    details={
+                        "ruleset_id": ruleset.ruleset_id,
+                        "version": ruleset.version,
+                        "assignment_id": assignment.assignment_id,
+                        "rule_ids": (
+                            [rule.rule_id]
+                            if first_rule_id == rule.rule_id
+                            else [first_rule_id, rule.rule_id]
+                        ),
+                    },
                 )
-            seen_assignment_ids.add(assignment.assignment_id)
+            else:
+                seen_assignment_ids[assignment.assignment_id] = rule.rule_id
+
+            conflicting_ids = assignments_by_target.get(assignment.target_field)
+            if conflicting_ids is not None:
+                assignment_ids = [*conflicting_ids, assignment.assignment_id]
+                self._add(
+                    result,
+                    "ASSIGNMENT_TARGET_DUPLICATE_WITHIN_RULE",
+                    f"Rule {rule.rule_id} assigns target field "
+                    f"{assignment.target_field!r} more than once. Use one "
+                    "assignment or separate ordered rules.",
+                    ObjectType.ASSIGNMENT,
+                    assignment.assignment_id,
+                    details={
+                        "rule_id": rule.rule_id,
+                        "target_field": assignment.target_field,
+                        "assignment_ids": assignment_ids,
+                    },
+                )
+                conflicting_ids.append(assignment.assignment_id)
+            else:
+                assignments_by_target[assignment.target_field] = [
+                    assignment.assignment_id
+                ]
             self._validate_assignment(assignment, result)
 
     def _validate_condition_group(
@@ -230,7 +283,15 @@ class RulesetValidator:
         """
         Validate one condition's tolerance, null handling, operands, and operator shape.
         """
-        if condition.tolerance_abs < Decimal("0"):
+        if not condition.tolerance_abs.is_finite():
+            self._add(
+                result,
+                "TOLERANCE_FINITE_REQUIRED",
+                "tolerance_abs must be finite.",
+                ObjectType.CONDITION,
+                condition.condition_id,
+            )
+        elif condition.tolerance_abs < Decimal(0):
             self._add(
                 result,
                 "TOLERANCE_NEGATIVE",
@@ -238,14 +299,24 @@ class RulesetValidator:
                 ObjectType.CONDITION,
                 condition.condition_id,
             )
-        if condition.null_result_mode is NullResultMode.DEFAULT and condition.null_default_value is None:
-            self._add(
-                result,
-                "NULL_DEFAULT_REQUIRED",
-                "null_default_value is required when null_result_mode is default.",
-                ObjectType.CONDITION,
-                condition.condition_id,
-            )
+        if condition.null_result_mode is NullResultMode.DEFAULT:
+            if condition.null_default_value is None:
+                self._add(
+                    result,
+                    "NULL_DEFAULT_REQUIRED",
+                    "null_default_value is required when null_result_mode is default.",
+                    ObjectType.CONDITION,
+                    condition.condition_id,
+                )
+            elif not isinstance(condition.null_default_value, bool):
+                self._add(
+                    result,
+                    "NULL_DEFAULT_BOOLEAN_REQUIRED",
+                    "null_default_value must be a YAML boolean when "
+                    "null_result_mode is default.",
+                    ObjectType.CONDITION,
+                    condition.condition_id,
+                )
         self._validate_operand(condition.left, result, condition.condition_id, in_assignment=False)
         if condition.right is not None:
             self._validate_operand(condition.right, result, condition.condition_id, in_assignment=False)
@@ -275,7 +346,7 @@ class RulesetValidator:
             self._validate_collection_literal(condition, result)
         if (
             condition.operator in {ComparisonOperator.BETWEEN, ComparisonOperator.NOT_BETWEEN}
-            and condition.tolerance_abs != Decimal("0")
+            and condition.tolerance_abs != Decimal(0)
         ):
             self._add(
                 result,
@@ -292,24 +363,29 @@ class RulesetValidator:
         right = condition.right
         if not isinstance(right, LiteralOperand):
             return
-        if condition.operator in {ComparisonOperator.IN, ComparisonOperator.NOT_IN}:
-            if not isinstance(right.value, (list, tuple, set)):
-                self._add(
-                    result,
-                    "IN_OPERATOR_COLLECTION_REQUIRED",
-                    f"Operator {condition.operator.value} requires a collection literal on the right side.",
-                    ObjectType.CONDITION,
-                    condition.condition_id,
-                )
-        if condition.operator in {ComparisonOperator.BETWEEN, ComparisonOperator.NOT_BETWEEN}:
-            if not isinstance(right.value, (list, tuple)) or len(right.value) != 2:
-                self._add(
-                    result,
-                    "BETWEEN_OPERATOR_PAIR_REQUIRED",
-                    f"Operator {condition.operator.value} requires exactly two literal values.",
-                    ObjectType.CONDITION,
-                    condition.condition_id,
-                )
+        if (
+            condition.operator in {ComparisonOperator.IN, ComparisonOperator.NOT_IN}
+            and not isinstance(right.value, (list, tuple, set))
+        ):
+            self._add(
+                result,
+                "IN_OPERATOR_COLLECTION_REQUIRED",
+                f"Operator {condition.operator.value} requires a collection literal on the right side.",
+                ObjectType.CONDITION,
+                condition.condition_id,
+            )
+        if (
+            condition.operator
+            in {ComparisonOperator.BETWEEN, ComparisonOperator.NOT_BETWEEN}
+            and (not isinstance(right.value, (list, tuple)) or len(right.value) != 2)
+        ):
+            self._add(
+                result,
+                "BETWEEN_OPERATOR_PAIR_REQUIRED",
+                f"Operator {condition.operator.value} requires exactly two literal values.",
+                ObjectType.CONDITION,
+                condition.condition_id,
+            )
 
     def _validate_assignment(self, assignment: Assignment, result: ValidationResult) -> None:
         """
@@ -347,7 +423,12 @@ class RulesetValidator:
                     object_id,
                 )
         elif isinstance(operand, LiteralOperand):
-            return
+            self._validate_finite_decimals(
+                operand.value,
+                result,
+                object_type,
+                object_id,
+            )
         elif isinstance(operand, CustomFunctionOperand):
             self._validate_custom_function(operand, result, object_id, in_assignment=in_assignment)
         else:
@@ -382,7 +463,7 @@ class RulesetValidator:
             return
         try:
             spec = self._function_registry.get_spec(operand.function_name)
-        except Exception:
+        except RegistryError:
             self._add(
                 result,
                 "CUSTOM_FUNCTION_UNKNOWN",
@@ -438,6 +519,55 @@ class RulesetValidator:
                     f"{object_id}.{operand.function_name}.{arg_name}",
                     in_assignment=in_assignment,
                 )
+            else:
+                self._validate_finite_decimals(
+                    arg_value,
+                    result,
+                    object_type,
+                    f"{object_id}.{operand.function_name}.{arg_name}",
+                )
+
+    def _validate_finite_decimals(
+        self,
+        value: Any,
+        result: ValidationResult,
+        object_type: ObjectType,
+        object_id: str,
+    ) -> None:
+        """Reject non-finite numeric values in code-authored literal trees."""
+        if isinstance(value, Decimal):
+            if not value.is_finite():
+                self._add(
+                    result,
+                    "LITERAL_DECIMAL_FINITE_REQUIRED",
+                    "Decimal literal values must be finite.",
+                    object_type,
+                    object_id,
+                )
+            return
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                self._add(
+                    result,
+                    "LITERAL_FLOAT_FINITE_REQUIRED",
+                    "Floating-point literal values must be finite.",
+                    object_type,
+                    object_id,
+                )
+            return
+        if isinstance(value, dict):
+            values = value.values()
+        elif isinstance(value, (list, tuple, set)):
+            values = value
+        else:
+            return
+        for item in values:
+            self._validate_finite_decimals(
+                item,
+                result,
+                object_type,
+                object_id,
+            )
 
     def _add(
         self,

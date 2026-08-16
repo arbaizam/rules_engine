@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date
+import math
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from typing import Any
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exporter_yaml import YamlRulesetExporter
@@ -19,6 +22,9 @@ from rules_engine.models import (
     Ruleset,
     RulesetVersionRow,
 )
+
+_JSON_TYPE_KEY = "$rules_engine_type"
+_JSON_VALUE_KEY = "value"
 
 
 class DeltaRowSerializer:
@@ -74,7 +80,9 @@ class DeltaRowSerializer:
         """
         Reconstruct a canonical ruleset from one authoritative version row.
         """
-        payload = json.loads(row.payload_json)
+        payload = _decode_json_types(
+            json.loads(row.payload_json, parse_float=Decimal)
+        )
         payload["status"] = row.status
         return YamlRulesetCompiler().compile_payload(payload)
 
@@ -152,7 +160,7 @@ class DeltaRowSerializer:
         """
         payload = YamlRulesetExporter().export_payload(ruleset)
         payload.pop("status", None)
-        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return _canonical_json_dumps(payload)
 
     def _date_from_timestamp(self, value: str | None) -> str:
         """
@@ -160,4 +168,122 @@ class DeltaRowSerializer:
         """
         if value:
             return value[:10]
-        return date.today().isoformat()
+        return datetime.now(timezone.utc).date().isoformat()
+
+
+def _canonical_json_dumps(value: Any) -> str:
+    """Encode deterministic JSON while preserving supported Python types.
+
+    Decimal values are emitted as JSON numbers rather than strings. Integral
+    Decimals retain a fractional marker so ``parse_float=Decimal`` restores
+    their numeric kind during deserialization. Types absent from JSON use
+    reserved, collision-safe envelopes decoded by :func:`_decode_json_types`.
+    """
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("Persisted Decimal values must be finite.")
+        text = str(value)
+        # ``e0`` forces json.loads to route an integral Decimal through
+        # parse_float=Decimal instead of silently restoring it as an int.
+        return text if "." in text or "e" in text.lower() else f"{text}e0"
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("Persisted float values must be finite.")
+    if isinstance(value, datetime):
+        return _tagged_json("datetime", json.dumps(value.isoformat()))
+    if isinstance(value, date):
+        return _tagged_json("date", json.dumps(value.isoformat()))
+    if isinstance(value, tuple):
+        items = ",".join(_canonical_json_dumps(item) for item in value)
+        return _tagged_json("tuple", f"[{items}]")
+    if isinstance(value, set):
+        items = sorted(_canonical_json_dumps(item) for item in value)
+        return _tagged_json("set", "[" + ",".join(items) + "]")
+    if isinstance(value, dict):
+        if _JSON_TYPE_KEY in value:
+            return _tagged_json("mapping", _canonical_mapping_dumps(value))
+        return _canonical_mapping_dumps(value)
+    if isinstance(value, list):
+        return "[" + ",".join(_canonical_json_dumps(item) for item in value) + "]"
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _canonical_mapping_dumps(value: dict[Any, Any]) -> str:
+    """Encode mapping contents without interpreting reserved persistence keys."""
+    encoded_items = (
+        f"{json.dumps(key, separators=(',', ':'))}:{_canonical_json_dumps(item)}"
+        for key, item in sorted(value.items())
+    )
+    return "{" + ",".join(encoded_items) + "}"
+
+
+def _tagged_json(type_name: str, encoded_value: str) -> str:
+    """Return one deterministic extended-JSON value envelope."""
+    return (
+        "{"
+        f"{json.dumps(_JSON_TYPE_KEY)}:{json.dumps(type_name)},"
+        f"{json.dumps(_JSON_VALUE_KEY)}:{encoded_value}"
+        "}"
+    )
+
+
+def _decode_json_types(value: Any) -> Any:
+    """Restore Python-only literal types from persisted extended JSON."""
+    if isinstance(value, list):
+        return [_decode_json_types(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    if set(value) != {_JSON_TYPE_KEY, _JSON_VALUE_KEY}:
+        return {
+            key: _decode_json_types(item)
+            for key, item in value.items()
+        }
+
+    type_name = value[_JSON_TYPE_KEY]
+    encoded_value = value[_JSON_VALUE_KEY]
+    if type_name == "date":
+        if not isinstance(encoded_value, str):
+            raise _invalid_envelope(type_name, "value must be an ISO string")
+        try:
+            return date.fromisoformat(encoded_value)
+        except ValueError as exc:
+            raise _invalid_envelope(type_name, "value must be a valid ISO date") from exc
+    if type_name == "datetime":
+        if not isinstance(encoded_value, str):
+            raise _invalid_envelope(type_name, "value must be an ISO string")
+        try:
+            return datetime.fromisoformat(encoded_value)
+        except ValueError as exc:
+            raise _invalid_envelope(
+                type_name,
+                "value must be a valid ISO datetime",
+            ) from exc
+    if type_name == "tuple":
+        if not isinstance(encoded_value, list):
+            raise _invalid_envelope(type_name, "value must be an array")
+        return tuple(_decode_json_types(item) for item in encoded_value)
+    if type_name == "set":
+        if not isinstance(encoded_value, list):
+            raise _invalid_envelope(type_name, "value must be an array")
+        try:
+            return {_decode_json_types(item) for item in encoded_value}
+        except TypeError as exc:
+            raise _invalid_envelope(
+                type_name,
+                "decoded items must be hashable",
+            ) from exc
+    if type_name == "mapping":
+        if not isinstance(encoded_value, dict):
+            raise _invalid_envelope(type_name, "value must be an object")
+        # Decode the mapping's values only. Recursing on the inner mapping as a
+        # whole would reinterpret an escaped user-owned $rules_engine_type key.
+        encoded_items = (
+            (key, _decode_json_types(item))
+            for key, item in encoded_value.items()
+        )
+        return dict(encoded_items)
+    raise ValueError(f"Unsupported persisted literal type envelope: {type_name!r}.")
+
+
+def _invalid_envelope(type_name: Any, reason: str) -> ValueError:
+    """Return one uniform corruption error for an extended-JSON envelope."""
+    return ValueError(f"Invalid persisted {type_name!r} envelope: {reason}.")

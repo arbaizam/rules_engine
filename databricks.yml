@@ -4,14 +4,41 @@ bundle:
 artifacts:
   rules_engine:
     type: whl
-    build: python -m build --wheel
+    build: python tools/build_release_wheel.py
     path: .
+    files:
+      - source: ./dist/rules_engine-0.2.0-py3-none-any.whl
 
 variables:
   existing_cluster_id:
     description: Existing Databricks cluster ID used by Databricks jobs.
+  system_test_schema:
+    description: Disposable catalog.schema used by the system-test job.
   workspace_host:
     description: Databricks workspace URL for the selected deployment target.
+
+resources:
+  jobs:
+    rules_engine_system_tests:
+      name: ${bundle.name}-${bundle.target}-system-tests
+      max_concurrent_runs: 1
+      parameters:
+        - name: SCHEMA
+          default: ${var.system_test_schema}
+        - name: RULES_ENGINE_RUN_SPARK_TESTS
+          default: "1"
+      tasks:
+        - task_key: run_system_tests
+          existing_cluster_id: ${var.existing_cluster_id}
+          max_retries: 0
+          timeout_seconds: 7200
+          notebook_task:
+            notebook_path: ./notebooks/rules_engine_system_tests.py
+            source: WORKSPACE
+          libraries:
+            - whl: ./dist/rules_engine-0.2.0-py3-none-any.whl
+            - pypi:
+                package: pytest>=8,<9
 
 targets:
   dev:

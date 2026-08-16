@@ -10,7 +10,6 @@ from tools.recon_spec_translation.models import SourceCriterion
 from tools.recon_spec_translation.translator import ReconciliationSpecTranslator
 from tools.recon_spec_translation.writer_yaml import to_yaml
 
-
 OWNER = "Rules Team"
 OWNER_DEPARTMENT = "ALM Engineering"
 

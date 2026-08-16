@@ -1,7 +1,11 @@
+from datetime import date
+from decimal import Decimal
+
 import yaml
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exporter_yaml import YamlRulesetExporter
+from rules_engine.serializer import DeltaRowSerializer
 
 
 def test_yaml_export_round_trips_compiled_ruleset():
@@ -73,6 +77,13 @@ def test_yaml_export_round_trips_compiled_ruleset():
                                 }
                             },
                         },
+                        {
+                            "assignment_id": "a3",
+                            "target_field": "rate",
+                            "value": {
+                                "literal": Decimal("0.042500000000000000001")
+                            },
+                        },
                     ],
                 }
             ],
@@ -87,6 +98,63 @@ def test_yaml_export_round_trips_compiled_ruleset():
     assert exported["owner_department"] == "ALM Engineering"
     assert "status" not in exported
     assert reconstructed == original
+
+
+def test_yaml_export_text_is_stable_after_recompilation():
+    """Canonical key order produces byte-stable review artifacts."""
+    compiler = YamlRulesetCompiler()
+    original = compiler.compile_payload(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Ruleset",
+            "version": "1",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "Rule 1",
+                    "when": {
+                        "all": [
+                            {
+                                "condition_id": "c1",
+                                "left": {"field": "rate"},
+                                "operator": "ge",
+                                "right": {"literal": Decimal("0.0425")},
+                            }
+                        ]
+                    },
+                    "assign": {
+                        "bucket": "A",
+                        "tags": {"beta", "alpha"},
+                        "bounds": (date(2026, 1, 1), date(2026, 12, 31)),
+                        "pairs": {("A", "B"), ("C", "D")},
+                    },
+                }
+            ],
+        }
+    )
+    exporter = YamlRulesetExporter()
+
+    first = exporter.export_text(original)
+    reconstructed = compiler.compile_text(first)
+    second = exporter.export_text(reconstructed)
+    condition = exporter.export_payload(original)["rules"][0]["when"]["all"][0]
+
+    assert first == second
+    assert reconstructed == original
+    assert "!rules_engine/tuple" in first
+    assert DeltaRowSerializer().content_hash(reconstructed) == (
+        DeltaRowSerializer().content_hash(original)
+    )
+    assert list(condition) == [
+        "condition_id",
+        "left",
+        "operator",
+        "right",
+        "tolerance_abs",
+        "null_input_mode",
+        "null_result_mode",
+        "active_flag",
+    ]
 
 
 def test_yaml_export_uses_canonical_keys():

@@ -8,11 +8,14 @@ gate before publishing.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import yaml
+from yaml.constructor import ConstructorError
 
 from rules_engine.enums import (
     ComparisonOperator,
@@ -32,6 +35,102 @@ from rules_engine.models import (
     Operand,
     Rule,
     Ruleset,
+)
+
+
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate mapping keys."""
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeySafeLoader,
+    node: yaml.MappingNode,
+):
+    """Construct a mapping with unique explicit keys and normal YAML merges."""
+    explicit_keys: set[Any] = set()
+    for key_node, _ in node.value:
+        if key_node.tag == "tag:yaml.org,2002:merge":
+            continue
+        key = loader.construct_object(key_node, deep=False)
+        try:
+            duplicate = key in explicit_keys
+        except TypeError as exc:
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found an unhashable mapping key",
+                key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        explicit_keys.add(key)
+
+    mapping: dict[Any, Any] = {}
+    yield mapping
+    loader.flatten_mapping(node)
+    mapping.update(loader.construct_mapping(node))
+
+
+_UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
+
+def _construct_yaml_decimal(
+    loader: _UniqueKeySafeLoader,
+    node: yaml.ScalarNode,
+) -> Decimal:
+    """Parse a YAML float token without first passing through binary float."""
+    value = loader.construct_scalar(node).replace("_", "")
+    special_values = {
+        ".inf": "Infinity",
+        "+.inf": "Infinity",
+        "-.inf": "-Infinity",
+        ".nan": "NaN",
+    }
+    decimal_text = special_values.get(value.lower(), value)
+    try:
+        decimal_value = Decimal(decimal_text)
+    except InvalidOperation as exc:
+        raise ConstructorError(
+            "while constructing a decimal",
+            node.start_mark,
+            f"unsupported YAML numeric literal {value!r}",
+            node.start_mark,
+        ) from exc
+    if not decimal_value.is_finite():
+        raise ConstructorError(
+            "while constructing a decimal",
+            node.start_mark,
+            f"numeric literal {value!r} must be finite",
+            node.start_mark,
+        )
+    return decimal_value
+
+
+_UniqueKeySafeLoader.add_constructor(
+    "tag:yaml.org,2002:float",
+    _construct_yaml_decimal,
+)
+
+
+def _construct_yaml_tuple(
+    loader: _UniqueKeySafeLoader,
+    node: yaml.SequenceNode,
+) -> tuple[Any, ...]:
+    """Restore a rules-engine tuple without enabling Python object loading."""
+    return tuple(loader.construct_sequence(node, deep=True))
+
+
+_UniqueKeySafeLoader.add_constructor(
+    "!rules_engine/tuple",
+    _construct_yaml_tuple,
 )
 
 
@@ -55,7 +154,7 @@ class YamlRulesetCompiler:
             Compiled ruleset model.
         """
         try:
-            payload = yaml.safe_load(yaml_text)
+            payload = yaml.load(yaml_text, Loader=_UniqueKeySafeLoader)
         except yaml.YAMLError as exc:
             raise CompilationError(f"Failed to parse YAML: {exc}") from exc
         return self.compile_payload(payload)
@@ -223,12 +322,20 @@ class YamlRulesetCompiler:
             tolerance_abs=self._decimal(payload.get("tolerance_abs", "0"), "tolerance_abs"),
             null_input_mode=self._enum(
                 NullInputMode,
-                self._require_str(payload, "null_input_mode"),
+                self._str_or_default(
+                    payload,
+                    "null_input_mode",
+                    NullInputMode.PROPAGATE.value,
+                ),
                 "null_input_mode",
             ),
             null_result_mode=self._enum(
                 NullResultMode,
-                self._require_str(payload, "null_result_mode"),
+                self._str_or_default(
+                    payload,
+                    "null_result_mode",
+                    NullResultMode.NULL.value,
+                ),
                 "null_result_mode",
             ),
             null_default_value=payload.get("null_default_value"),
@@ -246,23 +353,27 @@ class YamlRulesetCompiler:
         if isinstance(payload, Mapping):
             return tuple(
                 Assignment(
-                    assignment_id=f"assignment:{rule_id}:{index}",
+                    assignment_id=f"assignment:{rule_id}:{target_field}",
                     target_field=str(target_field),
                     value=self._coerce_assignment_value(raw_value),
                 )
-                for index, (target_field, raw_value) in enumerate(payload.items(), start=1)
+                for target_field, raw_value in payload.items()
             )
         if not isinstance(payload, list):
             raise CompilationError("assign must be a list or mapping.")
         assignments: list[Assignment] = []
-        for index, raw_assignment in enumerate(payload, start=1):
+        for raw_assignment in payload:
             assignment = self._ensure_mapping(raw_assignment, "assignment")
+            target_field = self._require_str(assignment, "target_field")
             assignments.append(
                 Assignment(
                     assignment_id=str(
-                        assignment.get("assignment_id", f"assignment:{rule_id}:{index}")
+                        assignment.get(
+                            "assignment_id",
+                            f"assignment:{rule_id}:{target_field}",
+                        )
                     ),
-                    target_field=self._require_str(assignment, "target_field"),
+                    target_field=target_field,
                     value=self._compile_operand(self._require_mapping(assignment, "value")),
                 )
             )
@@ -277,7 +388,7 @@ class YamlRulesetCompiler:
         """
         if isinstance(raw_value, Mapping):
             return self._compile_operand(raw_value)
-        return LiteralOperand(raw_value)
+        return LiteralOperand(self._normalize_literal_value(raw_value))
 
     def _compile_operand(self, payload: Mapping[str, Any]) -> Operand:
         """
@@ -301,7 +412,11 @@ class YamlRulesetCompiler:
         if key == "field":
             return FieldOperand(self._require_str(payload, "field"))
         if key == "literal":
-            return LiteralOperand(payload[key], payload.get("value_type"))
+            value_type = payload.get("value_type")
+            return LiteralOperand(
+                self._normalize_literal_value(payload[key], value_type),
+                value_type,
+            )
         if key == "custom_function":
             fn_payload = self._require_mapping(payload, "custom_function")
             return CustomFunctionOperand(
@@ -328,6 +443,55 @@ class YamlRulesetCompiler:
                 )
             if operand_keys:
                 return self._compile_operand(value)
+        return self._normalize_literal_value(value)
+
+    def _normalize_literal_value(
+        self,
+        value: Any,
+        value_type: str | None = None,
+    ) -> Any:
+        """Preserve YAML-authored fractional numbers as exact decimals.
+
+        PyYAML normally parses an unquoted fractional literal as ``float``.
+        Financial rules must not silently switch to binary floating-point, so
+        untyped floats are normalized recursively through their YAML text
+        representation. Explicit floating-point hints retain float semantics.
+        """
+        normalized_type = value_type.lower() if isinstance(value_type, str) else None
+        if isinstance(value, list):
+            return [self._normalize_literal_value(item, value_type) for item in value]
+        if isinstance(value, tuple):
+            return tuple(self._normalize_literal_value(item, value_type) for item in value)
+        if isinstance(value, set):
+            return {self._normalize_literal_value(item, value_type) for item in value}
+        if isinstance(value, Mapping):
+            return {
+                key: self._normalize_literal_value(item, value_type)
+                for key, item in value.items()
+            }
+        if isinstance(value, float) and not math.isfinite(value):
+            raise CompilationError("Numeric literals must be finite.")
+        if isinstance(value, Decimal) and not value.is_finite():
+            raise CompilationError("Decimal literals must be finite.")
+        if normalized_type == "decimal" and value is not None:
+            try:
+                decimal_value = Decimal(str(value))
+            except (InvalidOperation, ValueError) as exc:
+                raise CompilationError(
+                    f"Decimal literal must be numeric, found {value!r}."
+                ) from exc
+            if not decimal_value.is_finite():
+                raise CompilationError("Decimal literals must be finite.")
+            return decimal_value
+        if (
+            normalized_type in {"number", "float", "double"}
+            and isinstance(value, Decimal)
+        ):
+            return float(value)
+        if normalized_type is not None:
+            return value
+        if isinstance(value, float):
+            return Decimal(str(value))
         return value
 
     def _enum(self, enum_type: type, value: str, label: str) -> Any:
@@ -336,7 +500,7 @@ class YamlRulesetCompiler:
         """
         try:
             return enum_type(value)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             valid = ", ".join(member.value for member in enum_type)
             raise CompilationError(f"Invalid {label}: {value}. Valid values: {valid}.") from exc
 
@@ -345,9 +509,12 @@ class YamlRulesetCompiler:
         Parse a numeric authoring value as ``Decimal`` for tolerance handling.
         """
         try:
-            return Decimal(str(value))
+            decimal_value = Decimal(str(value))
         except (InvalidOperation, ValueError) as exc:
             raise CompilationError(f"{label} must be numeric.") from exc
+        if not decimal_value.is_finite():
+            raise CompilationError(f"{label} must be finite.")
+        return decimal_value
 
     def _require_mapping(self, payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
         """
@@ -383,6 +550,15 @@ class YamlRulesetCompiler:
         if not isinstance(value, str) or not value:
             raise CompilationError(f"{key} must be a non-empty string.")
         return value
+
+    def _str_or_default(
+        self,
+        payload: Mapping[str, Any],
+        key: str,
+        default: str,
+    ) -> str:
+        """Read a non-empty string or materialize its authoring default."""
+        return default if key not in payload else self._require_str(payload, key)
 
     def _optional_str(self, payload: Mapping[str, Any], key: str) -> str | None:
         """

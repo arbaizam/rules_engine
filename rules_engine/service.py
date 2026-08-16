@@ -17,7 +17,10 @@ from rules_engine.registry import FunctionRegistry
 from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository
 from rules_engine.spark_runtime import SparkRulesEngineRuntime
 from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
-from rules_engine.standard_functions import register_standard_functions, standard_function_rows
+from rules_engine.standard_functions import (
+    register_standard_functions,
+    standard_function_rows,
+)
 
 
 class RulesEngineService:
@@ -49,7 +52,11 @@ class RulesEngineService:
             validator=self.validator,
             normalizer=self.normalizer,
         )
-        self.runtime = SparkRulesEngineRuntime(repository, registry)
+        self.runtime = SparkRulesEngineRuntime(
+            repository,
+            registry,
+            compatibility_validator=self.validator,
+        )
         self.compiler = YamlRulesetCompiler()
         self.rule_formatter = HumanReadableRulesetFormatter()
 
@@ -62,7 +69,7 @@ class RulesEngineService:
         ruleset_versions_table: str | None = None,
         function_registry_table: str | None = None,
         register_standard: bool = True,
-    ) -> "RulesEngineService":
+    ) -> RulesEngineService:
         """
         Build a service using metadata tables under a schema.
 
@@ -94,12 +101,12 @@ class RulesEngineService:
         """
         self.repository.create_base_tables(mode=mode)
 
-    def save_standard_function_registry(self, *, update_existing: bool = False) -> None:
+    def save_standard_function_registry(self, *, update_existing: bool = True) -> None:
         """
         Save standard function metadata rows to the function registry table.
 
-        By default, existing function rows are left unchanged so deployment
-        setup notebooks can be rerun without overwriting registry metadata.
+        Existing package-owned rows are updated by default so their persisted
+        contracts stay aligned with the installed implementation version.
         """
         self.repository.save_function_registry_rows(
             standard_function_rows(),
@@ -221,6 +228,7 @@ class RulesEngineService:
         version: str | None = None,
         column_prefix: str = "rules_engine",
         fail_on_error: bool = True,
+        include_error_traceback: bool = False,
     ) -> DataFrame:
         """
         Evaluate a Spark DataFrame using a supplied or loaded ruleset.
@@ -234,6 +242,7 @@ class RulesEngineService:
             ruleset,
             column_prefix=column_prefix,
             fail_on_error=fail_on_error,
+            include_error_traceback=include_error_traceback,
         )
 
     def retire(

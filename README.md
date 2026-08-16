@@ -37,6 +37,7 @@ semantic weakening.
 - [Packaging And Asset Bundles](#packaging-and-asset-bundles)
 - [Developer Workflow](#developer-workflow)
 - [Troubleshooting](#troubleshooting)
+- [Migration Notes For 0.2.0](#migration-notes-for-020)
 - [Known Limitations](#known-limitations)
 
 ## Who This Is For
@@ -124,7 +125,16 @@ No operand aliases are accepted.
 ### Assignment
 
 Assignments are emitted when a rule matches. Assignment values may be literals,
-fields, or custom functions.
+fields, or custom functions. A rule may assign multiple different target
+fields, but it may not assign the same target more than once. Use separate
+ordered rules when the same target needs multiple candidate values.
+
+`assignment_id` is audit identity only; it does not control execution order or
+precedence. IDs must be unique within one `ruleset_id + version`. IDs may be
+retained across versions for the same logical assignment and may be reused by a
+different ruleset. When an ID is omitted, the compiler generates
+`assignment:<rule_id>:<target_field>` for both mapping shorthand and list-form
+assignments.
 
 ## Package Layout
 
@@ -143,6 +153,7 @@ rules_engine/
   runtime.py              # reference/test row evaluator used by Spark row UDF
   serializer.py           # dataclasses <-> persisted payload rows
   spark_runtime.py        # Spark DataFrame runtime
+  spark_types.py          # shared exact Spark type helpers
   spark_validator.py      # Spark compatibility validator
   validator.py            # semantic validator
 
@@ -197,6 +208,8 @@ Common failures:
   Use `null_result_mode: "null"`.
 - unsupported aliases such as `value` instead of `literal`.
 - unsupported aliases such as `assignments` instead of `assign`.
+- duplicate YAML mapping keys; duplicate keys are rejected throughout the
+  document before a YAML loader can discard an earlier value.
 
 ### `YamlRulesetCompiler.compile_path(path)`
 
@@ -220,7 +233,8 @@ Purpose:
 Checks include:
 
 - required IDs and rule attributes,
-- duplicate rule and assignment IDs,
+- duplicate rule IDs and ruleset-version-wide assignment IDs,
+- duplicate assignment target fields within one rule,
 - empty condition groups,
 - unary/binary operand compatibility,
 - custom function registry contracts,
@@ -231,12 +245,14 @@ Side effects:
 
 - None. Validation does not mutate the ruleset and does not write metadata.
 
-### `SparkRulesetCompatibilityValidator.validate(ruleset)`
+### `SparkRulesetCompatibilityValidator.validate(ruleset, schema=None)`
 
 Purpose:
 
-- Run the base semantic validation used by the Spark runtime.
-- Preserve a Spark-specific validation entry point for deployment workflows.
+- Run the base semantic validation and, when a Spark `StructType` or DataFrame
+  is supplied, validate active field references and assignment types.
+- Require missing fields, incompatible existing targets, unresolved new target
+  types, and cross-rule type conflicts to fail before row evaluation.
 
 Side effects:
 
@@ -367,7 +383,7 @@ only required fields that exist in the input DataFrame. The helper is also
 available to callers through `from rules_engine import required_source_columns`
 for source projection, dependency inspection, and validation workflows.
 
-### `SparkRulesEngineRuntime.evaluate_dataframe(df, ruleset, fail_on_error=True)`
+### `SparkRulesEngineRuntime.evaluate_dataframe(df, ruleset, fail_on_error=True, include_error_traceback=False)`
 
 Purpose:
 
@@ -375,23 +391,35 @@ Purpose:
 
 Detailed sequence:
 
-1. Identify active source dependencies with `required_source_columns()`.
-2. Serialize only available required fields into the Python UDF.
-3. Evaluate losing rules through a match-only path without constructing trace
+1. Validate active source fields and assignment types against the incoming
+   Spark schema.
+2. Identify active source dependencies with `required_source_columns()` and
+   include existing assignment targets for original-value auditing.
+3. Preflight cloudpickle serialization of the worker evaluator and registered
+   implementations, then serialize only required fields into the Python UDF.
+4. Evaluate losing rules through a match-only path without constructing trace
    payloads; all conditions still execute so row-level errors remain observable.
-4. Build the complete condition trace only for the winning rule. Rules with
+5. Build the complete condition trace only for the first matched rule. Rules with
    active custom-function conditions use a single traced pass so functions are
    not invoked twice.
-5. Resolve assignments without constructing unused operand traces and return
-   common scalar trace values without JSON serialization.
-6. Append `rules_engine_*` result columns in one Spark projection.
-7. If `fail_on_error=True`, raise if any row has `rules_engine_error`.
+6. Resolve assignments against the original row, retain every assignment event,
+   and compute field-specific effective/override provenance.
+7. Append `rules_engine_*` result columns in one Spark projection.
+8. If `fail_on_error=True`, raise from the UDF during the caller's first Spark
+   action. If false, retain a compact typed message in `rules_engine_error`.
 
 Returned columns:
 
 - `rules_engine_matched`
 - `rules_engine_matched_rule_ids`
 - `rules_engine_assign`
+- `rules_engine_first_matched_rule`
+- `rules_engine_first_matched_rule_id`
+- `rules_engine_first_matched_rule_name`
+- `rules_engine_first_matched_rule_explanation`
+- `rules_engine_matched_rules`
+- `rules_engine_last_matched_rule`
+- `rules_engine_assignment_results`
 - `rules_engine_winning_rule`
 - `rules_engine_winning_rule_id`
 - `rules_engine_winning_rule_name`
@@ -401,6 +429,7 @@ Returned columns:
 Side effects:
 
 - Returns a transformed DataFrame.
+- Does not start a Spark action merely to check row errors.
 - Does not write output rows unless the caller writes the returned DataFrame.
 - Does not mutate input metadata.
 
@@ -450,12 +479,29 @@ review.
 - Rule evaluation is row-local. Cross-row facts must be precomputed upstream
   and supplied as ordinary input fields.
 - Aggregate operands are not supported by the rules engine runtime.
-- Null handling is explicit per condition.
+- Omitted null modes are normalized to `null_input_mode: propagate` and
+  `null_result_mode: "null"`; exported and persisted metadata is explicit.
+- `null_default_value` is a boolean when `null_result_mode: default`; quoted
+  strings such as `"false"` are rejected.
 - Tolerance is absolute only.
 - Omitted tolerance is normalized and persisted as `0`.
 - Custom logic is allowed only through `FunctionRegistry`.
 - Raw Python lambda persistence is not supported.
+- Untyped fractional YAML literals compile to exact Python `Decimal` values.
+  Use an explicit `double` or `float` `value_type` only when binary floating
+  point is intentional.
 - Pre-publish and publish-time validation are mandatory.
+- Rule conditions and assignments are non-cascading: every operand resolves
+  against the original input row. Earlier assignments do not mutate the row
+  seen by later rules or later assignments in the same rule.
+- Assignment precedence is `last_assignment_wins`, independently per target
+  field. Different target fields merge; a later match overrides only an earlier
+  assignment to the same field. `stop_on_match` controls rule evaluation and is
+  separate from assignment precedence.
+- `first_matched_rule` has the only detailed resolved condition trace.
+  `matched_rules` contains lightweight static summaries for all matches, and
+  `last_matched_rule` is its final element. A last matched rule need not supply
+  every effective assigned field.
 
 ## Supported Operators
 
@@ -493,6 +539,10 @@ ends_with
 
 `like` and `not_like` use SQL wildcard semantics in both the Python and Spark
 runtimes.
+
+`in` and `not_in` require a collection-valued right operand, including when the
+operand is a field or custom-function result. They never perform substring
+matching on a scalar string; use `contains` or `not_contains` for that purpose.
 
 Unary operators:
 
@@ -632,7 +682,10 @@ YamlRulesetExporter().export_path(ruleset, "rules_exported.yaml")
 
 The exporter writes explicit rule, condition-group, condition, and assignment
 identifiers so exported YAML can compile back into the same canonical
-dataclasses.
+dataclasses. Tuple literals use the safe application tag
+`!rules_engine/tuple`; the compiler registers only this constructor and does
+not enable Python object loading. Sets, including sets of tuples, retain their
+types and deterministic ordering.
 
 ## Custom Function Registry
 
@@ -646,9 +699,9 @@ jobs still register approved implementations in code, typically by calling
 custom functions during job startup.
 
 For deployment setup, `RulesEngineService.save_standard_function_registry()`
-persists metadata for package standard functions and skips functions that are
-already present. Pass `update_existing=True` only during controlled registry
-metadata upgrades.
+upserts metadata for package standard functions so contracts remain aligned
+with the installed package. Pass `update_existing=False` only when a controlled
+deployment intentionally pins existing registry metadata.
 
 For a notebook-style user guide, see:
 
@@ -658,6 +711,10 @@ notebooks/custom_function_authoring_guide.py
 
 ```python
 from rules_engine import CustomFunctionSpec, FunctionRegistry, register_standard_functions
+
+def score(*, x, y):
+    return x + y
+
 
 registry = register_standard_functions(FunctionRegistry())
 registry.register(
@@ -669,14 +726,23 @@ registry.register(
         allowed_in_assignment_flag=False,
         active_flag=True,
     ),
-    implementation=lambda **kwargs: kwargs["x"] + kwargs["y"],
+    implementation=score,
 )
 ```
+
+Implementations execute on Spark workers. They must be deterministic,
+side-effect-free, and cloudpickle-serializable; prefer importable module-level
+functions and simple immutable configuration. The runtime performs a
+serialization preflight before constructing the UDF, so unsupported captured
+objects fail with a focused validation message rather than a remote worker
+stack trace.
 
 The package includes a reusable `rules_engine.standard_functions` module for
 common rule helpers such as `substring`, `left`, `right`, `trim`, `upper`,
 `lower`, `normalize_whitespace`, `length`, `regex_extract`, `regex_replace`,
-`contains_any`, `default_if_null`, `null_if`, and `to_number`.
+`contains_any`, `default_if_null`, `null_if`, `to_number`, `to_date`,
+`date_add_days`, `date_add_months`, `date_add_years`, `date_diff_days`,
+`month_start`, and `month_end`.
 
 Custom function arguments may be literal values or operand-shaped values. This
 allows common row-derived functions such as:
@@ -694,6 +760,45 @@ right: { literal: BCD }
 null_input_mode: propagate
 null_result_mode: "null"
 ```
+
+### Date and Timestamp Rules
+
+Ordered operators (`gt`, `ge`, `lt`, `le`, `between`, and `not_between`)
+support native Python/Spark date and timestamp values. Comparisons are strict:
+date operands compare only with dates, timestamps compare only with timestamps,
+and timezone-aware timestamps cannot be mixed with naive timestamps. Temporal
+comparisons require `tolerance_abs: 0`; use `to_date` when an explicit
+date conversion is needed.
+
+Standard date functions are deterministic and null-propagating. `to_date`
+accepts dates, timestamps, and ISO `YYYY-MM-DD` strings. Day, month, and year
+offsets must be integral and may be negative. Month and year arithmetic clamps
+to the target month's final day, so January 31 plus one month becomes February
+28 or 29 and February 29 plus one year becomes February 28. `date_diff_days`
+returns `end - start` in calendar days.
+For a timezone-aware Python timestamp, `to_date` returns the calendar date in
+that timestamp's own offset; it does not first convert through the Spark
+session timezone. Convert upstream when a portfolio-wide business timezone is
+required.
+
+```yaml
+left:
+  custom_function:
+    name: date_add_months
+    args:
+      value: { field: funded_date }
+      months: 3
+operator: ge
+right: { field: maturity_date }
+null_input_mode: propagate
+null_result_mode: "null"
+```
+
+Supply volatile facts such as the processing or as-of date as input columns or
+explicit literals. The standard catalog intentionally has no `today()` helper,
+which keeps reruns and historical reprocessing reproducible. Business-day
+arithmetic remains environment-specific because it requires an authoritative
+holiday calendar.
 
 Validation checks:
 
@@ -717,12 +822,48 @@ result_df = spark_runtime.evaluate_dataframe(
 )
 ```
 
+`fail_on_error=True` remains lazy: building `result_df` starts no hidden Spark
+job. A row failure raises during the caller's first materializing action, such
+as `write`, `collect`, or `count`, so clean rows are evaluated once. For
+loan-tape ingestion, a quarantine flow is often more operationally useful:
+
+```python
+from pyspark.sql import functions as F
+
+evaluated = spark_runtime.evaluate_dataframe(
+    input_df,
+    ruleset,
+    fail_on_error=False,
+)
+quarantine_df = evaluated.where(F.col("rules_engine_error").isNotNull())
+clean_df = evaluated.where(F.col("rules_engine_error").isNull())
+
+# Materialize both through the job's governed write/checkpoint strategy, then
+# alert or fail the orchestration layer if quarantine_df is non-empty.
+```
+
+Row errors are compact (`ExceptionType: message`) by default. Set
+`include_error_traceback=True` only for controlled debugging; tracebacks can
+materially increase row and shuffle size.
+
+Numeric comparisons reject `NaN`, positive infinity, and negative infinity as
+row errors. Schema validation cannot detect these data-dependent values. Before
+a fail-fast production run, profile numeric columns referenced by active rules,
+or use a quarantine canary to measure and remediate non-finite inputs.
+
 The Spark runtime appends:
 
 ```text
 rules_engine_matched
 rules_engine_matched_rule_ids
 rules_engine_assign
+rules_engine_first_matched_rule
+rules_engine_first_matched_rule_id
+rules_engine_first_matched_rule_name
+rules_engine_first_matched_rule_explanation
+rules_engine_matched_rules
+rules_engine_last_matched_rule
+rules_engine_assignment_results
 rules_engine_winning_rule
 rules_engine_winning_rule_id
 rules_engine_winning_rule_name
@@ -730,30 +871,59 @@ rules_engine_winning_rule_explanation
 rules_engine_error
 ```
 
-`rules_engine_assign` is a ruleset-derived Spark `STRUCT` containing assignment
-target fields; fields not assigned for a row are null. `rules_engine_winning_rule`
-is a Spark `STRUCT` containing only the first matched rule trace, including
-condition source columns, resolved operand values, comparison result, and final
-pass/fail state.
-`rules_engine_winning_rule_explanation` is an author-facing summary of the
+`rules_engine_assign` is the authoritative, typed ruleset-derived Spark
+`STRUCT`; fields not assigned for a row are null.
+
+`rules_engine_first_matched_rule` is a Spark `STRUCT` containing the only
+detailed resolved condition trace, including source columns, resolved operand
+values, comparison result, and final pass/fail state.
+`rules_engine_first_matched_rule_explanation` is an author-facing summary of the
 passed conditions from the first matched rule, using the same expression syntax
 as `RulesEngineService.describe_rules`. Resolved operand values remain available
-in the nested `rules_engine_winning_rule` trace struct.
+in the nested trace struct. The `rules_engine_winning_rule*` columns are
+deprecated terminology but remain exact backward-compatible aliases of the
+`rules_engine_first_matched_rule*` values.
+
+`rules_engine_matched_rules` is an evaluation-ordered array of lightweight
+summaries with `rule_id`, `rule_name`, `rule_order`, the complete authored
+`human_readable_condition`, `human_readable_assignment`, and ordered
+`assigned_fields`. These descriptions are precomputed once per evaluator, not
+rebuilt per row. `rules_engine_last_matched_rule` is the last summary or null.
+Because the authored descriptions repeat on every matched row, drop
+`rules_engine_matched_rules` before wide production writes when it is not a
+required audit artifact. Persist `rules_engine_matched_rule_ids` and recover
+static text from `RulesEngineService.describe_rules()` instead.
+
+`rules_engine_assignment_results` contains every assignment event, including
+events later overridden. Audit values use trace-safe string rendering while the
+typed value remains in `rules_engine_assign`. Each event records the assignment
+and rule IDs, target, complete author-facing `authored_expression`, original
+`old_value`, resolved `proposed_value`, null-safe `changed`, `effective`, and
+the effective later assignment that overrode it.
+No-match rows return empty `matched_rules` and `assignment_results` arrays.
+
 When multiple rules match and `stop_on_match` is false, `rules_engine_assign`
-contains the merged assignment output from all matched rules, while
-`rules_engine_winning_rule` remains the first matched rule trace.
+uses field-specific `last_assignment_wins`: assignments to different fields are
+merged and a later matching assignment replaces only the same target. The last
+matched rule is therefore not necessarily the effective source for every field.
+
+Evaluation is non-cascading. Every condition and assignment sees the original
+input row; assignments never mutate the row used by later operands. Express a
+dependent calculation as one nested assignment or run explicitly separate
+evaluation phases outside this runtime.
 
 Spark evaluation strategy:
 
 1. Pass the input row into a Python UDF.
 2. Evaluate rule logic and assignments against row-local fields.
-3. Return Spark-native structs
-   for assignment output and the winning-rule trace.
-4. Fail fast if any row-level evaluator error is produced and `fail_on_error`
-   is true.
+3. Return Spark-native structs and arrays for typed assignments, first-match
+   detail, lightweight match summaries, and assignment provenance.
+4. Either raise from the UDF in the caller's materializing action when
+   `fail_on_error` is true, or return compact row errors for quarantine.
 
 The default is `fail_on_error=True`. This prevents row-level evaluator
-exceptions from silently becoming false non-matches.
+exceptions from silently becoming false non-matches without introducing a
+separate full-data validation action.
 
 ## Spark Compatibility Validation
 
@@ -762,14 +932,30 @@ Use `SparkRulesetCompatibilityValidator` before Databricks execution.
 ```python
 from rules_engine import SparkRulesetCompatibilityValidator
 
-spark_validation = SparkRulesetCompatibilityValidator(registry).validate(ruleset)
+spark_validation = SparkRulesetCompatibilityValidator(registry).validate(
+    ruleset,
+    input_df.schema,
+)
 if spark_validation.has_errors():
     raise ValueError(spark_validation.to_text())
 ```
 
-The Spark compatibility validator currently shares the base semantic contract.
-It remains as a public Spark preflight entry point so deployment notebooks can
-continue to validate through one runtime-specific facade.
+The validator accepts a Spark `StructType` or DataFrame. It verifies active
+condition fields, assignment source fields, existing-target compatibility, and
+compatible types across all assignments to the same field. New target fields
+remain supported: non-null literals infer a type, field operands inherit their
+source type, and custom functions use their registered `return_type_hint`.
+A null literal for a new field requires explicit `value_type`; a null literal
+for an existing field inherits that field's type. Incompatible or unresolved
+types are validation errors and never fall back to `StringType`.
+Polymorphic (`any`) functions may assign an existing typed target but require a
+concrete return hint for a new target. Decimal-returning functions are checked
+against the actual target precision and scale per row. Known temporal
+comparisons must use compatible date/timestamp types, and `TimestampType` and
+`TimestampNTZType` are never treated as interchangeable assignments.
+
+`SparkRulesEngineRuntime.evaluate_dataframe()` automatically runs the
+schema-only compatibility gate before it builds the Python UDF.
 
 ## Rules Engine Service
 
@@ -862,6 +1048,14 @@ alongside lifecycle status, effective dates, provenance, content hash, and
 summary counts. Runtime loading reads one published row and reconstructs the
 canonical dataclasses from that payload. This avoids multi-table tree
 reconstruction and keeps publication easier to audit.
+
+Finite `Decimal` literals remain JSON numbers. Native Python `date`,
+`datetime`, tuple, and set values use deterministic extended-JSON envelopes
+inside `payload_json` so publish/load preserves their types, including when
+nested in custom-function arguments. The reserved envelope key is escaped when
+it appears in an ordinary user mapping. Consumers should treat `payload_json`
+as canonical rules-engine content and use the serializer/compiler rather than
+manually decoding these envelopes.
 
 Repository operations are designed for Databricks Unity Catalog and Hive
 metastore-backed Delta tables. The repository checks table existence through
@@ -964,8 +1158,8 @@ This creates:
 
 Use `mode="overwrite"` only for disposable development or test schemas.
 After creating tables, call `service.save_standard_function_registry()` to load
-metadata for package standard functions. The call is rerunnable because existing
-function rows are skipped by default.
+metadata for package standard functions. The call is rerunnable and refreshes
+existing package-owned rows by default.
 
 ### Production YAML Publish Pipeline
 
@@ -1355,7 +1549,10 @@ python -m pytest -q tests
 ```
 
 Run Spark tests in Databricks before relying on Spark execution in production.
-Spark is a core package dependency, so no Spark extra is required.
+Spark is a core package dependency, so no Spark extra is required. Run the
+gated suite on every supported Databricks Runtime line, including Decimal,
+Date, `TimestampType`, `TimestampNTZType` (where available), array/struct,
+custom-function serialization, and both error modes.
 
 ## Packaging And Asset Bundles
 
@@ -1384,33 +1581,46 @@ databricks.yml
 The production wheel includes the `rules_engine` package only. Repository
 utilities under `tools/` are intentionally excluded from the wheel because they
 are migration/support tooling, not runtime dependencies.
-PySpark is an optional package extra because Databricks provides Spark on the
-cluster. Pure-Python compiler, validation, serialization, and runtime usage only
-requires the base package dependencies.
+`pyproject.toml` currently requires PySpark 3.5 or newer. Pin and test the wheel
+against the exact Databricks Runtime lines used in production; in particular,
+do not author `timestamp_ntz` hints unless every target runtime exposes
+`TimestampNTZType`.
 
 The wheel build is constrained by `pyproject.toml` to packages matching
 `rules_engine*`. Generated folders such as `build/`, `dist/`, egg-info, and
 Python caches are ignored by git and are not intended deployment inputs.
+Source artifacts supplied for release review must start at the repository root
+and include `pyproject.toml` and `databricks.yml`; a package-directory-only ZIP
+is not a reproducible build input.
 
 Build the wheel locally:
 
 ```powershell
 python -m pip install build
-python -m build --wheel
+python tools/build_release_wheel.py
 ```
+
+The release builder removes only repository-local `build/`,
+`rules_engine.egg-info/`, and prior `dist/rules_engine-*.whl` outputs before
+building. It then requires exactly one wheel whose filename matches the
+`pyproject.toml` version, preventing stale deleted modules or mislabeled wheels
+from entering a bundle deployment.
 
 Validate and deploy the bundle from the repo root after configuring Databricks
 CLI authentication:
 
 ```powershell
-databricks bundle validate --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
-databricks bundle deploy --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>"
+databricks bundle validate --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>"
+databricks bundle deploy --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>"
+databricks bundle run --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>" rules_engine_system_tests
 ```
 
-Run the Databricks notebook source `notebooks/rules_engine_system_tests.py`
-against a disposable schema as the promotion/system-validation gate. Keep
-`docs/rules_engine_system_test_uat_plan.md` synchronized with the notebook when
-adding, removing, or changing system-test coverage.
+The bundle job installs the exact versioned wheel plus pytest on the supplied
+existing cluster, then runs `notebooks/rules_engine_system_tests.py` with live
+Spark tests enabled. `system_test_schema` must be disposable and must not name a
+production metadata schema. Keep `docs/rules_engine_system_test_uat_plan.md`
+synchronized with the notebook when adding, removing, or changing system-test
+coverage.
 
 Use `notebooks/rules_engine_serverless_performance.py` for cache-free
 Databricks serverless benchmarks. It materializes every timed case to Delta and
@@ -1425,7 +1635,7 @@ run pytest
 build wheel
 databricks bundle validate
 databricks bundle deploy
-run notebooks/rules_engine_system_tests.py in Databricks
+databricks bundle run rules_engine_system_tests
 ```
 
 Production deployment should use a service principal or your organization's
@@ -1439,11 +1649,13 @@ Recommended local workflow:
 2. Run compile/validator tests.
 3. Run serializer/exporter tests.
 4. Run Spark worker-evaluator tests.
-5. Run default test suite.
-6. Run Spark tests in Databricks or Spark-enabled CI.
-7. Review generated Delta metadata rows from Databricks validation.
-8. Run the serverless performance notebook for runtime-sensitive changes.
-9. Promote package artifact or source to the target environment.
+5. Run the default test suite.
+6. Commit the reviewed tree and tag it with the package version.
+7. Build exactly one versioned release wheel from that clean commit.
+8. Run Spark tests in Databricks or Spark-enabled CI.
+9. Review generated Delta metadata rows from Databricks validation.
+10. Run the serverless performance notebook for runtime-sensitive changes.
+11. Promote the hash-identified package artifact to the target environment.
 
 Recommended Databricks workflow:
 
@@ -1497,8 +1709,8 @@ Common causes:
 - unsupported key such as `assignments` instead of `assign`,
 - unsupported operand key `aggregate`; precompute the value upstream and
   reference it with `field`,
-- missing `null_input_mode`,
-- missing `null_result_mode`,
+- an explicit null mode that is empty or not a supported string (omitted modes
+  use the documented defaults),
 - malformed condition group with more than one logical operator.
 
 ### Validation Fails
@@ -1513,15 +1725,19 @@ Validation issues have stable `check_name` values for programmatic filtering.
 
 ### Spark Compatibility Fails
 
-Use `SparkRulesetCompatibilityValidator` output. It reports the same base
-semantic validation issues through the Spark runtime facade.
+Use `SparkRulesetCompatibilityValidator(rules_registry).validate(ruleset,
+input_df.schema)` and inspect `ValidationResult.to_text()`. Missing active
+fields, incompatible existing targets, unresolved new target types, and
+cross-rule type conflicts must be corrected before evaluation.
 
 ### Spark Evaluation Raises Row-Level Errors
 
-This is expected when `fail_on_error=True`. Inspect the first surfaced error,
-fix the ruleset or input schema, then rerun. Do not disable fail-fast behavior
-for regulated production workflows unless downstream monitoring explicitly
-handles `rules_engine_error`.
+This is expected during the caller's materializing Spark action when
+`fail_on_error=True`. Inspect the worker error, fix the ruleset or input, then
+rerun. For governed tape-cleaning pipelines, `fail_on_error=False` is supported
+when the job writes `rules_engine_error` rows to quarantine, verifies that
+quarantine output, and applies an explicit orchestration threshold. Full
+tracebacks are opt-in through `include_error_traceback=True`.
 
 ### Published Ruleset Cannot Be Loaded
 
@@ -1554,6 +1770,49 @@ service.retire("<ruleset_id>", "<version>", retired_by="operator")
 Published and retired `(ruleset_name, version)` pairs are immutable. Increment
 the version before publishing a replacement under the same ruleset name.
 
+## Migration Notes For 0.2.0
+
+The package version is `0.2.0`. Runtime output changes are additive, but
+validation and generated metadata identity are compatibility-sensitive for a
+pre-1.0 package.
+
+- Existing persisted/exported assignments already contain explicit IDs and
+  continue to load unchanged. Do not rewrite immutable published payloads.
+- Recompiling shorthand or list entries without explicit IDs changes generated
+  IDs from position-based `assignment:<rule_id>:<position>` to stable
+  `assignment:<rule_id>:<target_field>`. Canonical payload JSON and
+  `content_hash` can therefore change even when assignment behavior does not.
+- Recompiling YAML with untyped fractional literals now records exact Decimal
+  semantics instead of binary floats. This can change canonical payload JSON,
+  inferred Spark assignment types, and `content_hash`; publish it as a reviewed
+  new ruleset version rather than rewriting immutable metadata.
+- Inventory older `payload_json` rows containing quoted numeric-looking
+  literals before migration. Earlier dataclass-authored Decimal values could be
+  stored as strings and reload as `StringType`, especially for new assignment
+  targets. Treat matches as review candidates—not automatic conversions,
+  because account identifiers may legitimately be numeric strings—and
+  re-publish confirmed Decimal rules from their source YAML.
+- `fail_on_error=True` no longer materializes the DataFrame inside
+  `evaluate_dataframe()`. Row failures now surface during the caller's first
+  Spark action, eliminating the former hidden scan/recomputation cost. Jobs
+  that previously relied on the method call itself as an action must add an
+  explicit write, count, or collect as appropriate.
+- Before publishing a recompiled version, review duplicate assignment IDs
+  across rules, duplicate targets within a rule, and Spark schema/type errors.
+- Consumers may adopt the new columns incrementally. Existing
+  `winning_rule*`, `matched`, `matched_rule_ids`, typed `assign`, `error`,
+  `column_prefix`, `fail_on_error`, and `stop_on_match` contracts remain.
+- Each `assignment_results` event now includes an additive
+  `authored_expression` field such as
+  `review_date = date_add_years(value=funded_date, years=1)`.
+- Existing Delta output tables that persist the nested `assignment_results`
+  struct need an explicit schema-evolution step before the first 0.2.0 write;
+  validate this in a cloned or disposable table rather than relying on an
+  implicit production `mergeSchema`.
+- Install 0.2.0 only on a runtime that already satisfies the package's Python
+  and PySpark requirements. Do not let pip replace the Databricks-provided
+  PySpark distribution to resolve an incompatible cluster runtime.
+
 ## Known Limitations
 
 - v1 allows multiple published versions per `ruleset_name`, but callers must
@@ -1566,8 +1825,21 @@ the version before publishing a replacement under the same ruleset name.
 - v1 assumes `spark.sql.parser.escapedStringLiterals=false`, the modern Spark
   default.
 - Spark runtime uses a Python UDF for final rule evaluation.
-- Spark runtime emits assignment output and the winning-rule trace as Spark
-  structs. It does not emit all-rule trace payloads for every evaluated row.
+- The UDF receives only required source and assignment-target columns, then
+  converts that pruned struct with `Row.asDict(recursive=True)`. Extremely wide
+  required nested structs still carry recursive Python conversion cost.
+- Pure losing rules use an allocation-light match path. The first matched pure
+  rule is evaluated once more to build its detailed trace; this deliberately
+  avoids allocating trace objects for every earlier losing rule. Custom
+  functions are never reevaluated.
+- Condition groups intentionally evaluate every active condition until a
+  matching rule with `stop_on_match` ends rule traversal. This preserves
+  observable data errors in later conditions; do not rely on boolean
+  short-circuiting to hide invalid inputs.
+- Spark runtime emits typed assignment output, one detailed first-match trace,
+  lightweight summaries for all matches, and per-assignment provenance. It
+  intentionally does not emit detailed resolved condition traces for every
+  matched rule.
 - Spark runtime does not yet compile every row predicate into native Spark
   expressions.
 - Aggregate operands are not supported. Precompute aggregate facts upstream in
@@ -1575,7 +1847,7 @@ the version before publishing a replacement under the same ruleset name.
 - `like` and `not_like` support SQL `%` and `_` wildcards. Escape-character
   semantics for literal `%` or `_` are not part of v1.
 - Custom function implementations must be available to Spark workers and must
-  be serializable by Spark's Python UDF machinery. Prefer named module-level
-  functions over lambdas.
+  be deterministic, side-effect-free, and serializable by Spark's Python UDF
+  machinery. Prefer named module-level functions over lambdas.
 - Utilities under `tools/`, notebooks, and sample `rule_sets/` are not included
   in the production wheel.

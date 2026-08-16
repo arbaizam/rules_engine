@@ -1,4 +1,20 @@
 # Databricks notebook source
+def _job_parameter(name):
+    """Return a Databricks job parameter when this notebook runs as a task."""
+    try:
+        return str(dbutils.widgets.get(name)).strip()
+    except Exception:
+        return None
+
+
+SCHEMA = globals().get("SCHEMA") or _job_parameter("SCHEMA")
+RULES_ENGINE_RUN_SPARK_TESTS = (
+    globals().get("RULES_ENGINE_RUN_SPARK_TESTS")
+    or _job_parameter("RULES_ENGINE_RUN_SPARK_TESTS")
+    or "1"
+)
+
+# COMMAND ----------
 print("ST-001: Setup notebook creates the target schema before table creation")
 print("-" * 80)
 print("Area: Deployment setup")
@@ -170,12 +186,12 @@ assert not missing, f"Missing standard functions: {missing}"
 print(f"PASS: {len(expected)} standard functions are registered.")
 
 # COMMAND ----------
-print("ST-007: Standard function registration is rerunnable and skips existing functions")
+print("ST-007: Standard function registration is rerunnable and refreshes package metadata")
 print("-" * 80)
 print("Area: Function registry")
 print("Priority: High")
 print("Owner Role: Engineering")
-print("Expected Result: Second run succeeds and does not overwrite existing rows. Row count remains stable and existing metadata is preserved.")
+print("Expected Result: Both runs succeed, preserve row count, and align package-owned versions with the installed catalog.")
 print("")
 from rules_engine import RulesEngineService
 
@@ -185,22 +201,36 @@ before = spark.table(service.table_names.function_registry).count()
 service.save_standard_function_registry()
 service.save_standard_function_registry()
 after = spark.table(service.table_names.function_registry).count()
+expected_versions = {
+    row.function_name: row.version
+    for row in standard_function_rows()
+}
+actual_versions = {
+    row["function_name"]: row["version"]
+    for row in spark.table(service.table_names.function_registry)
+    .select("function_name", "version")
+    .collect()
+    if row["function_name"] in expected_versions
+}
 
 assert after == before, f"Expected rerunnable standard registration to preserve row count. before={before}, after={after}"
-print("PASS: Standard function registration is rerunnable and skips existing functions.")
+assert actual_versions == expected_versions, f"Standard function versions differ. expected={expected_versions}, actual={actual_versions}"
+print("PASS: Standard function registration is rerunnable and refreshes package metadata.")
 
 # COMMAND ----------
-print("ST-008: Explicit standard function metadata refresh can update existing rows")
+print("ST-008: Explicit standard function preservation mode avoids overwrites")
 print("-" * 80)
 print("Area: Function registry")
 print("Priority: Medium")
 print("Owner Role: Engineering")
-print("Expected Result: Existing standard function rows are upserted without duplicates. Metadata remains valid after refresh.")
+print("Expected Result: Existing rows are preserved and no duplicate function names are inserted.")
 print("")
 from rules_engine import RulesEngineService
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-service.save_standard_function_registry(update_existing=True)
+before = spark.table(service.table_names.function_registry).count()
+service.save_standard_function_registry(update_existing=False)
+after = spark.table(service.table_names.function_registry).count()
 
 duplicates = (
     spark.table(service.table_names.function_registry)
@@ -210,7 +240,8 @@ duplicates = (
     .collect()
 )
 assert not duplicates, f"Found duplicate function rows: {duplicates}"
-print("PASS: Explicit standard function metadata refresh completed without duplicates.")
+assert after == before, f"Preservation mode changed row count. before={before}, after={after}"
+print("PASS: Explicit preservation mode completed without overwrites or duplicates.")
 
 # COMMAND ----------
 print("ST-009: Runtime in-memory registry contains executable standard implementations")

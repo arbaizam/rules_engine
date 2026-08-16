@@ -13,7 +13,10 @@ from rules_engine.models import Ruleset
 from rules_engine.normalizer import RulesetNormalizer
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 from rules_engine.serializer import DeltaRowSerializer
-from rules_engine.standard_functions import register_standard_functions, standard_function_rows
+from rules_engine.standard_functions import (
+    register_standard_functions,
+    standard_function_rows,
+)
 from rules_engine.validator import RulesetValidator
 
 _LAZY_EXPORTS = {

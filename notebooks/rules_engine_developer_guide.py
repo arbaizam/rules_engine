@@ -264,8 +264,8 @@ input_rows
 # MAGIC %md
 # MAGIC ## 6. Spark Compatibility Preflight
 # MAGIC
-# MAGIC The Spark compatibility validator runs the semantic contract through the
-# MAGIC Spark runtime facade.
+# MAGIC The Spark compatibility validator runs the semantic contract and checks
+# MAGIC active field references and assignment types against an incoming schema.
 # MAGIC
 # MAGIC Use it before publishing metadata intended for Databricks execution.
 # MAGIC
@@ -281,7 +281,8 @@ input_rows
 # COMMAND ----------
 
 spark_validation = SparkRulesetCompatibilityValidator(FunctionRegistry()).validate(
-    normalized_ruleset
+    normalized_ruleset,
+    spark.createDataFrame(input_rows).schema,
 )
 print(spark_validation.to_text())
 
@@ -382,8 +383,9 @@ display(spark.table(table_names.ruleset_versions))
 # MAGIC ## 9. Load Published Metadata And Evaluate A Spark DataFrame
 # MAGIC
 # MAGIC Runtime execution should load published metadata from the repository.
-# MAGIC `fail_on_error=True` is the default and should remain enabled for regulated
-# MAGIC workflows unless downstream controls explicitly inspect `rules_engine_error`.
+# MAGIC `fail_on_error=True` is the default. Tape-cleaning workflows may use
+# MAGIC `fail_on_error=False` only when they durably quarantine and monitor every
+# MAGIC row with `rules_engine_error`.
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
@@ -398,8 +400,9 @@ display(spark.table(table_names.ruleset_versions))
 # MAGIC - `load_published()` reads only `status = published` metadata.
 # MAGIC - Any aggregate facts must already be present as input columns.
 # MAGIC - A Python UDF evaluates final condition and assignment logic per row.
-# MAGIC - `fail_on_error=True` performs an error check and raises if any row has
-# MAGIC   `rules_engine_error`.
+# MAGIC - Building `result_df` is lazy and starts no hidden error-check action.
+# MAGIC - With `fail_on_error=True`, a row error raises from the UDF during the
+# MAGIC   materializing `display` action below.
 # MAGIC
 # MAGIC For this guide data, rows 1 and 2 should match. Rows 3 and 4 should not.
 # MAGIC This cell does not modify metadata or write result rows to Delta.
@@ -426,13 +429,21 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_matched`
 # MAGIC - `rules_engine_matched_rule_ids`
 # MAGIC - `rules_engine_assign`
+# MAGIC - `rules_engine_first_matched_rule`
+# MAGIC - `rules_engine_first_matched_rule_id`
+# MAGIC - `rules_engine_first_matched_rule_name`
+# MAGIC - `rules_engine_first_matched_rule_explanation`
+# MAGIC - `rules_engine_matched_rules`
+# MAGIC - `rules_engine_last_matched_rule`
+# MAGIC - `rules_engine_assignment_results`
 # MAGIC - `rules_engine_winning_rule`
 # MAGIC - `rules_engine_winning_rule_id`
 # MAGIC - `rules_engine_winning_rule_name`
 # MAGIC - `rules_engine_winning_rule_explanation`
 # MAGIC - `rules_engine_error`
 # MAGIC
-# MAGIC Assignment output and the winning-rule trace are Spark structs.
+# MAGIC Assignment output, first-match detail, lightweight match summaries, and
+# MAGIC per-assignment provenance are Spark-native structs and arrays.
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
@@ -447,11 +458,16 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_matched_rule_ids`: ordered list of matched rule IDs.
 # MAGIC - `rules_engine_assign`: struct containing assignments from matched rules,
 # MAGIC   or null when no rule matched.
-# MAGIC - `rules_engine_winning_rule`: struct for the first matched rule, including
+# MAGIC - `rules_engine_first_matched_rule`: the detailed first-match trace, including
 # MAGIC   condition-level source columns, evaluated values, and pass/fail state.
-# MAGIC - `rules_engine_winning_rule_id`: ID of the first matched rule.
-# MAGIC - `rules_engine_winning_rule_name`: name of the first matched rule.
-# MAGIC - `rules_engine_winning_rule_explanation`: readable summary of the passed
+# MAGIC - `rules_engine_matched_rules`: ordered lightweight summaries of every match.
+# MAGIC - `rules_engine_last_matched_rule`: final lightweight summary, or null.
+# MAGIC - `rules_engine_assignment_results`: every proposed assignment plus its
+# MAGIC   authored expression, original value, changed/effective flags, and override
+# MAGIC   provenance.
+# MAGIC - `rules_engine_winning_rule*`: deprecated aliases of the corresponding
+# MAGIC   `rules_engine_first_matched_rule*` columns.
+# MAGIC - `rules_engine_first_matched_rule_explanation`: readable summary of the passed
 # MAGIC   conditions from the first matched rule.
 # MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
 # MAGIC
@@ -467,7 +483,8 @@ for row in rows:
         row["rules_engine_matched"],
         row["rules_engine_matched_rule_ids"],
         row["rules_engine_assign"],
-        row["rules_engine_winning_rule_explanation"],
+        row["rules_engine_first_matched_rule_explanation"],
+        row["rules_engine_assignment_results"],
         row["rules_engine_error"],
     )
 
@@ -665,8 +682,9 @@ translated_ruleset
 # MAGIC - compare translated reconciliation output against known-good results,
 # MAGIC - review metadata table permissions and retention,
 # MAGIC - define package deployment and versioning controls,
-# MAGIC - keep `fail_on_error=True` unless there is explicit downstream error
-# MAGIC   handling.
+# MAGIC - use `fail_on_error=True`, or write and monitor a governed quarantine
+# MAGIC   when tape-cleaning operations require `fail_on_error=False`,
+# MAGIC - keep `include_error_traceback=False` outside controlled debugging,
 # MAGIC
 # MAGIC Recommended promotion path:
 # MAGIC

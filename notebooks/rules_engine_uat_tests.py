@@ -666,7 +666,7 @@ print("-" * 80)
 print("Area: Operational workflow")
 print("Priority: High")
 print("Owner Role: UAT Tester")
-print("Expected Result: Notebook succeeds and does not duplicate or overwrite standard function metadata unexpectedly.")
+print("Expected Result: Notebook succeeds, refreshes package metadata, and creates no duplicate rows.")
 print("")
 
 from rules_engine import RulesEngineService
@@ -677,7 +677,7 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 service.create_tables(mode="ignore")
 before = spark.table(service.table_names.function_registry).where("active_flag = true").count()
-service.save_standard_function_registry(update_existing=False)
+service.save_standard_function_registry()
 after = spark.table(service.table_names.function_registry).where("active_flag = true").count()
 
 duplicates = spark.sql(f"""

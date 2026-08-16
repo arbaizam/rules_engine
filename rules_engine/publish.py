@@ -8,11 +8,10 @@ import logging
 
 from rules_engine.enums import RulesetStatus
 from rules_engine.exceptions import ValidationFailedError
+from rules_engine.models import Ruleset
 from rules_engine.normalizer import RulesetNormalizer
 from rules_engine.repository import RulesetRepository
 from rules_engine.validator import RulesetValidator
-from rules_engine.models import Ruleset
-
 
 logger = logging.getLogger(__name__)
 

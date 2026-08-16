@@ -8,14 +8,15 @@ The functions are plain Python callables and can be registered into a
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+import calendar
 import re
+from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 
-
-STANDARD_FUNCTION_VERSION = "1.0.0"
+STANDARD_FUNCTION_VERSION = "1.1.0"
 
 
 def substring(value: Any, start: int, length: int | None = None) -> str | None:
@@ -147,6 +148,103 @@ def to_number(value: Any) -> Decimal | None:
         return Decimal(text)
     except (InvalidOperation, ValueError) as exc:
         raise ValueError(f"Cannot convert value to number: {value!r}") from exc
+
+
+def to_date(value: Any) -> date | None:
+    """Return an ISO date value, dropping the time from a datetime."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) is None:
+            raise ValueError(
+                f"Cannot convert value to ISO date (YYYY-MM-DD): {value!r}"
+            )
+        try:
+            return date.fromisoformat(text)
+        except ValueError as exc:
+            raise ValueError(
+                f"Cannot convert value to ISO date (YYYY-MM-DD): {value!r}"
+            ) from exc
+    raise ValueError(f"Cannot convert value to date: {value!r}")
+
+
+def date_add_days(value: Any, days: Any) -> date | None:
+    """Add an integral number of calendar days to a date."""
+    parsed = to_date(value)
+    if parsed is None:
+        return None
+    return parsed + timedelta(days=_integer_offset(days, "days"))
+
+
+def date_add_months(value: Any, months: Any) -> date | None:
+    """Add calendar months, clamping the day to the target month's end."""
+    parsed = to_date(value)
+    if parsed is None:
+        return None
+    offset = _integer_offset(months, "months")
+    zero_based_month = parsed.year * 12 + parsed.month - 1 + offset
+    target_year, target_month_index = divmod(zero_based_month, 12)
+    if not 1 <= target_year <= 9999:
+        raise ValueError(
+            f"Adding {offset} months to {parsed.isoformat()} exceeds the date range."
+        )
+    target_month = target_month_index + 1
+    target_day = min(
+        parsed.day,
+        calendar.monthrange(target_year, target_month)[1],
+    )
+    return date(target_year, target_month, target_day)
+
+
+def date_add_years(value: Any, years: Any) -> date | None:
+    """Add calendar years using the same month-end clamping as date_add_months."""
+    parsed = to_date(value)
+    if parsed is None:
+        return None
+    return date_add_months(parsed, _integer_offset(years, "years") * 12)
+
+
+def date_diff_days(start: Any, end: Any) -> int | None:
+    """Return end minus start in calendar days."""
+    parsed_start = to_date(start)
+    parsed_end = to_date(end)
+    if parsed_start is None or parsed_end is None:
+        return None
+    return (parsed_end - parsed_start).days
+
+
+def month_start(value: Any) -> date | None:
+    """Return the first day of a date's month."""
+    parsed = to_date(value)
+    return None if parsed is None else parsed.replace(day=1)
+
+
+def month_end(value: Any) -> date | None:
+    """Return the final day of a date's month."""
+    parsed = to_date(value)
+    if parsed is None:
+        return None
+    return parsed.replace(day=calendar.monthrange(parsed.year, parsed.month)[1])
+
+
+def _integer_offset(value: Any, label: str) -> int:
+    """Return a lossless integral date offset."""
+    if isinstance(value, bool):
+        raise TypeError(f"{label} must be an integer, not a boolean.")
+    try:
+        numeric = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"{label} must be an integer: {value!r}") from exc
+    if not numeric.is_finite() or numeric != numeric.to_integral_value():
+        raise ValueError(f"{label} must be an integer: {value!r}")
+    return int(numeric)
 
 
 STANDARD_FUNCTION_SPECS = (
@@ -286,8 +384,78 @@ STANDARD_FUNCTION_SPECS = (
         arg_names=("value",),
         allowed_in_condition_flag=True,
         allowed_in_assignment_flag=True,
-        return_type_hint="number",
+        return_type_hint="decimal",
         description="Convert text or numeric input to Decimal.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="to_date",
+        implementation_reference="rules_engine.standard_functions.to_date",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="date",
+        description="Convert an ISO YYYY-MM-DD value to a date.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="date_add_days",
+        implementation_reference="rules_engine.standard_functions.date_add_days",
+        arg_names=("value", "days"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="date",
+        description="Add integral calendar days to a date.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="date_add_months",
+        implementation_reference="rules_engine.standard_functions.date_add_months",
+        arg_names=("value", "months"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="date",
+        description="Add calendar months with month-end clamping.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="date_add_years",
+        implementation_reference="rules_engine.standard_functions.date_add_years",
+        arg_names=("value", "years"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="date",
+        description="Add calendar years with leap-day clamping.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="date_diff_days",
+        implementation_reference="rules_engine.standard_functions.date_diff_days",
+        arg_names=("start", "end"),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="integer",
+        description="Return end minus start in calendar days.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="month_start",
+        implementation_reference="rules_engine.standard_functions.month_start",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="date",
+        description="Return the first day of a date's month.",
+        version=STANDARD_FUNCTION_VERSION,
+    ),
+    CustomFunctionSpec(
+        function_name="month_end",
+        implementation_reference="rules_engine.standard_functions.month_end",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=True,
+        return_type_hint="date",
+        description="Return the final day of a date's month.",
         version=STANDARD_FUNCTION_VERSION,
     ),
 )
@@ -326,6 +494,25 @@ STANDARD_FUNCTION_IMPLEMENTATIONS = {
     ),
     "null_if": lambda **kwargs: null_if(kwargs["value"], kwargs["compare_to"]),
     "to_number": lambda **kwargs: to_number(kwargs["value"]),
+    "to_date": lambda **kwargs: to_date(kwargs["value"]),
+    "date_add_days": lambda **kwargs: date_add_days(
+        kwargs["value"],
+        kwargs["days"],
+    ),
+    "date_add_months": lambda **kwargs: date_add_months(
+        kwargs["value"],
+        kwargs["months"],
+    ),
+    "date_add_years": lambda **kwargs: date_add_years(
+        kwargs["value"],
+        kwargs["years"],
+    ),
+    "date_diff_days": lambda **kwargs: date_diff_days(
+        kwargs["start"],
+        kwargs["end"],
+    ),
+    "month_start": lambda **kwargs: month_start(kwargs["value"]),
+    "month_end": lambda **kwargs: month_end(kwargs["value"]),
 }
 
 

@@ -1,3 +1,6 @@
+from dataclasses import fields
+
+from rules_engine.models import FunctionRegistryRow
 from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository
 
 
@@ -52,6 +55,15 @@ def test_ruleset_version_schema_contains_payload_provenance_and_hash_fields():
         "retired_by",
         "retired_at",
     } <= fields
+
+
+def test_function_registry_model_and_table_field_names_stay_aligned():
+    """Registry model renames cannot silently drift from the Delta schema."""
+    model_fields = {item.name for item in fields(FunctionRegistryRow)}
+    model_fields.remove("arg_contract_payload")
+    model_fields.add("arg_contract_payload_json")
+
+    assert model_fields == _field_names(_repository().function_registry_schema)
 
 
 def test_table_names_can_be_built_from_schema():

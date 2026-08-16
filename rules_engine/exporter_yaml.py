@@ -28,6 +28,35 @@ from rules_engine.models import (
 )
 
 
+class _DecimalSafeDumper(yaml.SafeDumper):
+    """Safe dumper that emits Decimal values as YAML numeric scalars."""
+
+
+def _represent_decimal(dumper: _DecimalSafeDumper, value: Decimal):
+    return dumper.represent_scalar(
+        "tag:yaml.org,2002:float",
+        str(value),
+    )
+
+
+def _represent_set(dumper: _DecimalSafeDumper, value: set[Any]):
+    """Emit sets deterministically while retaining the YAML set type."""
+    return dumper.represent_mapping(
+        "tag:yaml.org,2002:set",
+        [(item, None) for item in sorted(value, key=repr)],
+    )
+
+
+def _represent_tuple(dumper: _DecimalSafeDumper, value: tuple[Any, ...]):
+    """Emit a safe application tag so tuple literals round-trip exactly."""
+    return dumper.represent_sequence("!rules_engine/tuple", value)
+
+
+_DecimalSafeDumper.add_representer(Decimal, _represent_decimal)
+_DecimalSafeDumper.add_representer(set, _represent_set)
+_DecimalSafeDumper.add_representer(tuple, _represent_tuple)
+
+
 class YamlRulesetExporter:
     """
     Export ruleset dataclasses into canonical YAML authoring payloads.
@@ -45,7 +74,8 @@ class YamlRulesetExporter:
         Returns
         -------
         dict[str, Any]
-            Canonical authoring payload suitable for ``yaml.safe_dump``.
+            Canonical authoring payload used by the Decimal-aware
+            :meth:`export_text` renderer.
         """
         payload: dict[str, Any] = {
             "ruleset_id": ruleset.ruleset_id,
@@ -65,8 +95,9 @@ class YamlRulesetExporter:
         """
         Render a ruleset model as YAML text.
         """
-        return yaml.safe_dump(
+        return yaml.dump(
             self.export_payload(ruleset),
+            Dumper=_DecimalSafeDumper,
             sort_keys=False,
             allow_unicode=True,
         )
@@ -117,15 +148,15 @@ class YamlRulesetExporter:
             "condition_id": condition.condition_id,
             "left": self._export_operand(condition.left),
             "operator": condition.operator.value,
-            "tolerance_abs": self._export_decimal(condition.tolerance_abs),
-            "null_input_mode": condition.null_input_mode.value,
-            "null_result_mode": condition.null_result_mode.value,
-            "active_flag": condition.active_flag,
         }
         if condition.right is not None:
             payload["right"] = self._export_operand(condition.right)
+        payload["tolerance_abs"] = self._export_decimal(condition.tolerance_abs)
+        payload["null_input_mode"] = condition.null_input_mode.value
+        payload["null_result_mode"] = condition.null_result_mode.value
         if condition.null_default_value is not None:
             payload["null_default_value"] = self._export_value(condition.null_default_value)
+        payload["active_flag"] = condition.active_flag
         return payload
 
     def _export_assignment(self, assignment: Assignment) -> dict[str, Any]:
@@ -172,11 +203,13 @@ class YamlRulesetExporter:
         Recursively convert Python values into YAML-safe scalar/list/dict values.
         """
         if isinstance(value, Decimal):
-            return self._export_decimal(value)
+            return value
         if isinstance(value, tuple):
-            return [self._export_value(item) for item in value]
+            return tuple(self._export_value(item) for item in value)
         if isinstance(value, list):
             return [self._export_value(item) for item in value]
+        if isinstance(value, set):
+            return {self._export_value(item) for item in value}
         if isinstance(value, dict):
             return {
                 str(key): self._export_value(item)

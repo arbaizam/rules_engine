@@ -1,4 +1,8 @@
+from dataclasses import replace
+from decimal import Decimal
+
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.models import LiteralOperand
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 from rules_engine.validator import RulesetValidator
 
@@ -103,6 +107,24 @@ def test_null_result_mode_default_without_default_fails_validation():
 
     assert any(issue.check_name == "NULL_DEFAULT_REQUIRED" for issue in result.issues)
     assert result.passed is False
+
+
+def test_null_result_mode_default_rejects_string_boolean():
+    """Quoted YAML booleans must not become truthy defaults at runtime."""
+    result = _validate_condition(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "default",
+            "null_default_value": "false",
+        }
+    )
+
+    assert "NULL_DEFAULT_BOOLEAN_REQUIRED" in {
+        issue.check_name for issue in result.issues
+    }
 
 
 def test_valid_string_operators_validate():
@@ -244,3 +266,240 @@ def test_duplicate_condition_group_ids_fail_validation():
     result = RulesetValidator().validate(ruleset)
 
     assert any(issue.check_name == "CONDITION_GROUP_ID_DUPLICATE" for issue in result.issues)
+
+
+def test_duplicate_assignment_target_within_rule_fails_validation():
+    """One rule cannot use list order to resolve duplicate target fields."""
+    payload = _base_payload(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    payload["rules"][0]["assign"] = [
+        {
+            "assignment_id": "first",
+            "target_field": "bucket",
+            "value": {"literal": "A"},
+        },
+        {
+            "assignment_id": "second",
+            "target_field": "bucket",
+            "value": {"literal": "A"},
+        },
+    ]
+
+    result = RulesetValidator().validate(
+        YamlRulesetCompiler().compile_payload(payload)
+    )
+    issue = next(
+        item
+        for item in result.issues
+        if item.check_name == "ASSIGNMENT_TARGET_DUPLICATE_WITHIN_RULE"
+    )
+
+    assert issue.details == {
+        "rule_id": "r1",
+        "target_field": "bucket",
+        "assignment_ids": ["first", "second"],
+    }
+
+
+def test_duplicate_assignment_id_across_rules_fails_validation():
+    """Assignment identity is unique across one ruleset version."""
+    payload = _base_payload(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    first_rule = payload["rules"][0]
+    first_rule["assign"] = [
+        {
+            "assignment_id": "shared",
+            "target_field": "bucket",
+            "value": {"literal": "A"},
+        }
+    ]
+    payload["rules"].append(
+        {
+            **first_rule,
+            "rule_id": "r2",
+            "rule_name": "Rule 2",
+            "rule_order": 2,
+            "assign": [
+                {
+                    "assignment_id": "shared",
+                    "target_field": "other",
+                    "value": {"literal": "B"},
+                }
+            ],
+        }
+    )
+
+    result = RulesetValidator().validate(
+        YamlRulesetCompiler().compile_payload(payload)
+    )
+    issue = next(
+        item
+        for item in result.issues
+        if item.check_name == "ASSIGNMENT_ID_DUPLICATE"
+    )
+
+    assert issue.details["ruleset_id"] == "rs1"
+    assert issue.details["version"] == "1"
+    assert issue.details["rule_ids"] == ["r1", "r2"]
+
+
+def test_duplicate_assignment_id_within_rule_has_clear_location():
+    """A same-rule duplicate does not claim two differently named rules."""
+    payload = _base_payload(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    payload["rules"][0]["assign"] = [
+        {
+            "assignment_id": "shared",
+            "target_field": "bucket",
+            "value": {"literal": "A"},
+        },
+        {
+            "assignment_id": "shared",
+            "target_field": "other",
+            "value": {"literal": "B"},
+        },
+    ]
+
+    result = RulesetValidator().validate(
+        YamlRulesetCompiler().compile_payload(payload)
+    )
+    issue = next(
+        item
+        for item in result.issues
+        if item.check_name == "ASSIGNMENT_ID_DUPLICATE"
+    )
+
+    assert "more than once in rule r1" in issue.message
+
+
+def test_assignment_id_may_be_reused_when_versions_are_validated_independently():
+    """The uniqueness boundary does not leak across ruleset versions."""
+    payload = _base_payload(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    payload["rules"][0]["assign"] = [
+        {
+            "assignment_id": "stable",
+            "target_field": "bucket",
+            "value": {"literal": "A"},
+        }
+    ]
+    next_version = {**payload, "version": "2"}
+
+    assert RulesetValidator().validate(
+        YamlRulesetCompiler().compile_payload(payload)
+    ).passed
+    assert RulesetValidator().validate(
+        YamlRulesetCompiler().compile_payload(next_version)
+    ).passed
+
+
+def test_code_authored_nonfinite_decimal_literal_fails_validation():
+    """Dataclass authoring cannot bypass the compiler's finite-number guard."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "rate"},
+                "operator": "eq",
+                "right": {"literal": 1},
+            }
+        )
+    )
+    rule = ruleset.rules[0]
+    group = rule.root_group
+    bad_condition = replace(
+        group.conditions[0],
+        right=LiteralOperand(Decimal("NaN")),
+    )
+    bad_ruleset = replace(
+        ruleset,
+        rules=(replace(rule, root_group=replace(group, conditions=(bad_condition,))),),
+    )
+
+    result = RulesetValidator().validate(bad_ruleset)
+
+    assert "LITERAL_DECIMAL_FINITE_REQUIRED" in {
+        issue.check_name for issue in result.issues
+    }
+
+
+def test_code_authored_nonfinite_tolerance_fails_validation_cleanly():
+    """NaN tolerances produce a validation issue instead of Decimal failure."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "rate"},
+                "operator": "eq",
+                "right": {"literal": 1},
+            }
+        )
+    )
+    rule = ruleset.rules[0]
+    group = rule.root_group
+    bad_condition = replace(group.conditions[0], tolerance_abs=Decimal("NaN"))
+    bad_ruleset = replace(
+        ruleset,
+        rules=(replace(rule, root_group=replace(group, conditions=(bad_condition,))),),
+    )
+
+    result = RulesetValidator().validate(bad_ruleset)
+
+    assert "TOLERANCE_FINITE_REQUIRED" in {
+        issue.check_name for issue in result.issues
+    }
+
+
+def test_code_authored_nonfinite_float_literal_fails_validation():
+    """Dataclass authoring cannot bypass finite floating-point validation."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "rate"},
+                "operator": "eq",
+                "right": {"literal": 1},
+            }
+        )
+    )
+    rule = ruleset.rules[0]
+    group = rule.root_group
+    bad_condition = replace(
+        group.conditions[0],
+        right=LiteralOperand(float("inf"), "double"),
+    )
+    bad_ruleset = replace(
+        ruleset,
+        rules=(replace(rule, root_group=replace(group, conditions=(bad_condition,))),),
+    )
+
+    result = RulesetValidator().validate(bad_ruleset)
+
+    assert "LITERAL_FLOAT_FINITE_REQUIRED" in {
+        issue.check_name for issue in result.issues
+    }
