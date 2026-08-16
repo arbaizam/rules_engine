@@ -3,6 +3,8 @@ from pathlib import Path
 
 import yaml
 
+from rules_engine.version import __version__
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -29,6 +31,11 @@ def test_bundle_artifact_and_job_use_the_project_version():
     assert artifact["files"] == [{"source": expected_wheel}]
     assert artifact["build"] == "python tools/build_release_wheel.py"
     assert {library.get("whl") for library in task["libraries"]} >= {expected_wheel}
+
+
+def test_runtime_identity_version_matches_project_metadata():
+    """Row identity cannot drift from the wheel's declared package version."""
+    assert __version__ == _project_version()
 
 
 def test_bundle_system_test_job_is_parameterized_and_non_retrying():

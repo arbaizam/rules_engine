@@ -14,6 +14,7 @@ import logging
 import math
 import traceback
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
@@ -24,6 +25,7 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
+from rules_engine.enums import AuditLevel
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.models import (
     Assignment,
@@ -40,6 +42,7 @@ from rules_engine.models import (
 from rules_engine.registry import FunctionRegistry
 from rules_engine.repository import RulesetRepository
 from rules_engine.runtime import SparkRowEvaluator
+from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.spark_types import (
     INTEGRAL_LIMITS,
     INTEGRAL_TYPES,
@@ -47,6 +50,7 @@ from rules_engine.spark_types import (
     decimal_value_fits,
 )
 from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
+from rules_engine.version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -161,10 +165,23 @@ ASSIGNMENT_RESULT_STRUCT = T.StructType(
 )
 
 
-def _result_struct(assign_schema: T.StructType) -> T.StructType:
-    """Build the Spark UDF result schema for one ruleset."""
-    return T.StructType(
-        [
+@dataclass(frozen=True)
+class _PreparedRule:
+    """Driver-precomputed rule metadata captured by the worker evaluator."""
+
+    rule: Rule
+    has_custom_condition: bool
+    assignment_specs: tuple[tuple[Assignment, str | None], ...]
+    summary: dict[str, Any] | None
+
+
+def _result_struct(
+    assign_schema: T.StructType,
+    audit_level: AuditLevel | str = AuditLevel.FULL,
+) -> T.StructType:
+    """Build the audit-level-specific Spark UDF result schema."""
+    level = _coerce_audit_level(audit_level)
+    fields = [
             T.StructField("matched", T.BooleanType(), False),
             T.StructField("matched_rule_ids", T.ArrayType(T.StringType(), False), False),
             T.StructField("assign", assign_schema, True),
@@ -188,8 +205,31 @@ def _result_struct(assign_schema: T.StructType) -> T.StructType:
             T.StructField("winning_rule_name", T.StringType(), True),
             T.StructField("winning_rule_explanation", T.StringType(), True),
             T.StructField("error", T.StringType(), True),
-        ]
-    )
+    ]
+    full_only = {"matched_rules", "last_matched_rule", "assignment_results"}
+    if level is AuditLevel.MINIMAL:
+        included = {"matched", "matched_rule_ids", "assign", "error"}
+    elif level is AuditLevel.STANDARD:
+        included = {field.name for field in fields} - full_only
+    else:
+        included = {field.name for field in fields}
+    return T.StructType([field for field in fields if field.name in included])
+
+
+def _coerce_audit_level(value: AuditLevel | str) -> AuditLevel:
+    """Return a canonical audit level with a caller-friendly error."""
+    try:
+        return value if isinstance(value, AuditLevel) else AuditLevel(value)
+    except (TypeError, ValueError) as exc:
+        valid = ", ".join(level.value for level in AuditLevel)
+        raise ValueError(f"Invalid audit_level {value!r}. Valid values: {valid}.") from exc
+
+
+def result_field_names(
+    audit_level: AuditLevel | str = AuditLevel.FULL,
+) -> tuple[str, ...]:
+    """Return result field names emitted for an audit level."""
+    return tuple(_result_struct(EMPTY_ASSIGN_STRUCT, audit_level).fieldNames())
 
 
 EMPTY_ASSIGN_STRUCT = T.StructType(
@@ -198,22 +238,7 @@ EMPTY_ASSIGN_STRUCT = T.StructType(
     ]
 )
 
-RESULT_FIELD_NAMES = tuple(_result_struct(EMPTY_ASSIGN_STRUCT).fieldNames())
-
-
-class _SparkRowNoOpRepository:
-    """
-    Minimal repository placeholder for Spark worker-side row evaluation.
-
-    The row evaluator never loads metadata from the repository because the
-    ruleset is already serialized into the UDF closure. Passing the real
-    Spark/Delta repository would also serialize the active Spark session into
-    the Python worker, which fails under Databricks Spark Connect.
-    """
-
-    def load_published(self, ruleset_name: str, version: str | None = None) -> Ruleset:
-        """Reject metadata loading from inside the Spark row UDF."""
-        raise RuntimeError("Spark row UDF cannot load published metadata.")
+RESULT_FIELD_NAMES = result_field_names(AuditLevel.FULL)
 
 
 class SparkRulesEngineRuntime:
@@ -245,6 +270,7 @@ class SparkRulesEngineRuntime:
         column_prefix: str = "rules_engine",
         fail_on_error: bool = True,
         include_error_traceback: bool = False,
+        audit_level: AuditLevel | str = AuditLevel.FULL,
     ) -> DataFrame:
         """
         Evaluate a Spark DataFrame against a ruleset.
@@ -267,12 +293,37 @@ class SparkRulesEngineRuntime:
         include_error_traceback : bool, default False
             Include full Python tracebacks in row error payloads. Keep disabled
             for production data because tracebacks substantially enlarge rows.
+        audit_level : AuditLevel | str, default AuditLevel.FULL
+            ``minimal`` emits match/assignment/error results, ``standard`` adds
+            the first-match trace, and ``full`` adds all match summaries and
+            assignment provenance. Immutable ruleset/engine identity is always
+            appended as driver-side literal columns.
 
         Returns
         -------
         pyspark.sql.DataFrame
             DataFrame with rules engine result columns appended.
         """
+        level = _coerce_audit_level(audit_level)
+        if not column_prefix:
+            raise ValueError("column_prefix must be non-empty.")
+        output_names = {
+            *{
+                f"{column_prefix}_{field_name}"
+                for field_name in result_field_names(level)
+            },
+            f"{column_prefix}_ruleset_id",
+            f"{column_prefix}_ruleset_version",
+            f"{column_prefix}_content_hash",
+            f"{column_prefix}_engine_version",
+            f"{column_prefix}_result",
+        }
+        conflicts = sorted(output_names & set(df.columns))
+        if conflicts:
+            raise ValueError(
+                f"Input contains rules-engine output columns for prefix "
+                f"{column_prefix!r}: {conflicts}"
+            )
         logger.info(
             "Evaluating ruleset in Spark runtime: ruleset_id=%s ruleset_name=%s version=%s rule_count=%s fail_on_error=%s",
             ruleset.ruleset_id,
@@ -303,16 +354,21 @@ class SparkRulesEngineRuntime:
             assign_field_types,
             raise_on_error=fail_on_error,
             include_error_traceback=include_error_traceback,
+            audit_level=level,
         )
         self._validate_worker_serializable(row_evaluator)
-        result_udf = F.udf(row_evaluator, _result_struct(assign_schema))
+        result_udf = F.udf(row_evaluator, _result_struct(assign_schema, level))
         available_columns = set(df.columns)
-        assignment_target_columns = [
-            assignment.target_field
-            for rule in sorted(ruleset.rules, key=lambda item: item.rule_order)
-            if rule.active_flag
-            for assignment in rule.assignments
-        ]
+        assignment_target_columns = (
+            [
+                assignment.target_field
+                for rule in sorted(ruleset.rules, key=lambda item: item.rule_order)
+                if rule.active_flag
+                for assignment in rule.assignments
+            ]
+            if level is AuditLevel.FULL
+            else []
+        )
         serialized_columns = [
             column_name
             for column_name in dict.fromkeys(
@@ -332,7 +388,15 @@ class SparkRulesEngineRuntime:
         output = evaluated.withColumns(
             {
                 f"{column_prefix}_{field_name}": result.getField(field_name)
-                for field_name in RESULT_FIELD_NAMES
+                for field_name in result_field_names(level)
+            }
+            | {
+                f"{column_prefix}_ruleset_id": F.lit(ruleset.ruleset_id),
+                f"{column_prefix}_ruleset_version": F.lit(ruleset.version),
+                f"{column_prefix}_content_hash": F.lit(
+                    DeltaRowSerializer().content_hash(ruleset)
+                ),
+                f"{column_prefix}_engine_version": F.lit(__version__),
             }
         )
         output = output.drop(result_col)
@@ -374,39 +438,52 @@ class SparkRulesEngineRuntime:
         *,
         raise_on_error: bool = False,
         include_error_traceback: bool = False,
+        audit_level: AuditLevel | str = AuditLevel.FULL,
     ):
         """Build the serializable Python callable used by the Spark UDF."""
+        level = _coerce_audit_level(audit_level)
         runtime = _SparkRowUdfEvaluator(
-            _SparkRowNoOpRepository(),
+            None,
             self._function_registry,
         )
         ordered_rules = sorted(ruleset.rules, key=lambda item: item.rule_order)
-        active_rules = []
+        active_rules: list[_PreparedRule] = []
         for rule in (item for item in ordered_rules if item.active_flag):
-            description = runtime._rule_formatter.describe_rule(rule)
+            description = (
+                runtime._rule_formatter.describe_rule(rule)
+                if level is AuditLevel.FULL
+                else None
+            )
             assignment_specs = tuple(
                 (
                     assignment,
-                    runtime._rule_formatter.format_assignment_expression(assignment),
+                    (
+                        runtime._rule_formatter.format_assignment_expression(assignment)
+                        if level is AuditLevel.FULL
+                        else None
+                    ),
                 )
                 for assignment in rule.assignments
             )
+            summary = None
+            if description is not None:
+                summary = {
+                    "rule_id": rule.rule_id,
+                    "rule_name": rule.rule_name,
+                    "rule_order": rule.rule_order,
+                    "human_readable_condition": description["rule_logic"],
+                    "human_readable_assignment": description["match_payload"],
+                    "assigned_fields": [
+                        assignment.target_field
+                        for assignment in rule.assignments
+                    ],
+                }
             active_rules.append(
-                (
-                    rule,
-                    runtime._rule_has_custom_condition(rule),
-                    assignment_specs,
-                    {
-                        "rule_id": rule.rule_id,
-                        "rule_name": rule.rule_name,
-                        "rule_order": rule.rule_order,
-                        "human_readable_condition": description["rule_logic"],
-                        "human_readable_assignment": description["match_payload"],
-                        "assigned_fields": [
-                            assignment.target_field
-                            for assignment in rule.assignments
-                        ],
-                    },
+                _PreparedRule(
+                    rule=rule,
+                    has_custom_condition=runtime._rule_has_custom_condition(rule),
+                    assignment_specs=assignment_specs,
+                    summary=summary,
                 )
             )
 
@@ -420,14 +497,17 @@ class SparkRulesEngineRuntime:
                 assignment_events: list[dict[str, Any]] = []
                 first_matched_rule: dict[str, Any] | None = None
                 first_matched_rule_explanation: str | None = None
-                for rule, has_custom_condition, assignment_specs, rule_summary in active_rules:
+                for prepared_rule in active_rules:
+                    rule = prepared_rule.rule
                     condition_traces = None
-                    # Preserve eager evaluation through stop_on_match so later
-                    # condition errors are visible. Losing pure rules use the
-                    # allocation-light match path; only the pure winner is
-                    # reevaluated for its trace. Custom conditions remain
-                    # single-pass to avoid repeating user code or side effects.
-                    if first_matched_rule is None and has_custom_condition:
+                    # Every active condition remains eager until stop_on_match,
+                    # preserving row errors. Trace-enabled levels reevaluate a
+                    # pure first winner only; custom winners stay single-pass.
+                    if (
+                        level is not AuditLevel.MINIMAL
+                        and first_matched_rule is None
+                        and prepared_rule.has_custom_condition
+                    ):
                         matched, condition_traces = runtime._evaluate_rule(
                             rule,
                             row_dict,
@@ -436,8 +516,12 @@ class SparkRulesEngineRuntime:
                         matched = runtime._rule_matches(rule, row_dict)
                     if matched:
                         matched_rule_ids.append(rule.rule_id)
-                        matched_rules.append(rule_summary)
-                        if first_matched_rule is None:
+                        if level is AuditLevel.FULL:
+                            matched_rules.append(prepared_rule.summary)
+                        if (
+                            level is not AuditLevel.MINIMAL
+                            and first_matched_rule is None
+                        ):
                             if condition_traces is None:
                                 _, condition_traces = runtime._evaluate_rule(
                                     rule,
@@ -456,21 +540,35 @@ class SparkRulesEngineRuntime:
                                     condition_traces,
                                 )
                             )
-                        for assignment, authored_expression in assignment_specs:
-                            event = runtime._typed_assignment_event(
-                                rule,
-                                assignment,
-                                authored_expression,
-                                row_dict,
-                                assign_field_types[assignment.target_field],
-                            )
-                            assignments[assignment.target_field] = event[
-                                "proposed_value"
-                            ]
-                            assignment_events.append(event)
+                        for assignment, authored_expression in (
+                            prepared_rule.assignment_specs
+                        ):
+                            if level is AuditLevel.FULL:
+                                event = runtime._typed_assignment_event(
+                                    rule,
+                                    assignment,
+                                    authored_expression,
+                                    row_dict,
+                                    assign_field_types[assignment.target_field],
+                                )
+                                assignments[assignment.target_field] = event[
+                                    "proposed_value"
+                                ]
+                                assignment_events.append(event)
+                            else:
+                                assignments[assignment.target_field] = (
+                                    runtime._spark_assignment_value(
+                                        runtime._resolve_operand(assignment.value, row_dict),
+                                        assign_field_types[assignment.target_field],
+                                    )
+                                )
                         if rule.stop_on_match:
                             break
-                assignment_results = runtime._assignment_results(assignment_events)
+                assignment_results = (
+                    runtime._assignment_results(assignment_events)
+                    if level is AuditLevel.FULL
+                    else []
+                )
                 assign_payload = (
                     {
                         field_name: assignments.get(field_name)
@@ -486,6 +584,7 @@ class SparkRulesEngineRuntime:
                     first_matched_rule=first_matched_rule,
                     first_matched_rule_explanation=first_matched_rule_explanation,
                     assignment_results=assignment_results,
+                    audit_level=level,
                 )
             except Exception as exc:
                 if raise_on_error:
@@ -496,6 +595,7 @@ class SparkRulesEngineRuntime:
                 return runtime._error_payload(
                     exc,
                     include_traceback=include_error_traceback,
+                    audit_level=level,
                 )
 
         return evaluate
@@ -578,31 +678,39 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         first_matched_rule: dict[str, Any] | None,
         first_matched_rule_explanation: str | None,
         assignment_results: list[dict[str, Any]],
+        audit_level: AuditLevel | str = AuditLevel.FULL,
     ) -> dict[str, Any]:
         """Build the stable Spark result payload and its compatibility aliases."""
+        level = _coerce_audit_level(audit_level)
         first_rule_id = (
             first_matched_rule.get("rule_id") if first_matched_rule else None
         )
         first_rule_name = (
             first_matched_rule.get("rule_name") if first_matched_rule else None
         )
-        payload = self._base_payload()
+        payload = self._base_payload(level)
         payload.update(
             matched=bool(matched_rule_ids),
             matched_rule_ids=matched_rule_ids,
             assign=assign_payload,
-            first_matched_rule=first_matched_rule,
-            first_matched_rule_id=first_rule_id,
-            first_matched_rule_name=first_rule_name,
-            first_matched_rule_explanation=first_matched_rule_explanation,
-            matched_rules=matched_rules,
-            last_matched_rule=matched_rules[-1] if matched_rules else None,
-            assignment_results=assignment_results,
-            winning_rule=first_matched_rule,
-            winning_rule_id=first_rule_id,
-            winning_rule_name=first_rule_name,
-            winning_rule_explanation=first_matched_rule_explanation,
         )
+        if level is not AuditLevel.MINIMAL:
+            payload.update(
+                first_matched_rule=first_matched_rule,
+                first_matched_rule_id=first_rule_id,
+                first_matched_rule_name=first_rule_name,
+                first_matched_rule_explanation=first_matched_rule_explanation,
+                winning_rule=first_matched_rule,
+                winning_rule_id=first_rule_id,
+                winning_rule_name=first_rule_name,
+                winning_rule_explanation=first_matched_rule_explanation,
+            )
+        if level is AuditLevel.FULL:
+            payload.update(
+                matched_rules=matched_rules,
+                last_matched_rule=matched_rules[-1] if matched_rules else None,
+                assignment_results=assignment_results,
+            )
         return payload
 
     def _error_payload(
@@ -610,24 +718,29 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         exc: Exception,
         *,
         include_traceback: bool,
+        audit_level: AuditLevel | str = AuditLevel.FULL,
     ) -> dict[str, Any]:
         """Build a compact production error, optionally with a debug traceback."""
         error = f"{type(exc).__name__}: {exc}"
         if include_traceback:
             error = f"{error}\n{traceback.format_exc()}"
-        payload = self._base_payload()
+        payload = self._base_payload(audit_level)
         payload["error"] = error
         return payload
 
-    def _base_payload(self) -> dict[str, Any]:
+    def _base_payload(
+        self,
+        audit_level: AuditLevel | str = AuditLevel.FULL,
+    ) -> dict[str, Any]:
         """Return schema-derived defaults shared by success and error rows."""
-        payload = dict.fromkeys(RESULT_FIELD_NAMES)
+        level = _coerce_audit_level(audit_level)
+        payload = dict.fromkeys(result_field_names(level))
         payload.update(
             matched=False,
             matched_rule_ids=[],
-            matched_rules=[],
-            assignment_results=[],
         )
+        if level is AuditLevel.FULL:
+            payload.update(matched_rules=[], assignment_results=[])
         return payload
 
     def _spark_assignment_value(self, value: Any, data_type: T.DataType) -> Any:

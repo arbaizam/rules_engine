@@ -8,7 +8,11 @@ from pathlib import Path
 
 from pyspark.sql import DataFrame, SparkSession
 
+from rules_engine.analytics import CoverageReport, RulesetCoverageAnalyzer
+from rules_engine.backtest import BacktestReport, RulesetBacktester
+from rules_engine.change_control import RulesetDiff, RulesetDiffer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.enums import AuditLevel
 from rules_engine.human_readable import HumanReadableRulesetFormatter
 from rules_engine.models import FunctionRegistryRow, Ruleset
 from rules_engine.normalizer import RulesetNormalizer
@@ -21,6 +25,7 @@ from rules_engine.standard_functions import (
     register_standard_functions,
     standard_function_rows,
 )
+from rules_engine.testing import RulesetTester, RulesetTestResult
 
 
 class RulesEngineService:
@@ -47,10 +52,12 @@ class RulesEngineService:
         self.registry = registry
         self.normalizer = normalizer or RulesetNormalizer()
         self.validator = validator or SparkRulesetCompatibilityValidator(registry)
+        self.tester = RulesetTester(registry)
         self.publish_service = PublishService(
             repository=repository,
             validator=self.validator,
             normalizer=self.normalizer,
+            tester=self.tester,
         )
         self.runtime = SparkRulesEngineRuntime(
             repository,
@@ -59,6 +66,9 @@ class RulesEngineService:
         )
         self.compiler = YamlRulesetCompiler()
         self.rule_formatter = HumanReadableRulesetFormatter()
+        self.ruleset_differ = RulesetDiffer()
+        self.coverage_analyzer = RulesetCoverageAnalyzer(self.runtime, registry)
+        self.backtester = RulesetBacktester(self.runtime)
 
     @classmethod
     def from_schema(
@@ -157,6 +167,10 @@ class RulesEngineService:
             effective_end_date=effective_end_date,
         )
 
+    def test_ruleset(self, ruleset: Ruleset) -> RulesetTestResult:
+        """Execute embedded expected cases without starting Spark."""
+        return self.tester.test(ruleset)
+
     def publish_yaml_text(
         self,
         yaml_text: str,
@@ -219,6 +233,26 @@ class RulesEngineService:
             ruleset = self.load_published(ruleset_name, version)
         return self.rule_formatter.describe_rules(ruleset)
 
+    def diff_rulesets(
+        self,
+        baseline: Ruleset,
+        candidate: Ruleset,
+    ) -> RulesetDiff:
+        """Compare two supplied rulesets using author-facing rule syntax."""
+        return self.ruleset_differ.diff(baseline, candidate)
+
+    def diff_versions(
+        self,
+        ruleset_name: str,
+        baseline_version: str,
+        candidate_version: str,
+    ) -> RulesetDiff:
+        """Load and compare two published versions of the same ruleset."""
+        return self.diff_rulesets(
+            self.load_published(ruleset_name, baseline_version),
+            self.load_published(ruleset_name, candidate_version),
+        )
+
     def evaluate_dataframe(
         self,
         df: DataFrame,
@@ -229,6 +263,7 @@ class RulesEngineService:
         column_prefix: str = "rules_engine",
         fail_on_error: bool = True,
         include_error_traceback: bool = False,
+        audit_level: AuditLevel | str = AuditLevel.FULL,
     ) -> DataFrame:
         """
         Evaluate a Spark DataFrame using a supplied or loaded ruleset.
@@ -243,6 +278,62 @@ class RulesEngineService:
             column_prefix=column_prefix,
             fail_on_error=fail_on_error,
             include_error_traceback=include_error_traceback,
+            audit_level=audit_level,
+        )
+
+    def coverage_report(
+        self,
+        df: DataFrame,
+        *,
+        ruleset: Ruleset | None = None,
+        ruleset_name: str | None = None,
+        version: str | None = None,
+        broad_match_threshold: float = 0.40,
+        column_prefix: str = "rules_engine_coverage",
+    ) -> CoverageReport:
+        """Report rule coverage and closest-rule diagnostics for no matches."""
+        if ruleset is None:
+            if ruleset_name is None:
+                raise ValueError("ruleset or ruleset_name is required.")
+            ruleset = self.load_published(ruleset_name, version)
+        return self.coverage_analyzer.analyze(
+            df,
+            ruleset,
+            broad_match_threshold=broad_match_threshold,
+            column_prefix=column_prefix,
+        )
+
+    def backtest(
+        self,
+        df: DataFrame,
+        *,
+        key: str,
+        baseline: Ruleset | None = None,
+        candidate: Ruleset | None = None,
+        ruleset_name: str | None = None,
+        baseline_version: str | None = None,
+        candidate_version: str | None = None,
+        compare_field: str | None = None,
+        sample_size: int = 100,
+    ) -> BacktestReport:
+        """Compare baseline and candidate rulesets on the same keyed tape."""
+        if (baseline is None) != (candidate is None):
+            raise ValueError("baseline and candidate must be supplied together.")
+        if baseline is None and candidate is None:
+            if ruleset_name is None or not baseline_version or not candidate_version:
+                raise ValueError(
+                    "Supply both rulesets, or ruleset_name with baseline_version "
+                    "and candidate_version."
+                )
+            baseline = self.load_published(ruleset_name, baseline_version)
+            candidate = self.load_published(ruleset_name, candidate_version)
+        return self.backtester.analyze(
+            df,
+            baseline,
+            candidate,
+            key=key,
+            compare_field=compare_field,
+            sample_size=sample_size,
         )
 
     def retire(

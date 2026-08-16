@@ -257,6 +257,15 @@ class Rule:
 
 
 @dataclass(frozen=True)
+class RulesetExpectation:
+    """One executable example embedded in ruleset metadata."""
+
+    name: str
+    given: Mapping[str, Any]
+    then: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class Ruleset:
     """
     Compiled ruleset metadata.
@@ -270,6 +279,7 @@ class Ruleset:
     description: str | None = None
     owner: str | None = None
     owner_department: str | None = None
+    expect: tuple[RulesetExpectation, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -35,6 +35,7 @@ from rules_engine.models import (
     Operand,
     Rule,
     Ruleset,
+    RulesetExpectation,
 )
 
 
@@ -192,6 +193,13 @@ class YamlRulesetCompiler:
             self._compile_rule(raw_rule, index)
             for index, raw_rule in enumerate(raw_rules, start=1)
         )
+        raw_expectations = payload.get("expect", [])
+        if not isinstance(raw_expectations, list):
+            raise CompilationError("expect must be a list when provided.")
+        expectations = tuple(
+            self._compile_expectation(raw_expectation, index)
+            for index, raw_expectation in enumerate(raw_expectations, start=1)
+        )
         return Ruleset(
             ruleset_id=ruleset_id,
             ruleset_name=ruleset_name,
@@ -201,6 +209,22 @@ class YamlRulesetCompiler:
             description=self._optional_str(payload, "description"),
             owner=self._optional_str(payload, "owner"),
             owner_department=self._optional_str(payload, "owner_department"),
+            expect=expectations,
+        )
+
+    def _compile_expectation(
+        self,
+        payload: Any,
+        index: int,
+    ) -> RulesetExpectation:
+        """Compile one executable ruleset example."""
+        payload = self._ensure_mapping(payload, f"expected case at index {index}")
+        given = self._require_mapping(payload, "given")
+        then = self._require_mapping(payload, "then")
+        return RulesetExpectation(
+            name=self._require_str(payload, "name"),
+            given=self._normalize_literal_value(dict(given)),
+            then=self._normalize_literal_value(dict(then)),
         )
 
     def _compile_rule(self, payload: Any, index: int) -> Rule:

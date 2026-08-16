@@ -8,8 +8,9 @@ Delta tables. Production runtime evaluation is exposed through
 """
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.enums import AuditLevel
 from rules_engine.exporter_yaml import YamlRulesetExporter
-from rules_engine.models import Ruleset
+from rules_engine.models import Ruleset, RulesetExpectation
 from rules_engine.normalizer import RulesetNormalizer
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 from rules_engine.serializer import DeltaRowSerializer
@@ -18,6 +19,7 @@ from rules_engine.standard_functions import (
     standard_function_rows,
 )
 from rules_engine.validator import RulesetValidator
+from rules_engine.version import __version__
 
 _LAZY_EXPORTS = {
     "PublishService": ("rules_engine.publish", "PublishService"),
@@ -31,6 +33,14 @@ _LAZY_EXPORTS = {
         "rules_engine.spark_validator",
         "SparkRulesetCompatibilityValidator",
     ),
+    "RulesetTester": ("rules_engine.testing", "RulesetTester"),
+    "RulesetTestResult": ("rules_engine.testing", "RulesetTestResult"),
+    "RulesetDiff": ("rules_engine.change_control", "RulesetDiff"),
+    "RulesetDiffer": ("rules_engine.change_control", "RulesetDiffer"),
+    "CoverageReport": ("rules_engine.analytics", "CoverageReport"),
+    "RuleCoverage": ("rules_engine.analytics", "RuleCoverage"),
+    "BacktestReport": ("rules_engine.backtest", "BacktestReport"),
+    "RulesetIdentity": ("rules_engine.backtest", "RulesetIdentity"),
 }
 
 
@@ -49,11 +59,21 @@ def __getattr__(name: str):
 
 __all__ = [
     "CustomFunctionSpec",
+    "CoverageReport",
+    "AuditLevel",
+    "BacktestReport",
     "DeltaRowSerializer",
     "FunctionRegistry",
     "PublishService",
     "RulesEngineService",
     "Ruleset",
+    "RulesetExpectation",
+    "RuleCoverage",
+    "RulesetDiff",
+    "RulesetDiffer",
+    "RulesetTester",
+    "RulesetTestResult",
+    "RulesetIdentity",
     "RulesetNormalizer",
     "RulesetValidator",
     "SparkRulesEngineRuntime",
@@ -63,4 +83,5 @@ __all__ = [
     "register_standard_functions",
     "required_source_columns",
     "standard_function_rows",
+    "__version__",
 ]

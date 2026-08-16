@@ -18,6 +18,14 @@ class RulesetStatus(str, Enum):
     RETIRED = "retired"
 
 
+class AuditLevel(str, Enum):
+    """Amount of row-level audit detail emitted by the Spark runtime."""
+
+    MINIMAL = "minimal"
+    STANDARD = "standard"
+    FULL = "full"
+
+
 class LogicalOperator(str, Enum):
     """Logical group operators."""
 
@@ -88,6 +96,7 @@ class ObjectType(str, Enum):
     CONDITION = "condition"
     ASSIGNMENT = "assignment"
     FUNCTION = "function"
+    EXPECTED_CASE = "expected_case"
 
 UNARY_OPERATORS = {ComparisonOperator.IS_NULL, ComparisonOperator.IS_NOT_NULL}
 BINARY_OPERATORS = set(ComparisonOperator) - UNARY_OPERATORS

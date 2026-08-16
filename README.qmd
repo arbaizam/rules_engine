@@ -37,6 +37,7 @@ semantic weakening.
 - [Packaging And Asset Bundles](#packaging-and-asset-bundles)
 - [Developer Workflow](#developer-workflow)
 - [Troubleshooting](#troubleshooting)
+- [Migration Notes For 0.3.0](#migration-notes-for-030)
 - [Migration Notes For 0.2.0](#migration-notes-for-020)
 - [Known Limitations](#known-limitations)
 
@@ -67,6 +68,7 @@ A `Ruleset` is the top-level metadata object. It has:
 - `owner_department`
 - optional `description`
 - ordered `rules`
+- optional executable `expect` cases
 
 Persisted lifecycle statuses are exactly:
 
@@ -136,11 +138,35 @@ different ruleset. When an ID is omitted, the compiler generates
 `assignment:<rule_id>:<target_field>` for both mapping shorthand and list-form
 assignments.
 
+### Executable Expected Cases
+
+Rulesets may carry small, named examples that execute without Spark and block
+publication when their expected business result changes:
+
+```yaml
+expect:
+  - name: prime loan classification
+    given: {fico: 740}
+    then:
+      matched: true
+      matched_rule_ids: [prime, near-prime]
+      bucket: prime
+```
+
+Keys other than `matched`, `matched_rule_ids`, and `assign` are assignment-field
+shorthand. An explicit `assign` mapping is also accepted and is checked as a
+subset, so examples can assert only the fields relevant to the case. Run them
+with `service.test_ruleset(ruleset)`; `service.publish(...)` runs the same suite
+as a hard gate before any repository write.
+
 ## Package Layout
 
 ```text
 rules_engine/
   __init__.py
+  analytics.py            # coverage and closest-rule diagnostics
+  backtest.py             # baseline/candidate tape comparison
+  change_control.py       # human-readable semantic version diff
   compiler_yaml.py        # YAML -> dataclasses
   enums.py                # canonical vocabulary
   exceptions.py           # package exceptions
@@ -155,6 +181,7 @@ rules_engine/
   spark_runtime.py        # Spark DataFrame runtime
   spark_types.py          # shared exact Spark type helpers
   spark_validator.py      # Spark compatibility validator
+  testing.py              # pure-Python executable expected cases
   validator.py            # semantic validator
 
 notebooks/
@@ -383,7 +410,7 @@ only required fields that exist in the input DataFrame. The helper is also
 available to callers through `from rules_engine import required_source_columns`
 for source projection, dependency inspection, and validation workflows.
 
-### `SparkRulesEngineRuntime.evaluate_dataframe(df, ruleset, fail_on_error=True, include_error_traceback=False)`
+### `SparkRulesEngineRuntime.evaluate_dataframe(df, ruleset, fail_on_error=True, include_error_traceback=False, audit_level="full")`
 
 Purpose:
 
@@ -393,19 +420,16 @@ Detailed sequence:
 
 1. Validate active source fields and assignment types against the incoming
    Spark schema.
-2. Identify active source dependencies with `required_source_columns()` and
-   include existing assignment targets for original-value auditing.
+2. Identify active source dependencies with `required_source_columns()` and,
+   for full audit only, include existing assignment targets for old-value auditing.
 3. Preflight cloudpickle serialization of the worker evaluator and registered
    implementations, then serialize only required fields into the Python UDF.
-4. Evaluate losing rules through a match-only path without constructing trace
-   payloads; all conditions still execute so row-level errors remain observable.
-5. Build the complete condition trace only for the first matched rule. Rules with
-   active custom-function conditions use a single traced pass so functions are
-   not invoked twice.
-6. Resolve assignments against the original row, retain every assignment event,
-   and compute field-specific effective/override provenance.
-7. Append `rules_engine_*` result columns in one Spark projection.
-8. If `fail_on_error=True`, raise from the UDF during the caller's first Spark
+4. Evaluate rules through the work path selected by `audit_level`. Minimal skips
+   all trace/provenance rendering; standard builds only the first-match trace;
+   full also builds match summaries and assignment events.
+5. Resolve typed assignments against the original row.
+6. Append `rules_engine_*` result columns in one Spark projection.
+7. If `fail_on_error=True`, raise from the UDF during the caller's first Spark
    action. If false, retain a compact typed message in `rules_engine_error`.
 
 Returned columns:
@@ -425,6 +449,16 @@ Returned columns:
 - `rules_engine_winning_rule_name`
 - `rules_engine_winning_rule_explanation`
 - `rules_engine_error`
+- `rules_engine_ruleset_id`
+- `rules_engine_ruleset_version`
+- `rules_engine_content_hash`
+- `rules_engine_engine_version`
+
+The first three business-result columns and `error` are emitted at every audit
+level. Standard adds the `first_matched_rule*` and backward-compatible
+`winning_rule*` columns. Full, the compatibility default, also adds
+`matched_rules`, `last_matched_rule`, and `assignment_results`. Identity columns
+are driver-side literals at every level and do not enlarge the Python UDF result.
 
 Side effects:
 
@@ -819,8 +853,15 @@ result_df = spark_runtime.evaluate_dataframe(
     input_df,
     ruleset,
     fail_on_error=True,
+    audit_level="minimal",  # minimal | standard | full
 )
 ```
+
+Use `minimal` for high-volume production outputs that need typed assignments,
+match IDs, errors, and immutable execution identity. Use `standard` when the
+first winning trace is also needed. Use `full` for investigations or governed
+outputs that require all match summaries and per-assignment provenance. Full is
+the default so existing consumers retain their current schema.
 
 `fail_on_error=True` remains lazy: building `result_df` starts no hidden Spark
 job. A row failure raises during the caller's first materializing action, such
@@ -1006,6 +1047,34 @@ Example output:
 | rule_id | rule_name | rule_logic | match_payload |
 | --- | --- | --- | --- |
 | `r1560` | `A Rule` | `BK_AccountID == 'DN'` | `leaf_key = '15656'` |
+
+Change-control helpers use the same evaluator and formatter as production:
+
+```python
+test_result = service.test_ruleset(candidate)
+semantic_diff = service.diff_rulesets(baseline, candidate)
+
+coverage = service.coverage_report(
+    tape_df,
+    ruleset=candidate,
+    broad_match_threshold=0.40,
+)
+
+backtest = service.backtest(
+    tape_df,
+    key="loan_id",
+    baseline=baseline,
+    candidate=candidate,
+    compare_field="leaf_key",  # omit to compare the complete assignment struct
+)
+```
+
+`coverage.rules` identifies never-matched and suspiciously broad rules,
+`coverage.first_match_distribution` reports precedence behavior, and
+`coverage.no_match_rows` includes the closest rule plus failed condition IDs.
+`semantic_diff.to_text()` emphasizes rule-order, condition, and assignment
+changes in authored syntax. Backtests expose total/changed counts, a transition
+matrix, all changed rows, and a bounded `sample_rows` DataFrame.
 
 Pass custom metadata table names when the deployment should not use the
 standard `ruleset_versions` and `function_registry` names:
@@ -1770,6 +1839,26 @@ service.retire("<ruleset_id>", "<version>", retired_by="operator")
 
 Published and retired `(ruleset_name, version)` pairs are immutable. Increment
 the version before publishing a replacement under the same ruleset name.
+
+## Migration Notes For 0.3.0
+
+The package version is `0.3.0`. The default `audit_level="full"` preserves the
+0.2 runtime audit schema, with four additive identity columns:
+`rules_engine_ruleset_id`, `rules_engine_ruleset_version`,
+`rules_engine_content_hash`, and `rules_engine_engine_version`.
+
+- Persisted output tables need an explicit schema-evolution step for the four
+  identity columns before their first 0.3 full-audit write.
+- `audit_level="minimal"` and `"standard"` intentionally emit narrower schemas;
+  route them to tables whose schema matches the selected contract.
+- Adding or changing `expect` cases changes canonical payload JSON and
+  `content_hash`. Publish as a new immutable ruleset version.
+- Publication now executes embedded expected cases after validation and before
+  repository persistence. A failed case prevents the write.
+- Coverage and backtest helpers materialize Spark actions to compute report
+  counts. Their returned diagnostic DataFrames remain lazy.
+- The 0.3 wheel adds no dependency and does not implement a native-Spark rule
+  compiler or an input-contract schema.
 
 ## Migration Notes For 0.2.0
 

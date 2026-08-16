@@ -89,6 +89,15 @@ class YamlRulesetExporter:
         if ruleset.owner_department is not None:
             payload["owner_department"] = ruleset.owner_department
         payload["rules"] = [self._export_rule(rule) for rule in ruleset.rules]
+        if ruleset.expect:
+            payload["expect"] = [
+                {
+                    "name": expectation.name,
+                    "given": self._export_value(dict(expectation.given)),
+                    "then": self._export_value(dict(expectation.then)),
+                }
+                for expectation in ruleset.expect
+            ]
         return payload
 
     def export_text(self, ruleset: Ruleset) -> str:

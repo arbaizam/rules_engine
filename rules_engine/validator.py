@@ -9,6 +9,7 @@ can be published.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
@@ -110,6 +111,8 @@ class RulesetValidator:
                 ruleset.ruleset_id,
             )
 
+        self._validate_expectations(ruleset, result)
+
         seen_rule_orders: set[int] = set()
         seen_rule_ids: set[str] = set()
         seen_condition_ids: set[str] = set()
@@ -141,6 +144,95 @@ class RulesetValidator:
                 seen_condition_group_ids,
                 seen_assignment_ids,
                 ruleset,
+            )
+
+    def _validate_expectations(
+        self,
+        ruleset: Ruleset,
+        result: ValidationResult,
+    ) -> None:
+        """Validate the stable shape of embedded executable examples."""
+        seen_names: set[str] = set()
+        for expectation in ruleset.expect:
+            object_id = expectation.name
+            if not expectation.name:
+                self._add(
+                    result,
+                    "EXPECTED_CASE_NAME_REQUIRED",
+                    "Expected case name is required.",
+                    ObjectType.EXPECTED_CASE,
+                    object_id,
+                )
+            elif expectation.name in seen_names:
+                self._add(
+                    result,
+                    "EXPECTED_CASE_NAME_DUPLICATE",
+                    f"Duplicate expected case name: {expectation.name}",
+                    ObjectType.EXPECTED_CASE,
+                    object_id,
+                )
+            seen_names.add(expectation.name)
+            if not isinstance(expectation.given, Mapping):
+                self._add(
+                    result,
+                    "EXPECTED_CASE_GIVEN_MAPPING_REQUIRED",
+                    "Expected case given must be a mapping.",
+                    ObjectType.EXPECTED_CASE,
+                    object_id,
+                )
+            if not isinstance(expectation.then, Mapping) or not expectation.then:
+                self._add(
+                    result,
+                    "EXPECTED_CASE_THEN_REQUIRED",
+                    "Expected case then must be a non-empty mapping.",
+                    ObjectType.EXPECTED_CASE,
+                    object_id,
+                )
+                continue
+            matched = expectation.then.get("matched")
+            if matched is not None and not isinstance(matched, bool):
+                self._add(
+                    result,
+                    "EXPECTED_CASE_MATCHED_BOOLEAN_REQUIRED",
+                    "Expected matched value must be boolean.",
+                    ObjectType.EXPECTED_CASE,
+                    object_id,
+                )
+            matched_ids = expectation.then.get("matched_rule_ids")
+            if matched_ids is not None and not (
+                isinstance(matched_ids, (list, tuple))
+                and all(isinstance(item, str) for item in matched_ids)
+            ):
+                self._add(
+                    result,
+                    "EXPECTED_CASE_MATCHED_RULE_IDS_REQUIRED",
+                    "Expected matched_rule_ids must be a list of strings.",
+                    ObjectType.EXPECTED_CASE,
+                    object_id,
+                )
+            expected_assign = expectation.then.get("assign")
+            if "assign" in expectation.then and not isinstance(
+                expected_assign,
+                Mapping,
+            ):
+                self._add(
+                    result,
+                    "EXPECTED_CASE_ASSIGN_MAPPING_REQUIRED",
+                    "Expected assign value must be a mapping.",
+                    ObjectType.EXPECTED_CASE,
+                    object_id,
+                )
+            self._validate_finite_decimals(
+                expectation.given,
+                result,
+                ObjectType.EXPECTED_CASE,
+                object_id,
+            )
+            self._validate_finite_decimals(
+                expectation.then,
+                result,
+                ObjectType.EXPECTED_CASE,
+                object_id,
             )
 
     def _validate_rule(

@@ -51,7 +51,11 @@ class SparkRowEvaluator:
     Row-level evaluator reused inside Spark worker UDFs.
     """
 
-    def __init__(self, repository: RulesetRepository, function_registry: FunctionRegistry) -> None:
+    def __init__(
+        self,
+        repository: RulesetRepository | None,
+        function_registry: FunctionRegistry,
+    ) -> None:
         """
         Create a runtime bound to metadata and custom-function registries.
         """
@@ -63,7 +67,72 @@ class SparkRowEvaluator:
         """
         Load a published ruleset by name and optional version.
         """
+        if self._repository is None:
+            raise RuntimeError("This row evaluator cannot load published metadata.")
         return self._repository.load_published(ruleset_name, version)
+
+    def evaluate_row(
+        self,
+        ruleset: Ruleset,
+        row: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Evaluate one Python mapping using production rule semantics.
+
+        This allocation-light API is the semantic core used by embedded
+        expected cases. It deliberately returns only stable business results,
+        independent of Spark schemas and audit rendering.
+        """
+        matched_rule_ids: list[str] = []
+        assignments: dict[str, Any] = {}
+        for rule in sorted(ruleset.rules, key=lambda item: item.rule_order):
+            if not rule.active_flag or not self._rule_matches(rule, row):
+                continue
+            matched_rule_ids.append(rule.rule_id)
+            assignments.update(self._evaluate_assignments(rule.assignments, row))
+            if rule.stop_on_match:
+                break
+        return {
+            "matched": bool(matched_rule_ids),
+            "matched_rule_ids": matched_rule_ids,
+            "assign": assignments or None,
+        }
+
+    def closest_rule_diagnostic(
+        self,
+        ruleset: Ruleset,
+        row: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Return the closest active rule and its failed active conditions."""
+        candidates: list[tuple[float, int, int, Rule, list[str]]] = []
+        for rule in sorted(ruleset.rules, key=lambda item: item.rule_order):
+            if not rule.active_flag:
+                continue
+            _, traces = self._evaluate_rule(rule, row)
+            active_traces = [trace for trace in traces if trace.active_flag]
+            passed_count = sum(trace.passed for trace in active_traces)
+            total_count = len(active_traces)
+            score = passed_count / total_count if total_count else 0.0
+            failed_ids = [
+                trace.condition_id for trace in active_traces if not trace.passed
+            ]
+            candidates.append(
+                (score, passed_count, -rule.rule_order, rule, failed_ids)
+            )
+        if not candidates:
+            return None
+        score, passed_count, _, rule, failed_ids = max(
+            candidates,
+            key=lambda item: item[:3],
+        )
+        total_count = passed_count + len(failed_ids)
+        return {
+            "closest_rule_id": rule.rule_id,
+            "closest_rule_name": rule.rule_name,
+            "closest_rule_score": score,
+            "passed_condition_count": passed_count,
+            "condition_count": total_count,
+            "failed_condition_ids": failed_ids,
+        }
 
     def _evaluate_rule(
         self,
