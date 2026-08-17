@@ -4,21 +4,17 @@
 # MAGIC
 # MAGIC Custom functions let a ruleset call controlled Python logic through an
 # MAGIC explicit registry contract. Ruleset YAML stores only metadata references:
-# MAGIC the function name and literal argument values. Runtime environments register
-# MAGIC the actual Python callable separately.
+# MAGIC the function name and literal, field-backed, or nested-function arguments.
+# MAGIC Runtime environments register the actual Python callable separately.
 # MAGIC
 # MAGIC Use custom functions when a rule needs logic that is too specific for the
 # MAGIC built-in field, literal, and comparison operands.
 
 # COMMAND ----------
 
-from pathlib import Path
-import sys
+from datetime import date
 
-repo_root = Path.cwd()
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
+import rules_engine
 from rules_engine import (  # noqa: E402
     CustomFunctionSpec,
     FunctionRegistry,
@@ -30,6 +26,9 @@ from rules_engine import (  # noqa: E402
     register_standard_functions,
     standard_function_rows,
 )
+
+print(f"rules_engine version: {rules_engine.__version__}")
+print(f"rules_engine package: {rules_engine.__file__}")
 
 # COMMAND ----------
 
@@ -45,7 +44,7 @@ from rules_engine import (  # noqa: E402
 def score_account(risk_score, balance):
     if risk_score is None or balance is None:
         return None
-    return risk_score * 10 + min(balance / 1000, 50)
+    return risk_score + min(balance / 1000, 50)
 
 
 def risk_bucket(risk_score):
@@ -133,8 +132,11 @@ registry.register(
 # MAGIC value: { field: account_code }
 # MAGIC ```
 # MAGIC
-# MAGIC For common transformations such as substring, trim, regex extraction, or
-# MAGIC casing, use `rules_engine.standard_functions.register_standard_functions`.
+# MAGIC For shared transformations—including substring, trim, regex extraction,
+# MAGIC numeric conversion, and calendar-safe date arithmetic—use
+# MAGIC `register_standard_functions`. Date functions include `to_date`,
+# MAGIC `date_add_days`, `date_add_months`, `date_add_years`, `date_diff_days`,
+# MAGIC `month_start`, and `month_end`.
 
 # COMMAND ----------
 
@@ -154,10 +156,20 @@ rules:
             custom_function:
               name: score_account
               args:
-                risk_score: 8
-                balance: 25000
+                risk_score: { field: risk_score }
+                balance: { field: balance }
           operator: ge
           right: { literal: 100, value_type: number }
+          null_input_mode: propagate
+          null_result_mode: "null"
+        - left:
+            custom_function:
+              name: date_add_months
+              args:
+                value: { field: funded_date }
+                months: 1
+          operator: ge
+          right: { literal: "2024-02-29", value_type: date }
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
@@ -165,7 +177,19 @@ rules:
         custom_function:
           name: risk_bucket
           args:
-            risk_score: 82
+            risk_score: { field: risk_score }
+      review_date:
+        custom_function:
+          name: date_add_years
+          args:
+            value: { field: funded_date }
+            years: 1
+      age_days:
+        custom_function:
+          name: date_diff_days
+          args:
+            start: { field: funded_date }
+            end: { field: as_of_date }
 """
 
 ruleset = YamlRulesetCompiler().compile_text(ruleset_yaml)
@@ -204,11 +228,52 @@ class NotebookRepository:
 
 runtime = SparkRulesEngineRuntime(NotebookRepository(), registry)
 output_df = runtime.evaluate_dataframe(
-    spark.createDataFrame([{"account_id": "A"}]),
+    spark.createDataFrame(
+        [
+            {
+                "account_id": "A",
+                "risk_score": 82,
+                "balance": 25000,
+                "funded_date": "2024-01-31",
+                "as_of_date": "2024-02-29",
+            },
+            {
+                "account_id": "B",
+                "risk_score": 55,
+                "balance": 1000,
+                "funded_date": "2024-01-01",
+                "as_of_date": "2024-02-01",
+            },
+        ]
+    ),
     ruleset,
 )
 
 display(output_df)
+
+rows = {
+    row["account_id"]: row.asDict(recursive=True)
+    for row in output_df.orderBy("account_id").collect()
+}
+assert rows["A"]["rules_engine_matched_rule_ids"] == ["high_custom_score"]
+assert rows["A"]["rules_engine_assign"] == {
+    "review_bucket": "high",
+    "review_date": date(2025, 1, 31),
+    "age_days": 29,
+}
+assert rows["B"]["rules_engine_matched"] is False
+assert rows["B"]["rules_engine_assign"] is None
+assert all(row["rules_engine_error"] is None for row in rows.values())
+
+authored_expressions = {
+    event["target_field"]: event["authored_expression"]
+    for event in rows["A"]["rules_engine_assignment_results"]
+}
+assert authored_expressions == {
+    "review_bucket": "review_bucket = risk_bucket(risk_score=risk_score)",
+    "review_date": "review_date = date_add_years(value=funded_date, years=1)",
+    "age_days": "age_days = date_diff_days(start=funded_date, end=as_of_date)",
+}
 
 # COMMAND ----------
 
@@ -250,10 +315,10 @@ display(output_df)
 # MAGIC function implementations before validating or evaluating rulesets that
 # MAGIC reference custom functions.
 # MAGIC
-# MAGIC The production YAML publish pipeline currently creates an empty
-# MAGIC `FunctionRegistry()`. If production YAML uses custom functions, update the
-# MAGIC pipeline to register the environment's approved function specs before
-# MAGIC validation.
+# MAGIC The production YAML publish pipeline registers the package-owned standard
+# MAGIC functions. If production YAML uses environment-specific functions such as
+# MAGIC `score_account` or `risk_bucket`, update the pipeline to register those
+# MAGIC approved specs and implementations before validation and publication.
 
 # COMMAND ----------
 

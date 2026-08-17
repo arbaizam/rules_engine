@@ -16,8 +16,9 @@
 # MAGIC 6. Prepare sample input data.
 # MAGIC 7. Run Spark compatibility validation.
 # MAGIC 8. Create Delta metadata tables.
-# MAGIC 9. Save, publish, load, evaluate, and retire a ruleset.
-# MAGIC 10. Translate a reconciliation CSV spec into canonical YAML.
+# MAGIC 9. Test, publish, load, evaluate, and retire a ruleset.
+# MAGIC 10. Inspect audit identity, semantic differences, and rule coverage.
+# MAGIC 11. Translate a reconciliation CSV spec into canonical YAML.
 # MAGIC
 # MAGIC This guide intentionally uses small examples. Production workflows should
 # MAGIC add environment-specific catalog names, permissions, logging, and approval
@@ -51,8 +52,10 @@
 
 import json
 from pathlib import Path
+import re
 from tempfile import TemporaryDirectory
 
+import rules_engine
 from rules_engine import (
     FunctionRegistry,
     RulesetNormalizer,
@@ -67,6 +70,9 @@ from tools.recon_spec_translation.audit import write_audit
 from tools.recon_spec_translation.reader_csv import read_reconciliation_csv
 from tools.recon_spec_translation.translator import ReconciliationSpecTranslator
 from tools.recon_spec_translation.writer_yaml import write_yaml
+
+print(f"rules_engine version: {rules_engine.__version__}")
+print(f"rules_engine package: {rules_engine.__file__}")
 
 # COMMAND ----------
 
@@ -156,6 +162,24 @@ rules:
           null_result_mode: "null"
     assign:
       review_bucket: high_value_open
+expect:
+  - name: open high-value account
+    given:
+      status: OPEN
+      account_amount_sum: 110
+      open_amount_sum: 120
+    then:
+      matched: true
+      matched_rule_ids: [high_value_open_account]
+      review_bucket: high_value_open
+  - name: closed account does not match
+    given:
+      status: CLOSED
+      account_amount_sum: 500
+      open_amount_sum: 120
+    then:
+      matched: false
+      matched_rule_ids: []
 """
 
 print(ruleset_yaml)
@@ -299,7 +323,9 @@ if spark_validation.has_errors():
 # MAGIC table names.
 # MAGIC
 # MAGIC The next cell drops and recreates the guide schema for a clean run. Do not
-# MAGIC point `DATABASE` at production metadata.
+# MAGIC point `DATABASE` at production metadata. The reset is blocked unless
+# MAGIC `RULES_ENGINE_GUIDE_RESET_CONFIRMATION` exactly equals the resulting
+# MAGIC `catalog.schema`, making the destructive target visible before execution.
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
@@ -318,9 +344,19 @@ if spark_validation.has_errors():
 
 # COMMAND ----------
 
-CATALOG = "main"
-SCHEMA = "rules_engine_guide"
+CATALOG = globals().get("RULES_ENGINE_GUIDE_CATALOG", "main")
+SCHEMA = globals().get("RULES_ENGINE_GUIDE_SCHEMA", "rules_engine_guide")
 DATABASE = f"{CATALOG}.{SCHEMA}"
+RESET_CONFIRMATION = globals().get("RULES_ENGINE_GUIDE_RESET_CONFIRMATION", "")
+
+identifier = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+if not identifier.fullmatch(CATALOG) or not identifier.fullmatch(SCHEMA):
+    raise ValueError("Guide catalog and schema must be unquoted Spark identifiers.")
+if RESET_CONFIRMATION != DATABASE:
+    raise ValueError(
+        "This guide resets its dedicated schema. Set "
+        f"RULES_ENGINE_GUIDE_RESET_CONFIRMATION={DATABASE!r} to confirm the exact target."
+    )
 
 cleanup_sql = f"DROP SCHEMA IF EXISTS {DATABASE} CASCADE"
 spark.sql(cleanup_sql)
@@ -329,7 +365,7 @@ create_sql = f"CREATE SCHEMA IF NOT EXISTS {DATABASE}"
 spark.sql(create_sql)
 
 service = RulesEngineService.from_schema(spark, DATABASE)
-service.create_tables(mode="overwrite")
+service.create_tables(mode="error")
 table_names = service.table_names
 
 table_names
@@ -373,6 +409,11 @@ table_names
 
 # COMMAND ----------
 
+expected_cases = service.test_ruleset(ruleset)
+print(expected_cases.to_text())
+if not expected_cases.passed:
+    raise AssertionError(expected_cases.to_text())
+
 service.publish(ruleset)
 
 display(spark.table(table_names.ruleset_versions))
@@ -415,6 +456,7 @@ result_df = service.evaluate_dataframe(
     ruleset_name="Account Review Rules",
     version="1",
     fail_on_error=True,
+    audit_level="full",
 )
 
 display(result_df.orderBy("row_id"))
@@ -441,6 +483,10 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_winning_rule_name`
 # MAGIC - `rules_engine_winning_rule_explanation`
 # MAGIC - `rules_engine_error`
+# MAGIC - `rules_engine_ruleset_id`
+# MAGIC - `rules_engine_ruleset_version`
+# MAGIC - `rules_engine_content_hash`
+# MAGIC - `rules_engine_engine_version`
 # MAGIC
 # MAGIC Assignment output, first-match detail, lightweight match summaries, and
 # MAGIC per-assignment provenance are Spark-native structs and arrays.
@@ -470,6 +516,9 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_first_matched_rule_explanation`: readable summary of the passed
 # MAGIC   conditions from the first matched rule.
 # MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
+# MAGIC - The four identity columns make every evaluated row attributable to the
+# MAGIC   immutable ruleset payload and installed engine version at every audit
+# MAGIC   level.
 # MAGIC
 # MAGIC In production, avoid collecting large DataFrames. Use aggregations,
 # MAGIC displays, or writes instead.
@@ -490,11 +539,58 @@ for row in rows:
 
 assert result_df.where("rules_engine_error IS NOT NULL").count() == 0
 assert result_df.where("rules_engine_matched").count() == 2
+assert [row["row_id"] for row in rows if row["rules_engine_matched"]] == [1, 2]
+assert all(
+    row["rules_engine_ruleset_id"] == ruleset.ruleset_id
+    and row["rules_engine_ruleset_version"] == ruleset.version
+    and row["rules_engine_content_hash"]
+    and row["rules_engine_engine_version"] == rules_engine.__version__
+    for row in rows
+)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 11. Query Persisted Metadata
+# MAGIC ## 11. Exercise Change Control And Coverage
+# MAGIC
+# MAGIC Embedded expected cases protect known examples before publish. Semantic
+# MAGIC diffs show author-facing changes between candidates, while coverage reports
+# MAGIC expose dead, broad, and clean no-match behavior on representative data.
+# MAGIC Coverage starts a Spark action; materializing `no_match_rows` starts a
+# MAGIC second diagnostic evaluation.
+
+# COMMAND ----------
+
+candidate_yaml = (
+    ruleset_yaml
+    .replace('version: "1"', 'version: "2"', 1)
+    .replace(
+        'right: { literal: 100, value_type: number }',
+        'right: { literal: 125, value_type: number }',
+        1,
+    )
+)
+candidate_ruleset = compiler.compile_text(candidate_yaml)
+semantic_diff = service.diff_rulesets(ruleset, candidate_ruleset)
+print(semantic_diff.to_text())
+assert semantic_diff.has_changes
+assert "125" in semantic_diff.to_text()
+
+coverage = service.coverage_report(
+    input_df,
+    ruleset=ruleset,
+    broad_match_threshold=0.40,
+)
+assert coverage.total_row_count == 4
+assert coverage.no_match_count == 2
+assert coverage.error_count == 0
+assert coverage.suspiciously_broad_rule_ids == ("high_value_open_account",)
+display(coverage.no_match_rows.orderBy("row_id"))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 12. Query Persisted Metadata
 # MAGIC
 # MAGIC Metadata is deliberately relational where fields are stable and JSON-shaped
 # MAGIC only where operand/function payloads vary.
@@ -528,7 +624,7 @@ display(spark.table(table_names.function_registry))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 12. Retire Published Metadata
+# MAGIC ## 13. Retire Published Metadata
 # MAGIC
 # MAGIC Retired metadata should no longer load through `load_published`.
 # MAGIC
@@ -560,7 +656,7 @@ display(spark.table(table_names.ruleset_versions))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 13. Reconciliation CSV Translation
+# MAGIC ## 14. Reconciliation CSV Translation
 # MAGIC
 # MAGIC The reconciliation translator is outside runtime execution. It converts a
 # MAGIC flat source CSV spec into canonical YAML and writes an audit artifact.
@@ -642,7 +738,7 @@ print(json.dumps(translated_audit, indent=2))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 14. Compile Translated YAML
+# MAGIC ## 15. Compile Translated YAML
 # MAGIC
 # MAGIC Translation output should compile and validate like any other canonical
 # MAGIC ruleset.
@@ -671,7 +767,7 @@ translated_ruleset
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 15. Production Checklist
+# MAGIC ## 16. Production Checklist
 # MAGIC
 # MAGIC Before production use:
 # MAGIC

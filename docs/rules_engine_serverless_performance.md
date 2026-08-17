@@ -19,7 +19,7 @@ The cases are:
 | --- | --- |
 | `input_floor` | Reads every column the tested runtime serializes, computes one `xxhash64` value per row, and writes it. The baseline runtime reads all source columns; the optimized runtime reads only rule dependencies. This is context, not a value to subtract mechanically from other cases. |
 | `assignment_only` | Evaluates the ruleset with `fail_on_error=False` and writes only the configured assignment field. This most closely represents leaf-key production use. |
-| `full_output` | Evaluates once and writes every documented rules-engine output, including the winning trace. Materialized output supplies error and winner-distribution evidence. |
+| `full_output` | Evaluates once and writes every `rules_engine_` output emitted by the tested version, including full trace/provenance and immutable ruleset/engine identity. Materialized output supplies error and winner-distribution evidence. |
 | `assignment_only_fail_on_error` | Runs assignment-only output with the lazy single-pass `fail_on_error=True` contract. Its difference from `assignment_only` measures worker exception-checking overhead on clean data. |
 
 ## Required Parameters

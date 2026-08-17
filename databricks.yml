@@ -13,7 +13,7 @@ variables:
   existing_cluster_id:
     description: Existing Databricks cluster ID used by Databricks jobs.
   system_test_schema:
-    description: Disposable catalog.schema used by the system-test job.
+    description: Disposable catalog.schema used by the system-test job; schema name must contain test, scratch, or tmp.
   workspace_host:
     description: Databricks workspace URL for the selected deployment target.
 

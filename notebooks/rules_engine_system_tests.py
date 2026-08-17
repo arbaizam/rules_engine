@@ -1,4 +1,12 @@
 # Databricks notebook source
+from importlib.metadata import distribution
+from pathlib import Path
+import os
+import re
+
+import rules_engine
+
+
 def _job_parameter(name):
     """Return a Databricks job parameter when this notebook runs as a task."""
     try:
@@ -7,12 +15,87 @@ def _job_parameter(name):
         return None
 
 
+def _find_repo_root():
+    """Locate the bundle checkout without changing package import precedence."""
+    configured = globals().get("RULES_ENGINE_REPO_ROOT") or _job_parameter(
+        "RULES_ENGINE_REPO_ROOT"
+    )
+    starts = []
+    if configured:
+        starts.append(Path(str(configured)).expanduser().resolve())
+    starts.append(Path.cwd().resolve())
+    if "__file__" in globals():
+        starts.append(Path(__file__).resolve().parent)
+    for start in starts:
+        for candidate in (start, *start.parents):
+            if (candidate / "tests").is_dir() and (candidate / "pyproject.toml").is_file():
+                return candidate
+    raise AssertionError(
+        "Could not locate the deployed repository root. Set RULES_ENGINE_REPO_ROOT."
+    )
+
+
+def _quoted_identifier(value):
+    """Quote a validated one-, two-, or three-part Spark identifier."""
+    return ".".join(f"`{part}`" for part in value.split("."))
+
+
+def _as_bool(value, *, name):
+    """Parse notebook booleans without treating the string 'false' as true."""
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y"}:
+        return True
+    if normalized in {"0", "false", "no", "n", ""}:
+        return False
+    raise ValueError(f"{name} must be a boolean value, found {value!r}.")
+
+
+REPO_ROOT = _find_repo_root()
 SCHEMA = globals().get("SCHEMA") or _job_parameter("SCHEMA")
-RULES_ENGINE_RUN_SPARK_TESTS = (
+RULES_ENGINE_RUN_SPARK_TESTS = _as_bool(
     globals().get("RULES_ENGINE_RUN_SPARK_TESTS")
     or _job_parameter("RULES_ENGINE_RUN_SPARK_TESTS")
-    or "1"
+    or "1",
+    name="RULES_ENGINE_RUN_SPARK_TESTS",
 )
+configured_ruleset_path = (
+    globals().get("RULESET_YAML_PATH")
+    or _job_parameter("RULESET_YAML_PATH")
+)
+RULESET_YAML_PATH = Path(configured_ruleset_path).expanduser() if configured_ruleset_path else (
+    REPO_ROOT / "rule_sets" / "account_key_cap_mkt.yaml"
+)
+if not RULESET_YAML_PATH.is_absolute():
+    RULESET_YAML_PATH = (REPO_ROOT / RULESET_YAML_PATH).resolve()
+
+assert RULESET_YAML_PATH.is_file(), f"Ruleset fixture does not exist: {RULESET_YAML_PATH}"
+assert SCHEMA, "Set SCHEMA before running this test."
+schema_parts = SCHEMA.split(".")
+assert len(schema_parts) == 2 and all(
+    re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part) for part in schema_parts
+), "SCHEMA must be a safe catalog.schema identifier."
+schema_leaf = schema_parts[-1].lower()
+assert any(marker in schema_leaf for marker in ("test", "scratch", "tmp")), (
+    "SCHEMA must visibly identify a disposable test/scratch/tmp schema."
+)
+
+package_distribution = distribution("rules-engine")
+package_file = Path(rules_engine.__file__).resolve()
+distribution_root = Path(package_distribution.locate_file("")).resolve()
+try:
+    package_file.relative_to(distribution_root)
+except ValueError as exc:
+    raise AssertionError(
+        "rules_engine was not imported from the installed distribution: "
+        f"module={package_file}, distribution_root={distribution_root}"
+    ) from exc
+assert rules_engine.__version__ == package_distribution.version
+print(f"Installed rules_engine version: {rules_engine.__version__}")
+print(f"Installed rules_engine package: {package_file}")
+print(f"Repository test root: {REPO_ROOT}")
+print(f"Ruleset path fixture: {RULESET_YAML_PATH}")
 
 # COMMAND ----------
 print("ST-001: Setup notebook creates the target schema before table creation")
@@ -24,8 +107,13 @@ print("Expected Result: The schema exists and the notebook proceeds to table cre
 print("")
 assert SCHEMA, "Set SCHEMA before running this test."
 
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
-schemas = [row[0] for row in spark.sql(f"SHOW SCHEMAS IN {SCHEMA.rsplit('.', 1)[0]}" if "." in SCHEMA else "SHOW SCHEMAS").collect()]
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {_quoted_identifier(SCHEMA)}")
+schemas = [
+    row[0]
+    for row in spark.sql(
+        f"SHOW SCHEMAS IN {_quoted_identifier(schema_parts[0])}"
+    ).collect()
+]
 schema_name = SCHEMA.rsplit(".", 1)[-1]
 assert schema_name in schemas, f"Expected schema {SCHEMA} to exist after CREATE SCHEMA IF NOT EXISTS."
 print(f"PASS: Schema exists: {SCHEMA}")
@@ -150,7 +238,10 @@ from rules_engine import RulesEngineService
 assert SCHEMA, "Set SCHEMA before running this test."
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-ALLOW_OVERWRITE_TEST = bool(globals().get("ALLOW_OVERWRITE_TEST", False))
+ALLOW_OVERWRITE_TEST = _as_bool(
+    globals().get("ALLOW_OVERWRITE_TEST", False),
+    name="ALLOW_OVERWRITE_TEST",
+)
 
 if ALLOW_OVERWRITE_TEST:
     service.create_tables(mode="overwrite")
@@ -1478,16 +1569,18 @@ assert loaded_v2.version == "2"
 print("PASS: Ambiguous load by name failed and explicit versions loaded.")
 
 # COMMAND ----------
-print("ST-033: Loading by name and version reconstructs the canonical ruleset")
+print("ST-033: Loading by name and version requires one immutable metadata row")
 print("-" * 80)
 print("Area: Publishing")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: The returned Ruleset matches the published metadata and can be evaluated.")
+print("Expected Result: A unique row loads and evaluates; duplicate rows for the same immutable version fail loudly.")
 print("")
 
 from datetime import datetime, timezone
+from pyspark.sql import functions as F
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import RepositoryError
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
@@ -1532,7 +1625,25 @@ assert loaded.version == ruleset.version
 assert any(row["rules_engine_matched"] is True for row in result_rows)
 assert any(row["rules_engine_matched"] is False for row in result_rows)
 
-print("PASS: Loaded ruleset matched published metadata and evaluated successfully.")
+versions = spark.table(service.table_names.ruleset_versions)
+duplicate_rows = versions.where(
+    (F.col("ruleset_name") == ruleset.ruleset_name)
+    & (F.col("version") == ruleset.version)
+    & (F.col("status") == "published")
+).limit(1).collect()
+assert len(duplicate_rows) == 1
+spark.createDataFrame(duplicate_rows, schema=versions.schema).write.mode(
+    "append"
+).saveAsTable(service.table_names.ruleset_versions)
+
+try:
+    service.load_published(ruleset.ruleset_name, version=ruleset.version)
+except RepositoryError as exc:
+    assert "Multiple published rows found for immutable ruleset version" in str(exc), str(exc)
+else:
+    raise AssertionError("Expected a duplicate immutable version to fail explicit loading.")
+
+print("PASS: Unique loading worked and duplicate immutable rows failed loudly.")
 
 # COMMAND ----------
 print("ST-034: Retirement makes a version unavailable to load_published")
@@ -3192,7 +3303,7 @@ print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
 print("Owner Role: Engineering")
-print("Expected Result: stop_on_match=false keeps all matched IDs, uses last-writer-wins assignment values, and falls back to string for incompatible same-target assignment types.")
+print("Expected Result: Compatible assignments keep all matched IDs and use last-writer-wins; incompatible same-target types fail Spark validation.")
 print("")
 
 from datetime import datetime, timezone
@@ -3242,10 +3353,7 @@ rules:
     assign:
       bucket: second
       review_status: follow_up
-      review_result:
-        literal:
-          market_value: true
-          book_value: false
+      review_result: approved
 """
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
 df = spark.createDataFrame([{"record_id": "r1", "account": "A"}])
@@ -3259,15 +3367,27 @@ assert row["rules_engine_matched_rule_ids"] == ["first_match", "second_match"]
 assign = row["rules_engine_assign"]
 assert assign["bucket"] == "second"
 assert assign["review_status"] == "follow_up"
-assert "market_value=True" in assign["review_result"]
-assert "book_value=False" in assign["review_result"]
+assert assign["review_result"] == "approved"
 assert row["rules_engine_winning_rule_id"] == "first_match"
 assert row["rules_engine_winning_rule_name"] == "First Match"
 assert row["rules_engine_winning_rule_explanation"] == "account == 'A'"
 assert row["rules_engine_error"] is None
 
+incompatible_yaml = yaml_text.replace(
+    "      review_result: approved",
+    """      review_result:
+        literal:
+          market_value: true
+          book_value: false""",
+)
+incompatible_ruleset = service.compile_yaml_text(incompatible_yaml)
+incompatible_validation = service.validator.validate(incompatible_ruleset, df.schema)
+assert "SPARK_ASSIGNMENT_TYPE_CONFLICT" in {
+    issue.check_name for issue in incompatible_validation.issues
+}, incompatible_validation.to_text()
+
 display(result)
-print("PASS: Spark runtime merged continued multi-match assignments.")
+print("PASS: Compatible assignments merged and incompatible assignments were rejected.")
 
 # COMMAND ----------
 print("ST-058: Spark runtime serializes only required source fields")
@@ -3427,32 +3547,667 @@ display(result)
 print("PASS: Match-only evaluation preserved winning trace and losing-rule errors.")
 
 # COMMAND ----------
+print("ST-060: Financial and temporal types cross the real worker boundary exactly")
+print("-" * 80)
+print("Area: Runtime Spark")
+print("Priority: Critical")
+print("Owner Role: Engineering")
+print("Expected Result: Decimal, date, timestamp, array, and struct assignments retain exact values and declared Spark types.")
+print("")
+
+from datetime import date, datetime, timezone
+from decimal import Decimal
+
+from pyspark.sql import types as T
+
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+yaml_text = f"""
+ruleset_id: st_060_{stamp}
+ruleset_name: ST-060 Financial Types Ruleset
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: preserve_types
+    rule_name: Preserve Types
+    rule_order: 1
+    when:
+      all:
+        - left: {{ field: status }}
+          operator: eq
+          right: {{ literal: OPEN }}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      existing_rate: 0.0425
+      parsed_balance:
+        custom_function:
+          name: to_number
+          args:
+            value: {{ field: balance_text }}
+      copied_date: {{ field: funded_date }}
+      copied_timestamp: {{ field: source_timestamp }}
+      factors: [0.10, 0.25]
+      flags:
+        literal:
+          market_value: true
+          book_value: false
+"""
+ruleset = service.compile_yaml_text(yaml_text)
+source_schema = T.StructType(
+    [
+        T.StructField("status", T.StringType(), False),
+        T.StructField("balance_text", T.StringType(), False),
+        T.StructField("existing_rate", T.DecimalType(10, 4), False),
+        T.StructField("funded_date", T.DateType(), False),
+        T.StructField("source_timestamp", T.TimestampType(), False),
+    ]
+)
+expected_date = date(2025, 1, 15)
+expected_timestamp = datetime(2025, 1, 15, 10, 30)
+source = spark.createDataFrame(
+    [
+        (
+            "OPEN",
+            "1234.56",
+            Decimal("0.0300"),
+            expected_date,
+            expected_timestamp,
+        )
+    ],
+    source_schema,
+)
+result = service.evaluate_dataframe(
+    source,
+    ruleset=ruleset,
+    fail_on_error=False,
+)
+row = result.collect()[0]
+assignment_schema = result.schema["rules_engine_assign"].dataType
+
+assert row["rules_engine_assign"]["existing_rate"] == Decimal("0.0425")
+assert row["rules_engine_assign"]["parsed_balance"] == Decimal("1234.56")
+assert row["rules_engine_assign"]["copied_date"] == expected_date
+assert row["rules_engine_assign"]["copied_timestamp"] == expected_timestamp
+assert row["rules_engine_assign"]["factors"] == [Decimal("0.10"), Decimal("0.25")]
+assert row["rules_engine_assign"]["flags"].asDict() == {
+    "book_value": False,
+    "market_value": True,
+}
+assert isinstance(assignment_schema["existing_rate"].dataType, T.DecimalType)
+assert isinstance(assignment_schema["parsed_balance"].dataType, T.DecimalType)
+assert isinstance(assignment_schema["copied_date"].dataType, T.DateType)
+assert isinstance(assignment_schema["copied_timestamp"].dataType, T.TimestampType)
+assert isinstance(assignment_schema["factors"].dataType, T.ArrayType)
+assert isinstance(assignment_schema["flags"].dataType, T.StructType)
+print("PASS: Financial and temporal assignments retained exact worker-boundary values and types.")
+
+# COMMAND ----------
+print("ST-061: Fail-fast evaluation is lazy and uses one Python evaluation node")
+print("-" * 80)
+print("Area: Runtime Spark")
+print("Priority: High")
+print("Owner Role: Engineering")
+print("Expected Result: DataFrame construction performs no row evaluation; the caller action evaluates once and surfaces bad-row errors.")
+print("")
+
+from datetime import datetime, timezone
+
+from rules_engine import CustomFunctionSpec, RulesEngineService
+
+
+def st061_validate_value(value):
+    if value == "bad":
+        raise ValueError("ST-061 bad value")
+    return value == "good"
+
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+service.registry.register(
+    CustomFunctionSpec(
+        function_name="st061_validate_value",
+        implementation_reference="system_tests.st061_validate_value",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=False,
+        return_type_hint="boolean",
+    ),
+    st061_validate_value,
+)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+yaml_text = f"""
+ruleset_id: st_061_{stamp}
+ruleset_name: ST-061 Lazy Fail Fast Ruleset
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: good_value
+    rule_name: Good Value
+    rule_order: 1
+    when:
+      all:
+        - left:
+            custom_function:
+              name: st061_validate_value
+              args:
+                value: {{ field: value }}
+          operator: eq
+          right: {{ literal: true }}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      bucket: good
+"""
+ruleset = service.compile_yaml_text(yaml_text)
+clean_output = service.evaluate_dataframe(
+    spark.createDataFrame([{"value": "good"}]),
+    ruleset=ruleset,
+    fail_on_error=True,
+)
+plan = clean_output._jdf.queryExecution().executedPlan().toString()
+assert plan.count("BatchEvalPython") == 1, plan
+assert not clean_output.storageLevel.useMemory
+assert not clean_output.storageLevel.useDisk
+assert clean_output.collect()[0]["rules_engine_matched"] is True
+
+bad_output = service.evaluate_dataframe(
+    spark.createDataFrame([{"value": "bad"}]),
+    ruleset=ruleset,
+    fail_on_error=True,
+)
+try:
+    bad_output.collect()
+except Exception as exc:
+    assert "ST-061 bad value" in str(exc), str(exc)
+else:
+    raise AssertionError("Expected the materializing action to fail for a bad row.")
+print("PASS: Fail-fast construction stayed lazy and caller actions used one Python node.")
+
+# COMMAND ----------
+print("ST-062: Custom implementations are preflighted for worker serialization")
+print("-" * 80)
+print("Area: Runtime Spark")
+print("Priority: High")
+print("Owner Role: Engineering")
+print("Expected Result: A top-level callable evaluates, while an unsupported callable fails before Spark job submission.")
+print("")
+
+from datetime import datetime, timezone
+
+from rules_engine import CustomFunctionSpec, FunctionRegistry, SparkRulesEngineRuntime, YamlRulesetCompiler
+from rules_engine.exceptions import ValidationFailedError
+
+
+class ST062Repository:
+    def load_published(self, ruleset_name, version=None):
+        raise NotImplementedError("ST-062 passes the ruleset directly.")
+
+
+def st062_identity(value):
+    return value
+
+
+class ST062Unserializable:
+    def __call__(self, **kwargs):
+        return kwargs["value"]
+
+    def __getstate__(self):
+        raise TypeError("ST-062 callable cannot be pickled")
+
+
+def st062_ruleset(function_name, stamp):
+    return YamlRulesetCompiler().compile_text(
+        f"""
+ruleset_id: st_062_{function_name}_{stamp}
+ruleset_name: ST-062 {function_name}
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: identity_match
+    rule_name: Identity Match
+    rule_order: 1
+    when:
+      all:
+        - left:
+            custom_function:
+              name: {function_name}
+              args:
+                value: {{ field: value }}
+          operator: eq
+          right: {{ literal: A }}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      bucket: A
+"""
+    )
+
+
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+good_registry = FunctionRegistry()
+good_registry.register(
+    CustomFunctionSpec(
+        function_name="st062_identity",
+        implementation_reference="system_tests.st062_identity",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=False,
+        return_type_hint="string",
+    ),
+    st062_identity,
+)
+good_runtime = SparkRulesEngineRuntime(ST062Repository(), good_registry)
+good_row = good_runtime.evaluate_dataframe(
+    spark.createDataFrame([{"value": "A"}]),
+    st062_ruleset("st062_identity", stamp),
+).collect()[0]
+assert good_row["rules_engine_matched"] is True
+
+bad_registry = FunctionRegistry()
+bad_registry.register(
+    CustomFunctionSpec(
+        function_name="st062_unserializable",
+        implementation_reference="system_tests.st062_unserializable",
+        arg_names=("value",),
+        allowed_in_condition_flag=True,
+        allowed_in_assignment_flag=False,
+        return_type_hint="string",
+    ),
+    ST062Unserializable(),
+)
+bad_runtime = SparkRulesEngineRuntime(ST062Repository(), bad_registry)
+try:
+    bad_runtime.evaluate_dataframe(
+        spark.createDataFrame([{"value": "A"}]),
+        st062_ruleset("st062_unserializable", stamp),
+    )
+except ValidationFailedError as exc:
+    assert "Spark-worker-serializable" in str(exc), str(exc)
+else:
+    raise AssertionError("Expected unsupported callable serialization to fail before an action.")
+print("PASS: Worker serialization preflight accepted and rejected the expected callables.")
+
+# COMMAND ----------
+print("ST-063: Standard date functions support loan-tape calendar semantics")
+print("-" * 80)
+print("Area: Standard functions")
+print("Priority: Critical")
+print("Owner Role: Engineering")
+print("Expected Result: Month-end and leap-year calculations remain calendar-safe and produce typed assignments with authored expressions.")
+print("")
+
+from datetime import date, datetime, timezone
+
+from pyspark.sql import types as T
+
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+yaml_text = f"""
+ruleset_id: st_063_{stamp}
+ruleset_name: ST-063 Date Functions Ruleset
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: seasoning
+    rule_name: Seasoning
+    rule_order: 1
+    when:
+      all:
+        - left:
+            custom_function:
+              name: date_add_months
+              args:
+                value: {{ field: funded_date }}
+                months: 1
+          operator: ge
+          right: {{ literal: "2024-02-29", value_type: date }}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      review_date:
+        custom_function:
+          name: date_add_years
+          args:
+            value: {{ field: funded_date }}
+            years: 1
+      age_days:
+        custom_function:
+          name: date_diff_days
+          args:
+            start: {{ field: funded_date }}
+            end: {{ field: as_of_date }}
+"""
+ruleset = service.compile_yaml_text(yaml_text)
+result = service.evaluate_dataframe(
+    spark.createDataFrame(
+        [
+            {
+                "loan_id": "L1",
+                "funded_date": "2024-01-31",
+                "as_of_date": "2024-02-29",
+            }
+        ]
+    ),
+    ruleset=ruleset,
+)
+row = result.collect()[0].asDict(recursive=True)
+assert row["rules_engine_assign"] == {
+    "review_date": date(2025, 1, 31),
+    "age_days": 29,
+}
+assert result.schema["rules_engine_assign"].dataType["review_date"].dataType == T.DateType()
+assert result.schema["rules_engine_assign"].dataType["age_days"].dataType == T.LongType()
+authored = {
+    event["target_field"]: event["authored_expression"]
+    for event in row["rules_engine_assignment_results"]
+}
+assert authored == {
+    "review_date": "review_date = date_add_years(value=funded_date, years=1)",
+    "age_days": "age_days = date_diff_days(start=funded_date, end=as_of_date)",
+}
+print("PASS: Date functions preserved month-end, leap-year, type, and audit semantics.")
+
+# COMMAND ----------
+print("ST-064: Embedded expected cases are a hard publication gate")
+print("-" * 80)
+print("Area: Publishing")
+print("Priority: Critical")
+print("Owner Role: Engineering")
+print("Expected Result: Passing cases publish; failing cases prevent every Delta repository write.")
+print("")
+
+from datetime import datetime, timezone
+
+from rules_engine import RulesEngineService
+from rules_engine.exceptions import ValidationFailedError
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+passing_yaml = f"""
+ruleset_id: st_064_pass_{stamp}
+ruleset_name: ST-064 Passing Expected Cases
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: prime
+    rule_name: Prime
+    rule_order: 1
+    when:
+      all:
+        - left: {{ field: fico }}
+          operator: ge
+          right: {{ literal: 720 }}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      bucket: prime
+expect:
+  - name: prime loan
+    given: {{ fico: 740 }}
+    then:
+      matched: true
+      matched_rule_ids: [prime]
+      bucket: prime
+"""
+passing_ruleset = service.compile_yaml_text(passing_yaml)
+test_result = service.test_ruleset(passing_ruleset)
+assert test_result.passed, test_result.to_text()
+service.publish(passing_ruleset, published_by="system-test")
+
+failing_yaml = f"""
+ruleset_id: st_064_fail_{stamp}
+ruleset_name: ST-064 Failing Expected Cases
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: prime
+    rule_name: Prime
+    rule_order: 1
+    when:
+      all:
+        - left: {{ field: fico }}
+          operator: ge
+          right: {{ literal: 720 }}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      bucket: prime
+expect:
+  - name: deliberately incorrect expectation
+    given: {{ fico: 740 }}
+    then:
+      bucket: incorrect
+"""
+failing_ruleset = service.compile_yaml_text(failing_yaml)
+try:
+    service.publish(failing_ruleset, published_by="system-test")
+except ValidationFailedError as exc:
+    assert "expected cases failed" in str(exc), str(exc)
+else:
+    raise AssertionError("Expected a failing embedded case to block publication.")
+failed_rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_id = '{failing_ruleset.ruleset_id}' AND version = '{failing_ruleset.version}'"
+).count()
+assert failed_rows == 0
+print("PASS: Expected cases passed and blocked publication at the correct boundaries.")
+
+# COMMAND ----------
+print("ST-065: Audit levels retain immutable execution identity")
+print("-" * 80)
+print("Area: Auditability")
+print("Priority: Critical")
+print("Owner Role: Engineering")
+print("Expected Result: Minimal, standard, and full schemas differ only in documented detail while every level remains attributable.")
+print("")
+
+from datetime import datetime, timezone
+
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+yaml_text = f"""
+ruleset_id: st_065_{stamp}
+ruleset_name: ST-065 Audit Levels Ruleset
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: match_a
+    rule_name: Match A
+    rule_order: 1
+    when:
+      all:
+        - left: {{ field: account }}
+          operator: eq
+          right: {{ literal: A }}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      bucket: A
+"""
+ruleset = service.compile_yaml_text(yaml_text)
+source = spark.createDataFrame([{"account": "A"}])
+minimal = service.evaluate_dataframe(source, ruleset=ruleset, audit_level="minimal")
+standard = service.evaluate_dataframe(source, ruleset=ruleset, audit_level="standard")
+full = service.evaluate_dataframe(source, ruleset=ruleset, audit_level="full")
+identity_columns = {
+    "rules_engine_ruleset_id",
+    "rules_engine_ruleset_version",
+    "rules_engine_content_hash",
+    "rules_engine_engine_version",
+}
+assert identity_columns <= set(minimal.columns)
+assert identity_columns <= set(standard.columns)
+assert identity_columns <= set(full.columns)
+assert "rules_engine_first_matched_rule" not in minimal.columns
+assert "rules_engine_first_matched_rule" in standard.columns
+assert "rules_engine_assignment_results" not in standard.columns
+assert "rules_engine_assignment_results" in full.columns
+minimal_row = minimal.collect()[0]
+assert minimal_row["rules_engine_ruleset_id"] == ruleset.ruleset_id
+assert minimal_row["rules_engine_ruleset_version"] == ruleset.version
+assert minimal_row["rules_engine_content_hash"]
+assert minimal_row["rules_engine_engine_version"] == rules_engine.__version__
+print("PASS: Every audit level retained identity and emitted only its documented detail.")
+
+# COMMAND ----------
+print("ST-066: Semantic diffs compare immutable published versions")
+print("-" * 80)
+print("Area: Change control")
+print("Priority: High")
+print("Owner Role: Engineering")
+print("Expected Result: Version diffs expose authored threshold and assignment changes with both content hashes.")
+print("")
+
+from datetime import datetime, timezone
+
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+ruleset_name = f"ST-066 Semantic Diff {stamp}"
+baseline_yaml = f"""
+ruleset_id: st_066_{stamp}
+ruleset_name: {ruleset_name}
+version: "{stamp}.1"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: prime
+    rule_name: Prime
+    rule_order: 1
+    when:
+      all:
+        - condition_id: fico_threshold
+          left: {{ field: fico }}
+          operator: ge
+          right: {{ literal: 720 }}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      bucket: prime
+"""
+candidate_yaml = baseline_yaml.replace(f'version: "{stamp}.1"', f'version: "{stamp}.2"')
+candidate_yaml = candidate_yaml.replace("right: { literal: 720 }", "right: { literal: 740 }")
+candidate_yaml = candidate_yaml.replace("bucket: prime", "bucket: super_prime")
+baseline = service.publish_yaml_text(baseline_yaml, published_by="system-test")
+candidate = service.publish_yaml_text(candidate_yaml, published_by="system-test")
+semantic_diff = service.diff_versions(
+    ruleset_name,
+    baseline.version,
+    candidate.version,
+)
+rendered_diff = semantic_diff.to_text()
+assert semantic_diff.has_changes
+assert semantic_diff.baseline_content_hash != semantic_diff.candidate_content_hash
+assert "720" in rendered_diff and "740" in rendered_diff
+assert "super_prime" in rendered_diff
+print(rendered_diff)
+print("PASS: Published-version diff exposed the expected semantic changes.")
+
+# COMMAND ----------
+print("ST-067: Coverage reports dead, broad, and closest rules")
+print("-" * 80)
+print("Area: Change control")
+print("Priority: High")
+print("Owner Role: Engineering")
+print("Expected Result: Coverage counts matches once and diagnoses clean no-match rows with failed condition IDs.")
+print("")
+
+from datetime import datetime, timezone
+
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+yaml_text = f"""
+ruleset_id: st_067_{stamp}
+ruleset_name: ST-067 Coverage Ruleset
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: prime
+    rule_name: Prime
+    rule_order: 1
+    when:
+      all:
+        - condition_id: prime_fico
+          left: {{ field: fico }}
+          operator: ge
+          right: {{ literal: 720 }}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      bucket: prime
+  - rule_id: near
+    rule_name: Near Prime
+    rule_order: 2
+    when:
+      all:
+        - condition_id: near_fico
+          left: {{ field: fico }}
+          operator: ge
+          right: {{ literal: 680 }}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      review: true
+  - rule_id: impossible
+    rule_name: Impossible
+    rule_order: 3
+    when:
+      all:
+        - condition_id: impossible_fico
+          left: {{ field: fico }}
+          operator: gt
+          right: {{ literal: 900 }}
+          null_input_mode: propagate
+          null_result_mode: "null"
+    assign:
+      invalid: true
+"""
+ruleset = service.compile_yaml_text(yaml_text)
+coverage = service.coverage_report(
+    spark.createDataFrame(
+        [("L1", 740), ("L2", 690), ("L3", 600)],
+        ["loan_id", "fico"],
+    ),
+    ruleset=ruleset,
+    broad_match_threshold=0.60,
+)
+no_match = coverage.no_match_rows.collect()[0]
+assert coverage.total_row_count == 3
+assert coverage.no_match_count == 1
+assert coverage.error_count == 0
+assert coverage.dead_rule_ids == ("impossible",)
+assert coverage.suspiciously_broad_rule_ids == ("near",)
+assert no_match["loan_id"] == "L3"
+assert no_match["rules_engine_coverage_closest_rule_id"] == "prime"
+assert no_match["rules_engine_coverage_failed_condition_ids"] == ["prime_fico"]
+print("PASS: Coverage identified dead, broad, and closest-rule behavior.")
+
+# COMMAND ----------
 print("Run automated unit test suite")
 print("-" * 80)
 print("Purpose: Execute the repository pytest suite.")
 print("")
 
-import os
-from pathlib import Path
 import sys
 import warnings
 
 import pytest
-
-configured_repo_root = globals().get("RULES_ENGINE_REPO_ROOT")
-if configured_repo_root:
-    REPO_ROOT = Path(configured_repo_root).expanduser().resolve()
-else:
-    search_start = Path(os.getcwd()).resolve()
-    candidates = [search_start, *search_start.parents]
-    REPO_ROOT = next(
-        (
-            candidate
-            for candidate in candidates
-            if (candidate / "tests").exists() and (candidate / "pyproject.toml").exists()
-        ),
-        search_start,
-    )
 
 assert (REPO_ROOT / "tests").exists(), (
     f"Could not find tests directory under repo root {REPO_ROOT}. "
@@ -3471,21 +4226,17 @@ PYTEST_ARGS = globals().get(
     ],
 )
 
-sys.path.insert(0, str(REPO_ROOT))
-src_path = REPO_ROOT / "src"
-bundle_src_path = REPO_ROOT / "rules_engine_bundle" / "src"
-if src_path.exists():
-    sys.path.insert(0, str(src_path))
-if bundle_src_path.exists():
-    sys.path.insert(0, str(bundle_src_path))
+if str(REPO_ROOT) not in sys.path:
+    # Tests and package tooling live in the checkout. Append the path so the
+    # already-verified installed rules_engine distribution retains precedence.
+    sys.path.append(str(REPO_ROOT))
 
 previous_cwd = Path(os.getcwd())
 os.chdir(str(REPO_ROOT))
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
-os.environ["RULES_ENGINE_RUN_SPARK_TESTS"] = globals().get(
-    "RULES_ENGINE_RUN_SPARK_TESTS",
-    os.environ.get("RULES_ENGINE_RUN_SPARK_TESTS", "1"),
+os.environ["RULES_ENGINE_RUN_SPARK_TESTS"] = (
+    "1" if RULES_ENGINE_RUN_SPARK_TESTS else "0"
 )
 
 print(f"Repo root: {REPO_ROOT}")

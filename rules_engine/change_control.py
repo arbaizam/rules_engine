@@ -361,12 +361,39 @@ class RulesetDiffer:
         self,
         before: dict[str, Any],
         after: dict[str, Any],
+        *,
+        prefix: str = "",
     ) -> tuple[SemanticChange, ...]:
-        return tuple(
-            SemanticChange(field, before.get(field), after.get(field))
-            for field in dict.fromkeys((*before, *after))
-            if before.get(field) != after.get(field)
-        )
+        """Return changed fields, expanding shared mappings to readable leaves."""
+        changes: list[SemanticChange] = []
+        for field in dict.fromkeys((*before, *after)):
+            before_exists = field in before
+            after_exists = field in after
+            before_value = before.get(field)
+            after_value = after.get(field)
+            qualified_field = f"{prefix}.{field}" if prefix else field
+            if (
+                before_exists
+                and after_exists
+                and isinstance(before_value, Mapping)
+                and isinstance(after_value, Mapping)
+            ):
+                changes.extend(
+                    self._changes(
+                        dict(before_value),
+                        dict(after_value),
+                        prefix=qualified_field,
+                    )
+                )
+            elif (
+                not before_exists
+                or not after_exists
+                or before_value != after_value
+            ):
+                changes.append(
+                    SemanticChange(qualified_field, before_value, after_value)
+                )
+        return tuple(changes)
 
     def _rule_order(self, rule: Rule) -> tuple[int, str]:
         return rule.rule_order, rule.rule_id

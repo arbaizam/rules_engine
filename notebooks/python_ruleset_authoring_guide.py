@@ -13,11 +13,11 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1. Imports And Package Path
+# MAGIC ## 1. Imports And Installed Package
 # MAGIC
-# MAGIC In a packaged Databricks job, the wheel should already be installed and no
-# MAGIC `sys.path` change is required. In a copied workspace folder, set `repo_root`
-# MAGIC to the folder that contains `rules_engine/`.
+# MAGIC Install the release wheel on the Databricks compute before running this
+# MAGIC notebook. Printing the imported path prevents an unnoticed workspace source
+# MAGIC checkout from shadowing the installed artifact.
 
 # COMMAND ----------
 
@@ -25,18 +25,16 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
-import sys
+from tempfile import gettempdir
 
-repo_root = Path.cwd()
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
+import rules_engine
 from rules_engine import FunctionRegistry, SparkRulesEngineRuntime, YamlRulesetExporter
 from rules_engine.enums import ComparisonOperator, LogicalOperator, NullInputMode, NullResultMode, RulesetStatus
 from rules_engine.models import Assignment, Condition, ConditionGroup, FieldOperand, LiteralOperand, Rule, Ruleset
 from rules_engine.validator import RulesetValidator
 
-print("repo_root:", repo_root)
+print(f"rules_engine version: {rules_engine.__version__}")
+print(f"rules_engine package: {rules_engine.__file__}")
 
 # COMMAND ----------
 
@@ -184,13 +182,19 @@ if validation.has_errors():
 # MAGIC
 # MAGIC The exporter writes the same canonical vocabulary accepted by the compiler.
 # MAGIC The resulting file can be reviewed, checked into source control, and later
-# MAGIC compiled/published through the standard workflow.
+# MAGIC compiled/published through the standard workflow. Set `RULESET_EXPORT_PATH`
+# MAGIC for a durable governed artifact; otherwise this guide writes under the
+# MAGIC driver's temporary directory instead of changing the repository checkout.
 
 # COMMAND ----------
 
-output_dir = repo_root / "rule_sets"
-output_dir.mkdir(parents=True, exist_ok=True)
-output_path = output_dir / "python_account_review.yaml"
+configured_output = globals().get("RULESET_EXPORT_PATH")
+output_path = (
+    Path(configured_output).expanduser()
+    if configured_output
+    else Path(gettempdir()) / "rules_engine_guide" / "python_account_review.yaml"
+)
+output_path.parent.mkdir(parents=True, exist_ok=True)
 
 YamlRulesetExporter().export_path(ruleset, output_path)
 
@@ -222,6 +226,24 @@ rows = [
 runtime = SparkRulesEngineRuntime(NotebookRepository(), FunctionRegistry())
 output_df = runtime.evaluate_dataframe(spark.createDataFrame(rows), ruleset)
 display(output_df)
+
+actual = {
+    row["account"]: row.asDict(recursive=True)
+    for row in output_df.orderBy("account").collect()
+}
+assert actual["A"]["rules_engine_matched_rule_ids"] == ["open_high_value"]
+assert actual["A"]["rules_engine_assign"] == {"review_bucket": "high_value_open"}
+assert actual["B"]["rules_engine_matched"] is False
+assert actual["B"]["rules_engine_assign"] is None
+assert actual["C"]["rules_engine_matched_rule_ids"] == ["closed_account"]
+assert actual["C"]["rules_engine_assign"] == {"review_bucket": "closed"}
+assert all(row["rules_engine_error"] is None for row in actual.values())
+assert all(row["rules_engine_ruleset_id"] == ruleset.ruleset_id for row in actual.values())
+assert all(row["rules_engine_content_hash"] for row in actual.values())
+assert all(
+    row["rules_engine_engine_version"] == rules_engine.__version__
+    for row in actual.values()
+)
 
 # COMMAND ----------
 

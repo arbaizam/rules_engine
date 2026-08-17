@@ -14,32 +14,46 @@
 
 # COMMAND ----------
 
-from pathlib import Path
-import sys
-
-repo_root = Path.cwd()
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
 from pyspark.sql import functions as F
 
+import rules_engine
 from rules_engine import (
     RulesEngineService,
 )
+
+print(f"rules_engine version: {rules_engine.__version__}")
+print(f"rules_engine package: {rules_engine.__file__}")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 1. Configure Service
 # MAGIC
-# MAGIC Update `DATABASE` to a scratch schema where you can create or overwrite
-# MAGIC rules engine metadata tables.
+# MAGIC Set `RULES_ENGINE_QUICKSTART_DATABASE` to a disposable `catalog.schema`.
+# MAGIC The notebook creates missing metadata tables but never overwrites existing
+# MAGIC tables. Published name/version pairs are immutable, so use a new version or
+# MAGIC a fresh schema when rerunning the publication step.
 
 # COMMAND ----------
 
-DATABASE = "YOUR_CATALOG.YOUR_SCHEMA"
+DATABASE = globals().get(
+    "RULES_ENGINE_QUICKSTART_DATABASE",
+    "YOUR_CATALOG.YOUR_SCHEMA",
+)
 
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {DATABASE}")
+if not DATABASE or DATABASE == "YOUR_CATALOG.YOUR_SCHEMA":
+    raise ValueError(
+        "Set RULES_ENGINE_QUICKSTART_DATABASE to a disposable catalog.schema."
+    )
+database_parts = DATABASE.split(".")
+if len(database_parts) != 2 or not all(
+    part.replace("_", "a").isalnum() and not part[0].isdigit()
+    for part in database_parts
+):
+    raise ValueError("RULES_ENGINE_QUICKSTART_DATABASE must be catalog.schema.")
+
+quoted_database = ".".join(f"`{part}`" for part in database_parts)
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {quoted_database}")
 service = RulesEngineService.from_schema(spark, DATABASE)
 
 # COMMAND ----------
@@ -75,6 +89,18 @@ rules:
           null_result_mode: "null"
     assign:
       review_bucket: high_value_open
+expect:
+  - name: open high-value account
+    given: {status: OPEN, amount: 150}
+    then:
+      matched: true
+      matched_rule_ids: [open_high_value]
+      review_bucket: high_value_open
+  - name: open low-value account
+    given: {status: OPEN, amount: 25}
+    then:
+      matched: false
+      matched_rule_ids: []
 """
 
 ruleset = service.compile_yaml_text(ruleset_yaml)
@@ -84,6 +110,11 @@ print(validation.to_text())
 if validation.has_errors():
     raise ValueError(validation.to_text())
 
+expected_cases = service.test_ruleset(ruleset)
+print(expected_cases.to_text())
+if not expected_cases.passed:
+    raise AssertionError(expected_cases.to_text())
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -91,7 +122,7 @@ if validation.has_errors():
 
 # COMMAND ----------
 
-service.create_tables(mode="overwrite")
+service.create_tables(mode="ignore")
 
 # COMMAND ----------
 
@@ -123,6 +154,7 @@ result_df = service.evaluate_dataframe(
     ruleset_name="Quickstart Account Review",
     version="1",
     fail_on_error=True,
+    audit_level="standard",
 )
 
 display(result_df.orderBy("account"))
@@ -134,8 +166,21 @@ display(result_df.orderBy("account"))
 
 # COMMAND ----------
 
-matched_count = result_df.where(F.col("rules_engine_matched")).count()
-if matched_count != 1:
-    raise AssertionError(f"Expected one matched row, got {matched_count}.")
+rows = {
+    row["account"]: row.asDict(recursive=True)
+    for row in result_df.orderBy("account").collect()
+}
+
+assert rows["A"]["rules_engine_matched"] is True
+assert rows["A"]["rules_engine_matched_rule_ids"] == ["open_high_value"]
+assert rows["A"]["rules_engine_assign"] == {"review_bucket": "high_value_open"}
+assert rows["B"]["rules_engine_matched"] is False
+assert rows["C"]["rules_engine_matched"] is False
+assert all(row["rules_engine_error"] is None for row in rows.values())
+assert all(row["rules_engine_ruleset_id"] == ruleset.ruleset_id for row in rows.values())
+assert all(row["rules_engine_ruleset_version"] == ruleset.version for row in rows.values())
+assert all(row["rules_engine_content_hash"] for row in rows.values())
+assert all(row["rules_engine_engine_version"] == rules_engine.__version__ for row in rows.values())
+assert result_df.where(F.col("rules_engine_matched")).count() == 1
 
 print("Quickstart passed.")

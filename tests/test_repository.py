@@ -1,5 +1,8 @@
+from types import SimpleNamespace
+
 import pytest
 
+import rules_engine.repository as repository_module
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exceptions import RepositoryError
 from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository
@@ -40,6 +43,38 @@ class FakeSpark:
 
     def sql(self, query):
         self.queries.append(query)
+
+
+class FakePredicate:
+    def __eq__(self, other):
+        return self
+
+    def __and__(self, other):
+        return self
+
+
+class FakeLoadDataFrame:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def where(self, predicate):
+        return self
+
+    def limit(self, count):
+        assert count == 2
+        return self
+
+    def collect(self):
+        return self.rows
+
+
+class FakeLoadSpark:
+    def __init__(self, rows):
+        self.frame = FakeLoadDataFrame(rows)
+
+    def table(self, table_name):
+        assert table_name == "ruleset_versions"
+        return self.frame
 
 
 def _repository():
@@ -149,6 +184,28 @@ def test_save_published_persists_effective_dates():
 
     assert saved_rows[0]["effective_start_date"] == "2026-05-01"
     assert saved_rows[0]["effective_end_date"] == "2026-12-31"
+
+
+def test_load_published_rejects_duplicate_rows_for_explicit_version(monkeypatch):
+    """Pinned loads fail loudly when the immutable version key is not unique."""
+    monkeypatch.setattr(
+        repository_module,
+        "F",
+        SimpleNamespace(col=lambda name: FakePredicate()),
+    )
+    repo = SparkDeltaRulesetRepository(
+        FakeLoadSpark([object(), object()]),
+        RulesEngineTableNames(
+            ruleset_versions="ruleset_versions",
+            function_registry="function_registry",
+        ),
+    )
+
+    with pytest.raises(
+        RepositoryError,
+        match=r"immutable ruleset version: ruleset_name=Ruleset, version=1",
+    ):
+        repo.load_published("Ruleset", version="1")
 
 
 def test_retire_closes_effective_window():

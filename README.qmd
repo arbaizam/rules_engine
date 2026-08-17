@@ -385,8 +385,11 @@ Detailed sequence:
 
 1. Query `ruleset_versions` for `ruleset_name`, optional `version`, and
    `status = published`.
-2. Read the canonical JSON payload from the matching row.
-3. Compile the payload back into canonical dataclasses.
+2. Require exactly one matching row. An unversioned ambiguous load asks the
+   caller to specify a version; duplicate rows for an explicit immutable
+   version fail as corrupted metadata rather than selecting an arbitrary row.
+3. Read the canonical JSON payload from the matching row.
+4. Compile the payload back into canonical dataclasses.
 
 Side effects:
 
@@ -820,7 +823,9 @@ accepts dates, timestamps, and ISO `YYYY-MM-DD` strings. Day, month, and year
 offsets must be integral and may be negative. Month and year arithmetic clamps
 to the target month's final day, so January 31 plus one month becomes February
 28 or 29 and February 29 plus one year becomes February 28. `date_diff_days`
-returns `end - start` in calendar days.
+returns `end - start` in calendar days. Date additions that exceed Python's
+supported year range fail with a descriptive `ValueError` that identifies the
+date and offset.
 For a timezone-aware Python timestamp, `to_date` returns the calendar date in
 that timestamp's own offset; it does not first convert through the Spark
 session timezone. Convert upstream when a portfolio-wide business timezone is
@@ -1076,8 +1081,9 @@ coverage = service.coverage_report(
 `coverage.first_match_distribution` reports precedence behavior, and
 `coverage.no_match_rows` includes the closest rule plus failed condition IDs.
 `semantic_diff.to_text()` emphasizes rule-order, condition, and assignment
-changes in authored syntax, including null-handling and metadata identity, and
-prints both immutable content hashes for reconciliation.
+changes in authored syntax, including null-handling and metadata identity.
+Nested condition and assignment contracts render only changed leaf fields,
+while both immutable content hashes remain visible for reconciliation.
 
 `coverage_report()` materializes one full evaluation action to calculate its
 counts. `coverage.no_match_rows` remains lazy; materializing it evaluates the
@@ -1590,6 +1596,8 @@ Databricks or copy cells into a Databricks notebook. It walks through:
 - Delta repository setup,
 - publish/load/retire workflow,
 - Spark DataFrame evaluation,
+- embedded expected-case publication gates,
+- audit-level identity, semantic diffs, and coverage diagnostics,
 - reconciliation CSV translation.
 
 The quickstart notebook is:
@@ -1598,8 +1606,9 @@ The quickstart notebook is:
 notebooks/rules_engine_quickstart.py
 ```
 
-It provides the shortest Databricks workflow: compile YAML, validate for Spark,
-create metadata tables, publish, load, and evaluate a Spark DataFrame.
+It provides the shortest Databricks workflow: compile YAML, execute expected
+cases, validate for Spark, create metadata tables non-destructively, publish,
+load, and evaluate a Spark DataFrame with immutable execution identity.
 
 The Python authoring notebook is:
 
@@ -1609,8 +1618,9 @@ notebooks/python_ruleset_authoring_guide.py
 
 It demonstrates code-based ruleset authoring with the public dataclass API,
 validates the resulting model, exports canonical YAML with
-`YamlRulesetExporter`, and evaluates a small Spark fixture. By default, it
-writes the generated example YAML to `rule_sets/`.
+`YamlRulesetExporter`, and evaluates a small Spark fixture with exact assertions.
+Set `RULESET_EXPORT_PATH` for a durable artifact; otherwise it writes under the
+driver's temporary directory rather than changing the repository checkout.
 
 ## Testing
 
@@ -1643,9 +1653,10 @@ source repo -> build wheel -> deploy Asset Bundle -> install wheel on job task
 ```
 
 This avoids production dependencies on workspace source folders and removes the
-need for `sys.path.append(...)` in production jobs. Development notebooks may
-still use `sys.path` while files are being copied manually, but production jobs
-should import the installed package:
+need for `sys.path.append(...)` in production jobs. Shipped operational and guide
+notebooks import the installed package and print its version/path. The system
+test appends the checkout only after asserting wheel provenance, and only so
+pytest can discover repository tests and tooling:
 
 ```python
 from rules_engine import YamlRulesetCompiler, SparkRulesEngineRuntime
@@ -1697,10 +1708,12 @@ databricks bundle run --target dev --var "workspace_host=https://<workspace-host
 
 The bundle job installs the exact versioned wheel plus pytest on the supplied
 existing cluster, then runs `notebooks/rules_engine_system_tests.py` with live
-Spark tests enabled. `system_test_schema` must be disposable and must not name a
-production metadata schema. Keep `docs/rules_engine_system_test_uat_plan.md`
-synchronized with the notebook when adding, removing, or changing system-test
-coverage.
+Spark tests enabled. It asserts that `rules_engine` came from the installed
+distribution before executing 67 named system tests and the repository pytest
+suite. `system_test_schema` must be disposable, must not name a production
+metadata schema, and its schema component must contain `test`, `scratch`, or
+`tmp`. Keep `docs/rules_engine_system_test_uat_plan.md` synchronized with the
+notebook when adding, removing, or changing system-test coverage.
 
 Use `notebooks/rules_engine_serverless_performance.py` for cache-free
 Databricks serverless benchmarks. It materializes every timed case to Delta and
@@ -1880,8 +1893,9 @@ The package version is `0.3.0`. The default `audit_level="full"` preserves the
   `content_hash`. Publish as a new immutable ruleset version.
 - Publication now executes embedded expected cases after validation and before
   repository persistence. A failed case prevents the write.
-- Coverage and the experimental backtest helper materialize Spark actions to
-  compute report counts. Returned diagnostic DataFrames remain lazy.
+- In 0.3.0, coverage and the then-experimental backtest helper materialized
+  Spark actions to compute report counts. Coverage retains this documented
+  behavior; the backtest helper was removed in 0.3.1.
 - The 0.3 wheel adds no dependency and does not implement a native-Spark rule
   compiler or an input-contract schema.
 

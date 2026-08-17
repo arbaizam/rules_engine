@@ -180,7 +180,13 @@ def date_add_days(value: Any, days: Any) -> date | None:
     parsed = to_date(value)
     if parsed is None:
         return None
-    return parsed + timedelta(days=_integer_offset(days, "days"))
+    offset = _integer_offset(days, "days")
+    try:
+        return parsed + timedelta(days=offset)
+    except OverflowError as exc:
+        raise ValueError(
+            f"Adding {offset} days to {parsed.isoformat()} exceeds the date range."
+        ) from exc
 
 
 def date_add_months(value: Any, months: Any) -> date | None:

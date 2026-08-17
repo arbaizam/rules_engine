@@ -292,6 +292,32 @@ def test_semantic_diff_detects_null_behavior_and_identity_changes():
     assert "default" in result.to_text()
 
 
+def test_semantic_diff_renders_only_changed_condition_leaves():
+    baseline_payload = _payload()
+    candidate_payload = _payload(version="2")
+    candidate_payload["rules"][0]["when"]["all"][0][
+        "null_input_mode"
+    ] = "zero"
+    baseline = YamlRulesetCompiler().compile_payload(baseline_payload)
+    candidate = YamlRulesetCompiler().compile_payload(candidate_payload)
+
+    result = RulesetDiffer().diff(baseline, candidate)
+    prime = next(item for item in result.rule_diffs if item.rule_id == "prime")
+    condition_changes = [
+        change
+        for change in prime.changes
+        if change.field.startswith("condition[fico-prime]")
+    ]
+
+    assert [change.field for change in condition_changes] == [
+        "condition[fico-prime].null_input_mode"
+    ]
+    assert (
+        "condition[fico-prime].null_input_mode: 'propagate' -> 'zero'"
+        in result.to_text()
+    )
+
+
 def test_semantic_diff_reports_expected_cases_individually_by_name():
     baseline_payload = _payload()
     candidate_payload = _payload(version="2")

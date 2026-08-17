@@ -31,15 +31,11 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
-import sys
 import traceback
 
+import rules_engine
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
-
-repo_root = Path.cwd()
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
 
 from rules_engine import (  # noqa: E402
     FunctionRegistry,
@@ -53,6 +49,9 @@ from rules_engine import (  # noqa: E402
 from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository  # noqa: E402
 from rules_engine.serializer import DeltaRowSerializer  # noqa: E402
 from rules_engine.versioning import compare_versions  # noqa: E402
+
+print(f"rules_engine version: {rules_engine.__version__}")
+print(f"rules_engine package: {rules_engine.__file__}")
 
 # COMMAND ----------
 

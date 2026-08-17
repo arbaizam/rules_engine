@@ -9,7 +9,6 @@ from pathlib import Path
 
 from tools.recon_spec_translation.models import SourceCriterion
 
-
 REQUIRED_COLUMNS = {
     "MatchRuleName",
     "GroupSequence",

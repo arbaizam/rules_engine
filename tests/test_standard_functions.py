@@ -83,6 +83,22 @@ def test_date_add_days_supports_positive_and_negative_offsets():
 
 
 @pytest.mark.parametrize(
+    ("value", "days"),
+    [
+        (date.max, 1),
+        (date.min, -1),
+        (date(2024, 1, 1), 1_000_000_000),
+    ],
+)
+def test_date_add_days_reports_out_of_range_offsets(value, days):
+    with pytest.raises(
+        ValueError,
+        match=rf"Adding {days} days to {value.isoformat()} exceeds the date range",
+    ):
+        date_add_days(value, days)
+
+
+@pytest.mark.parametrize(
     ("value", "months", "expected"),
     [
         (date(2024, 1, 31), 1, date(2024, 2, 29)),

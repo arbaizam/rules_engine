@@ -19,7 +19,6 @@ from tools.recon_spec_translation.models import (
 )
 from tools.recon_spec_translation.normalizer import group_by_match_rule
 
-
 OPERATOR_MAPPING = {
     "TextEquals": "eq",
     "TextNotEquals": "ne",
@@ -202,7 +201,7 @@ class ReconciliationSpecTranslator:
             raise ValueError("Connector count does not match expression count.")
 
         current = expressions[0]
-        for connector, expression in zip(connectors, expressions[1:]):
+        for connector, expression in zip(connectors, expressions[1:], strict=True):
             if connector is None:
                 raise ValueError("Left-to-right chain ended before the final expression.")
             current = self._combine(current, connector, expression)

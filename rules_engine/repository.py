@@ -325,10 +325,23 @@ class SparkDeltaRulesetRepository:
         if not collected:
             logger.error("Published ruleset not found: ruleset_name=%s version=%s", ruleset_name, version)
             raise RepositoryError(f"Published ruleset not found: {ruleset_name}")
-        if len(collected) > 1 and version is None:
-            logger.error("Multiple published ruleset versions found: ruleset_name=%s", ruleset_name)
+        if len(collected) > 1:
+            if version is None:
+                logger.error(
+                    "Multiple published ruleset versions found: ruleset_name=%s",
+                    ruleset_name,
+                )
+                raise RepositoryError(
+                    f"Multiple published versions found for {ruleset_name}; specify version."
+                )
+            logger.error(
+                "Duplicate immutable published version rows found: ruleset_name=%s version=%s",
+                ruleset_name,
+                version,
+            )
             raise RepositoryError(
-                f"Multiple published versions found for {ruleset_name}; specify version."
+                "Multiple published rows found for immutable ruleset version: "
+                f"ruleset_name={ruleset_name}, version={version}."
             )
         row = RulesetVersionRow(**collected[0].asDict(recursive=True))
         logger.info(

@@ -194,17 +194,6 @@ print(f"Warm-up repetitions:     {PERF_WARMUP_REPETITIONS}")
 print(f"Metrics table:           {PERF_METRICS_TABLE}")
 
 # COMMAND ----------
-ENGINE_OUTPUT_COLUMNS = (
-    "rules_engine_matched",
-    "rules_engine_matched_rule_ids",
-    "rules_engine_assign",
-    "rules_engine_winning_rule",
-    "rules_engine_winning_rule_id",
-    "rules_engine_winning_rule_name",
-    "rules_engine_winning_rule_explanation",
-    "rules_engine_error",
-)
-
 CASE_NAMES = ["input_floor", "assignment_only", "full_output"]
 if PERF_INCLUDE_FAIL_ON_ERROR:
     CASE_NAMES.append("assignment_only_fail_on_error")
@@ -254,7 +243,13 @@ def _benchmark_dataframe(case_name: str):
             assignment = assignment.getField(PERF_ASSIGNMENT_FIELD)
         return evaluated.select(assignment.alias("assignment_value"))
     if case_name == "full_output":
-        return evaluated.select(*ENGINE_OUTPUT_COLUMNS)
+        engine_output_columns = [
+            column_name
+            for column_name in evaluated.columns
+            if column_name.startswith("rules_engine_")
+        ]
+        assert engine_output_columns, "Evaluation emitted no rules_engine_ columns."
+        return evaluated.select(*engine_output_columns)
     raise ValueError(f"Unsupported benchmark case: {case_name}")
 
 
