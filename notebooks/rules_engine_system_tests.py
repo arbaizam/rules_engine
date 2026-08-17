@@ -2049,6 +2049,7 @@ print("Owner Role: Engineering")
 print("Expected Result: Results match documented null semantics and errors are emitted only where expected.")
 print("")
 
+from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.registry import FunctionRegistry
 from rules_engine.spark_runtime import SparkRulesEngineRuntime
 
