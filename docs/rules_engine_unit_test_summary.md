@@ -2,7 +2,7 @@
 
 Source: current behavioral pytest suite under `tests/`.
 
-The suite contains **211 explicit test functions** and currently collects **235 pytest cases** after parameter expansion. **16 cases** require `RULES_ENGINE_RUN_SPARK_TESTS=1` and a live Spark runtime.
+The suite contains **212 explicit test functions** and currently collects **236 pytest cases** after parameter expansion. **16 cases** require `RULES_ENGINE_RUN_SPARK_TESTS=1` and a live Spark runtime.
 
 Standalone wheel-building, Databricks bundle-layout, package-version alignment, README, and notebook source-layout tests are intentionally excluded. Those surfaces differ between this repository and the integrated work Databricks deployment and are validated separately during packaging and deployment.
 
@@ -25,7 +25,7 @@ Ruleset version comparison remains covered because it is engine behavior rather 
 | Spark validation | 31 | Preflight rejection of unsupported or incompatible Spark schemas. |
 | Standard functions | 12 | Registered text, numeric, null, and calendar functions. |
 | Version serialization | 13 | Deterministic payloads, hashes, exact values, and deserialization. |
-| YAML compilation | 17 | Canonical authoring, defaults, aliases, exact numerics, and unsupported constructs. |
+| YAML compilation | 18 | Canonical authoring, defaults, aliases, exact numerics, and unsupported constructs. |
 | YAML export | 3 | Stable, reviewable canonical YAML round trips. |
 
 ## Detailed Test Inventory
@@ -243,6 +243,7 @@ Ruleset version comparison remains covered because it is engine behavior rather 
 | UT-209 | Ruleset validation | Critical | `test_validator.py::test_code_authored_nonfinite_decimal_literal_fails_validation` | Dataclass authoring cannot bypass the compiler's finite-number guard. | Local and Databricks |
 | UT-210 | Ruleset validation | Medium | `test_validator.py::test_code_authored_nonfinite_tolerance_fails_validation_cleanly` | NaN tolerances produce a validation issue instead of Decimal failure. | Local and Databricks |
 | UT-211 | Ruleset validation | Medium | `test_validator.py::test_code_authored_nonfinite_float_literal_fails_validation` | Dataclass authoring cannot bypass finite floating-point validation. | Local and Databricks |
+| UT-212 | YAML compilation | High | `test_compiler_yaml.py::test_explicit_date_literal_normalizes_quoted_iso_text` | A date hint turns portable quoted ISO authoring text into a Python date. | Local and Databricks |
 
 ## Execution
 

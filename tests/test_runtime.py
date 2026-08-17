@@ -1477,7 +1477,7 @@ def test_trace_value_returns_common_scalars_without_json_serialization(monkeypat
         raise AssertionError(f"Unexpected JSON serialization for {value!r}")
 
     monkeypatch.setattr(
-        "rules_engine.runtime.json.dumps",
+        "rules_engine.runtime.json_dumps",
         unexpected_json_serialization,
     )
 

@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -203,6 +204,38 @@ def test_explicit_decimal_collection_is_normalized_recursively():
 
     values = ruleset.rules[0].root_group.conditions[0].right.value
     assert values == [Decimal("0.0425"), Decimal("0.05")]
+
+
+def test_explicit_date_literal_normalizes_quoted_iso_text():
+    """A date hint turns portable quoted ISO authoring text into a Python date."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Date literal",
+            "version": "1",
+            "rules": [
+                {
+                    "rule_name": "Calendar comparison",
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "as_of_date"},
+                                "operator": "ge",
+                                "right": {
+                                    "literal": "2024-02-29",
+                                    "value_type": "date",
+                                },
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "current"},
+                }
+            ],
+        }
+    )
+
+    literal = ruleset.rules[0].root_group.conditions[0].right
+    assert literal.value == date(2024, 2, 29)
 
 
 def test_precomputed_aggregate_field_compiles_as_row_field():

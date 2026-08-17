@@ -4,13 +4,13 @@ Worker-side row evaluation helpers for the Spark runtime.
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
+from json import dumps as json_dumps
 from typing import Any
 
 from rules_engine.enums import (
@@ -637,7 +637,7 @@ class SparkRowEvaluator:
                 for item in sorted(value, key=lambda item: repr(item))
             ]
         try:
-            json.dumps(value)
+            json_dumps(value)
         except TypeError:
             return str(value)
         return value

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -497,6 +498,21 @@ class YamlRulesetCompiler:
             raise CompilationError("Numeric literals must be finite.")
         if isinstance(value, Decimal) and not value.is_finite():
             raise CompilationError("Decimal literals must be finite.")
+        if normalized_type == "date" and value is not None:
+            if isinstance(value, datetime):
+                return value.date()
+            if isinstance(value, date):
+                return value
+            if isinstance(value, str):
+                try:
+                    return date.fromisoformat(value.strip())
+                except ValueError as exc:
+                    raise CompilationError(
+                        f"Date literal must use ISO YYYY-MM-DD format, found {value!r}."
+                    ) from exc
+            raise CompilationError(
+                f"Date literal must be a date or ISO YYYY-MM-DD string, found {value!r}."
+            )
         if normalized_type == "decimal" and value is not None:
             try:
                 decimal_value = Decimal(str(value))
