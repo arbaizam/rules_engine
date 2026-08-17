@@ -67,6 +67,8 @@ def test_system_notebook_rejects_assignment_type_conflicts_and_covers_governance
 
     assert "falls back to string" not in text
     assert "SPARK_ASSIGNMENT_TYPE_CONFLICT" in text
+    assert "._jdf" not in text
+    assert '.explain(mode="simple")' in text
     assert "Embedded expected cases are a hard publication gate" in text
     assert "Audit levels retain immutable execution identity" in text
     assert "Semantic diffs compare immutable published versions" in text

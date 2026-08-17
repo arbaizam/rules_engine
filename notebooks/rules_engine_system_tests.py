@@ -2157,9 +2157,9 @@ try:
     runtime.evaluate_dataframe(
         spark.createDataFrame([{"account": None}], "account string"),
         error_ruleset,
-    )
+    ).collect()
     error_failed = False
-except RuntimeError as exc:
+except Exception as exc:
     error_failed = True
     assert "null_result_mode=error" in str(exc), str(exc)
 assert error_failed, "Expected null_result_mode=error to raise on null comparison result."
@@ -2347,11 +2347,16 @@ rules:
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
 df = spark.createDataFrame([{"record_id": "r1", "account": None}, {"record_id": "r2", "account": "A"}])
 try:
-    service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version, fail_on_error=True)
+    service.evaluate_dataframe(
+        df,
+        ruleset_name=ruleset.ruleset_name,
+        version=ruleset.version,
+        fail_on_error=True,
+    ).collect()
     fail_on_error_raised = False
-except RuntimeError as exc:
+except Exception as exc:
     fail_on_error_raised = True
-    assert "row-level errors" in str(exc).lower(), str(exc)
+    assert "null_result_mode=error" in str(exc), str(exc)
 assert fail_on_error_raised, "Expected fail_on_error=True to raise for row-level runtime errors."
 result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version, fail_on_error=False)
 rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
@@ -3654,7 +3659,9 @@ print("Owner Role: Engineering")
 print("Expected Result: DataFrame construction performs no row evaluation; the caller action evaluates once and surfaces bad-row errors.")
 print("")
 
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
+from io import StringIO
 
 from rules_engine import CustomFunctionSpec, RulesEngineService
 
@@ -3708,8 +3715,12 @@ clean_output = service.evaluate_dataframe(
     ruleset=ruleset,
     fail_on_error=True,
 )
-plan = clean_output._jdf.queryExecution().executedPlan().toString()
-assert plan.count("BatchEvalPython") == 1, plan
+plan_output = StringIO()
+with redirect_stdout(plan_output):
+    clean_output.explain(mode="simple")
+plan = plan_output.getvalue()
+python_evaluation_nodes = plan.count("BatchEvalPython") + plan.count("ArrowEvalPython")
+assert python_evaluation_nodes == 1, plan
 assert not clean_output.storageLevel.useMemory
 assert not clean_output.storageLevel.useDisk
 assert clean_output.collect()[0]["rules_engine_matched"] is True
@@ -3889,12 +3900,19 @@ ruleset = service.compile_yaml_text(yaml_text)
 result = service.evaluate_dataframe(
     spark.createDataFrame(
         [
-            {
-                "loan_id": "L1",
-                "funded_date": "2024-01-31",
-                "as_of_date": "2024-02-29",
-            }
-        ]
+            (
+                "L1",
+                date(2024, 1, 31),
+                date(2024, 2, 29),
+            )
+        ],
+        T.StructType(
+            [
+                T.StructField("loan_id", T.StringType(), False),
+                T.StructField("funded_date", T.DateType(), False),
+                T.StructField("as_of_date", T.DateType(), False),
+            ]
+        ),
     ),
     ruleset=ruleset,
 )
