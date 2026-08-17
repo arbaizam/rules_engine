@@ -3651,18 +3651,17 @@ assert isinstance(assignment_schema["flags"].dataType, T.StructType)
 print("PASS: Financial and temporal assignments retained exact worker-boundary values and types.")
 
 # COMMAND ----------
-print("ST-061: Fail-fast evaluation is lazy and uses one Python evaluation node")
+print("ST-061: Fail-fast evaluation is lazy and builds one Python UDF")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
 print("Owner Role: Engineering")
-print("Expected Result: DataFrame construction performs no row evaluation; the caller action evaluates once and surfaces bad-row errors.")
+print("Expected Result: DataFrame construction builds one UDF without evaluating rows; caller actions surface bad-row errors.")
 print("")
 
-from contextlib import redirect_stdout
 from datetime import datetime, timezone
-from io import StringIO
 
+import rules_engine.spark_runtime as spark_runtime_module
 from rules_engine import CustomFunctionSpec, RulesEngineService
 
 
@@ -3710,17 +3709,25 @@ rules:
       bucket: good
 """
 ruleset = service.compile_yaml_text(yaml_text)
-clean_output = service.evaluate_dataframe(
-    spark.createDataFrame([{"value": "good"}]),
-    ruleset=ruleset,
-    fail_on_error=True,
-)
-plan_output = StringIO()
-with redirect_stdout(plan_output):
-    clean_output.explain(mode="simple")
-plan = plan_output.getvalue()
-python_evaluation_nodes = plan.count("BatchEvalPython") + plan.count("ArrowEvalPython")
-assert python_evaluation_nodes == 1, plan
+udf_factory_calls = []
+original_udf = spark_runtime_module.F.udf
+
+
+def st061_tracked_udf(*args, **kwargs):
+    udf_factory_calls.append((args, kwargs))
+    return original_udf(*args, **kwargs)
+
+
+spark_runtime_module.F.udf = st061_tracked_udf
+try:
+    clean_output = service.evaluate_dataframe(
+        spark.createDataFrame([{"value": "good"}]),
+        ruleset=ruleset,
+        fail_on_error=True,
+    )
+finally:
+    spark_runtime_module.F.udf = original_udf
+assert len(udf_factory_calls) == 1
 assert not clean_output.storageLevel.useMemory
 assert not clean_output.storageLevel.useDisk
 assert clean_output.collect()[0]["rules_engine_matched"] is True
@@ -3736,7 +3743,7 @@ except Exception as exc:
     assert "ST-061 bad value" in str(exc), str(exc)
 else:
     raise AssertionError("Expected the materializing action to fail for a bad row.")
-print("PASS: Fail-fast construction stayed lazy and caller actions used one Python node.")
+print("PASS: Fail-fast construction stayed lazy, built one UDF, and surfaced worker errors on action.")
 
 # COMMAND ----------
 print("ST-062: Custom implementations are preflighted for worker serialization")

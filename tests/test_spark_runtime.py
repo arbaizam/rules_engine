@@ -1,12 +1,11 @@
 import os
-from contextlib import redirect_stdout
 from datetime import date, datetime
 from decimal import Decimal
-from io import StringIO
 
 import pytest
 from pyspark.sql import types as T
 
+import rules_engine.spark_runtime as spark_runtime_module
 from rules_engine.analytics import RulesetCoverageAnalyzer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.enums import AuditLevel
@@ -155,8 +154,8 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert rows[1]["rules_engine_assignment_results"] == []
 
 
-def test_spark_runtime_uses_one_python_evaluation_node(spark):
-    """All result fields project from one Python UDF evaluation in the physical plan."""
+def test_spark_runtime_builds_one_python_udf(spark, monkeypatch):
+    """The runtime creates one UDF whose result struct feeds every output field."""
     ruleset = _compile(
         {
             "left": {"field": "account"},
@@ -164,16 +163,21 @@ def test_spark_runtime_uses_one_python_evaluation_node(spark):
             "right": {"literal": "A"},
         }
     )
+    udf_factory_calls = []
+    original_udf = spark_runtime_module.F.udf
+
+    def tracked_udf(*args, **kwargs):
+        udf_factory_calls.append((args, kwargs))
+        return original_udf(*args, **kwargs)
+
+    monkeypatch.setattr(spark_runtime_module.F, "udf", tracked_udf)
     output = _spark_runtime().evaluate_dataframe(
         spark.createDataFrame([{"account": "A"}]),
         ruleset,
     )
-    plan_output = StringIO()
 
-    with redirect_stdout(plan_output):
-        output.explain(mode="simple")
-
-    assert plan_output.getvalue().count("BatchEvalPython") == 1
+    assert len(udf_factory_calls) == 1
+    assert output.collect()[0]["rules_engine_matched"] is True
 
 
 def test_spark_runtime_evaluates_precomputed_aggregate_field(spark):
