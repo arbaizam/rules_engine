@@ -8,7 +8,6 @@ import pytest
 from pyspark.sql import types as T
 
 from rules_engine.analytics import RulesetCoverageAnalyzer
-from rules_engine.backtest import RulesetBacktester
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.enums import AuditLevel
 from rules_engine.exceptions import ValidationFailedError
@@ -688,67 +687,26 @@ def test_coverage_report_finds_dead_broad_and_closest_rules(spark):
     )
     registry = FunctionRegistry()
     runtime = SparkRulesEngineRuntime(DummyRepository(), registry)
-    report = RulesetCoverageAnalyzer(runtime, registry).analyze(
-        spark.createDataFrame([(1, 740), (2, 690), (3, 600)], ["loan_id", "fico"]),
-        ruleset,
-        broad_match_threshold=0.60,
-    )
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        report = RulesetCoverageAnalyzer(runtime, registry).analyze(
+            spark.createDataFrame(
+                [(1, 740), (2, 690), (3, 600)],
+                ["loan_id", "fico"],
+            ),
+            ruleset,
+            broad_match_threshold=0.60,
+        )
+        no_match = report.no_match_rows.collect()[0]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
     assert report.total_row_count == 3
     assert report.no_match_count == 1
     assert report.error_count == 0
     assert report.dead_rule_ids == ("impossible",)
     assert report.suspiciously_broad_rule_ids == ("near",)
-    no_match = report.no_match_rows.collect()[0]
     assert no_match["loan_id"] == 3
     assert no_match["rules_engine_coverage_closest_rule_id"] == "prime"
     assert no_match["rules_engine_coverage_failed_condition_ids"] == ["prime-fico"]
-
-
-def test_backtest_reports_changed_rows_and_transition_matrix(spark):
-    """Backtest compares canonical assignment payloads on a unique tape key."""
-    baseline = _compile(
-        {
-            "left": {"field": "account"},
-            "operator": "eq",
-            "right": {"literal": "A"},
-        },
-        assign={"bucket": "baseline"},
-    )
-    candidate_payload = {
-        "ruleset_id": baseline.ruleset_id,
-        "ruleset_name": baseline.ruleset_name,
-        "version": "2",
-        "rules": [
-            {
-                "rule_id": "r1",
-                "rule_name": "Rule 1",
-                "rule_order": 1,
-                "when": {
-                    "all": [
-                        {
-                            "left": {"field": "account"},
-                            "operator": "eq",
-                            "right": {"literal": "A"},
-                        }
-                    ]
-                },
-                "assign": {"bucket": "candidate"},
-            }
-        ],
-    }
-    candidate = YamlRulesetCompiler().compile_payload(candidate_payload)
-    runtime = _spark_runtime()
-    report = RulesetBacktester(runtime).analyze(
-        spark.createDataFrame([(1, "A"), (2, "B")], ["loan_id", "account"]),
-        baseline,
-        candidate,
-        key="loan_id",
-    )
-
-    assert report.total_row_count == 2
-    assert report.changed_row_count == 1
-    assert report.unchanged_row_count == 1
-    assert report.change_rate == 0.5
-    assert report.changed_rows.select("loan_id").collect()[0]["loan_id"] == 1
-    assert sum(row["row_count"] for row in report.change_matrix.collect()) == 2

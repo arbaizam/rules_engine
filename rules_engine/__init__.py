@@ -39,8 +39,6 @@ _LAZY_EXPORTS = {
     "RulesetDiffer": ("rules_engine.change_control", "RulesetDiffer"),
     "CoverageReport": ("rules_engine.analytics", "CoverageReport"),
     "RuleCoverage": ("rules_engine.analytics", "RuleCoverage"),
-    "BacktestReport": ("rules_engine.backtest", "BacktestReport"),
-    "RulesetIdentity": ("rules_engine.backtest", "RulesetIdentity"),
 }
 
 
@@ -61,7 +59,6 @@ __all__ = [
     "CustomFunctionSpec",
     "CoverageReport",
     "AuditLevel",
-    "BacktestReport",
     "DeltaRowSerializer",
     "FunctionRegistry",
     "PublishService",
@@ -73,7 +70,6 @@ __all__ = [
     "RulesetDiffer",
     "RulesetTester",
     "RulesetTestResult",
-    "RulesetIdentity",
     "RulesetNormalizer",
     "RulesetValidator",
     "SparkRulesEngineRuntime",

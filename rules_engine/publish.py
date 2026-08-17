@@ -66,7 +66,8 @@ class PublishService:
                 len(validation.issues),
             )
             raise ValidationFailedError(
-                f"Publish failed for ruleset={normalized.ruleset_name}, version={normalized.version}"
+                f"Publish failed for ruleset={normalized.ruleset_name}, "
+                f"version={normalized.version}.\n{validation.to_text()}"
             )
         if normalized.expect:
             if self._tester is None:

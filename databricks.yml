@@ -7,7 +7,7 @@ artifacts:
     build: python tools/build_release_wheel.py
     path: .
     files:
-      - source: ./dist/rules_engine-0.3.0-py3-none-any.whl
+      - source: ./dist/rules_engine-0.3.1-py3-none-any.whl
 
 variables:
   existing_cluster_id:
@@ -36,7 +36,7 @@ resources:
             notebook_path: ./notebooks/rules_engine_system_tests.py
             source: WORKSPACE
           libraries:
-            - whl: ./dist/rules_engine-0.3.0-py3-none-any.whl
+            - whl: ./dist/rules_engine-0.3.1-py3-none-any.whl
             - pypi:
                 package: pytest>=8,<9
 

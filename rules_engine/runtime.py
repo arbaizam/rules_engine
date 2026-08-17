@@ -63,6 +63,19 @@ class SparkRowEvaluator:
         self._function_registry = function_registry
         self._rule_formatter = HumanReadableRulesetFormatter()
 
+    @classmethod
+    def for_embedded_ruleset(
+        cls,
+        function_registry: FunctionRegistry,
+    ) -> SparkRowEvaluator:
+        """Create an evaluator that cannot load metadata at row-evaluation time.
+
+        Spark workers and pure-Python expected cases receive an already
+        compiled ruleset. Omitting the real Spark/Delta repository prevents an
+        active Spark session from being captured in worker serialization.
+        """
+        return cls(None, function_registry)
+
     def load_published_ruleset(self, ruleset_name: str, version: str | None = None) -> Ruleset:
         """
         Load a published ruleset by name and optional version.
@@ -102,7 +115,12 @@ class SparkRowEvaluator:
         ruleset: Ruleset,
         row: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        """Return the closest active rule and its failed active conditions."""
+        """Return the closest active rule and its failed active conditions.
+
+        This diagnostic reevaluates every active condition. Custom condition
+        functions therefore run again when a caller materializes closest-rule
+        coverage rows; only use implementations that are safe to reevaluate.
+        """
         candidates: list[tuple[float, int, int, Rule, list[str]]] = []
         for rule in sorted(ruleset.rules, key=lambda item: item.rule_order):
             if not rule.active_flag:

@@ -37,6 +37,7 @@ semantic weakening.
 - [Packaging And Asset Bundles](#packaging-and-asset-bundles)
 - [Developer Workflow](#developer-workflow)
 - [Troubleshooting](#troubleshooting)
+- [Migration Notes For 0.3.1](#migration-notes-for-031)
 - [Migration Notes For 0.3.0](#migration-notes-for-030)
 - [Migration Notes For 0.2.0](#migration-notes-for-020)
 - [Known Limitations](#known-limitations)
@@ -159,13 +160,23 @@ subset, so examples can assert only the fields relevant to the case. Run them
 with `service.test_ruleset(ruleset)`; `service.publish(...)` runs the same suite
 as a hard gate before any repository write.
 
+Shorthand and explicit assignment keys must be target fields declared by the
+ruleset, so a typo fails validation as `EXPECTED_CASE_UNKNOWN_KEY`. If a target
+field is literally named `matched`, `matched_rule_ids`, or `assign`, assert it
+inside the explicit `assign` mapping to avoid the reserved result names.
+
+Expected cases evaluate raw Python values without a Spark schema. They verify
+rule ordering, matching, custom-function behavior, and assignment selection,
+but they do **not** apply Spark assignment coercion or prove that an incoming
+DataFrame is schema-compatible. `evaluate_dataframe()` performs that separate
+typed compatibility gate when the real DataFrame is available.
+
 ## Package Layout
 
 ```text
 rules_engine/
   __init__.py
   analytics.py            # coverage and closest-rule diagnostics
-  backtest.py             # baseline/candidate tape comparison
   change_control.py       # human-readable semantic version diff
   compiler_yaml.py        # YAML -> dataclasses
   enums.py                # canonical vocabulary
@@ -1059,22 +1070,21 @@ coverage = service.coverage_report(
     ruleset=candidate,
     broad_match_threshold=0.40,
 )
-
-backtest = service.backtest(
-    tape_df,
-    key="loan_id",
-    baseline=baseline,
-    candidate=candidate,
-    compare_field="leaf_key",  # omit to compare the complete assignment struct
-)
 ```
 
 `coverage.rules` identifies never-matched and suspiciously broad rules,
 `coverage.first_match_distribution` reports precedence behavior, and
 `coverage.no_match_rows` includes the closest rule plus failed condition IDs.
 `semantic_diff.to_text()` emphasizes rule-order, condition, and assignment
-changes in authored syntax. Backtests expose total/changed counts, a transition
-matrix, all changed rows, and a bounded `sample_rows` DataFrame.
+changes in authored syntax, including null-handling and metadata identity, and
+prints both immutable content hashes for reconciliation.
+
+`coverage_report()` materializes one full evaluation action to calculate its
+counts. `coverage.no_match_rows` remains lazy; materializing it evaluates the
+rules again and runs a diagnostic UDF that reevaluates every active condition.
+Consequently, custom condition functions run again for clean no-match rows and
+must be safe to reevaluate. Estimate this multi-pass cost before using coverage
+on a production-scale tape.
 
 Pass custom metadata table names when the deployment should not use the
 standard `ruleset_versions` and `function_registry` names:
@@ -1839,6 +1849,21 @@ service.retire("<ruleset_id>", "<version>", retired_by="operator")
 Published and retired `(ruleset_name, version)` pairs are immutable. Increment
 the version before publishing a replacement under the same ruleset name.
 
+## Migration Notes For 0.3.1
+
+Version `0.3.1` hardens the governance tools before Databricks migration:
+
+- Coverage uses ANSI-safe array access, including for clean no-match rows.
+- Semantic diffs include null behavior, condition/group/assignment identity,
+  operand metadata, per-case expectation changes, and both content hashes.
+- Expected-case assignment keys are validated against declared target fields;
+  misspellings fail publication with `EXPECTED_CASE_UNKNOWN_KEY`.
+- Diagnostic evaluators use one documented repository-free construction path,
+  and worker-serialization validation is a public runtime method.
+- The experimental backtest API introduced in 0.3.0 was removed. It had not
+  completed target-runtime verification and carried ambiguous Decimal and
+  row-error comparison semantics. No persisted metadata migration is needed.
+
 ## Migration Notes For 0.3.0
 
 The package version is `0.3.0`. The default `audit_level="full"` preserves the
@@ -1854,8 +1879,8 @@ The package version is `0.3.0`. The default `audit_level="full"` preserves the
   `content_hash`. Publish as a new immutable ruleset version.
 - Publication now executes embedded expected cases after validation and before
   repository persistence. A failed case prevents the write.
-- Coverage and backtest helpers materialize Spark actions to compute report
-  counts. Their returned diagnostic DataFrames remain lazy.
+- Coverage and the experimental backtest helper materialize Spark actions to
+  compute report counts. Returned diagnostic DataFrames remain lazy.
 - The 0.3 wheel adds no dependency and does not implement a native-Spark rule
   compiler or an input-contract schema.
 

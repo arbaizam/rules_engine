@@ -153,6 +153,12 @@ class RulesetValidator:
     ) -> None:
         """Validate the stable shape of embedded executable examples."""
         seen_names: set[str] = set()
+        assignment_targets = {
+            assignment.target_field
+            for rule in ruleset.rules
+            for assignment in rule.assignments
+        }
+        reserved_keys = {"matched", "matched_rule_ids", "assign"}
         for expectation in ruleset.expect:
             object_id = expectation.name
             if not expectation.name:
@@ -221,6 +227,27 @@ class RulesetValidator:
                     "Expected assign value must be a mapping.",
                     ObjectType.EXPECTED_CASE,
                     object_id,
+                )
+            shorthand_keys = set(expectation.then) - reserved_keys
+            explicit_assign_keys = (
+                set(expected_assign) if isinstance(expected_assign, Mapping) else set()
+            )
+            unknown_keys = sorted(
+                (shorthand_keys | explicit_assign_keys) - assignment_targets,
+                key=str,
+            )
+            if unknown_keys:
+                self._add(
+                    result,
+                    "EXPECTED_CASE_UNKNOWN_KEY",
+                    "Expected assignment keys must match a target field declared "
+                    f"by the ruleset: {unknown_keys}",
+                    ObjectType.EXPECTED_CASE,
+                    object_id,
+                    details={
+                        "unknown_keys": unknown_keys,
+                        "known_target_fields": sorted(assignment_targets),
+                    },
                 )
             self._validate_finite_decimals(
                 expectation.given,

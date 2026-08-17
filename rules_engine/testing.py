@@ -56,7 +56,9 @@ class RulesetTester:
     _RESERVED_RESULTS = frozenset({"matched", "matched_rule_ids", "assign"})
 
     def __init__(self, function_registry: FunctionRegistry) -> None:
-        self._evaluator = SparkRowEvaluator(None, function_registry)
+        self._evaluator = SparkRowEvaluator.for_embedded_ruleset(
+            function_registry
+        )
 
     def test(self, ruleset: Ruleset) -> RulesetTestResult:
         """Run every expected case in declaration order."""
@@ -69,6 +71,15 @@ class RulesetTester:
         ruleset: Ruleset,
         case: RulesetExpectation,
     ) -> ExpectationCaseResult:
+        key_failures = self._validate_expected_keys(ruleset, case.then)
+        if key_failures:
+            return ExpectationCaseResult(
+                name=case.name,
+                passed=False,
+                expected=case.then,
+                actual={},
+                failures=tuple(key_failures),
+            )
         try:
             actual = self._evaluator.evaluate_row(ruleset, case.given)
             failures = self._compare(case.then, actual)
@@ -82,6 +93,35 @@ class RulesetTester:
             actual=actual,
             failures=tuple(failures),
         )
+
+    def _validate_expected_keys(
+        self,
+        ruleset: Ruleset,
+        expected: Mapping[str, Any],
+    ) -> list[str]:
+        """Reject misspelled assignment fields before evaluating the case."""
+        known_targets = {
+            assignment.target_field
+            for rule in ruleset.rules
+            for assignment in rule.assignments
+        }
+        shorthand = set(expected) - self._RESERVED_RESULTS
+        explicit_assign = expected.get("assign")
+        explicit = (
+            set(explicit_assign)
+            if isinstance(explicit_assign, Mapping)
+            else set()
+        )
+        unknown = sorted(
+            (shorthand | explicit) - known_targets,
+            key=str,
+        )
+        if not unknown:
+            return []
+        return [
+            "unknown expected assignment key(s) "
+            f"{unknown}; known target fields are {sorted(known_targets)}"
+        ]
 
     def _compare(
         self,

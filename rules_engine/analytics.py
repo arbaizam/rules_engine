@@ -130,7 +130,8 @@ class RulesetCoverageAnalyzer:
                     ).alias(f"match_{index}"),
                     F.sum(
                         F.when(
-                            F.element_at(matched_ids_col, 1) == rule.rule_id,
+                            F.try_element_at(matched_ids_col, F.lit(1))
+                            == rule.rule_id,
                             1,
                         ).otherwise(0)
                     ).alias(f"first_{index}"),
@@ -179,7 +180,9 @@ class RulesetCoverageAnalyzer:
         ruleset: Ruleset,
         column_prefix: str,
     ) -> DataFrame:
-        evaluator = SparkRowEvaluator(None, self._function_registry)
+        evaluator = SparkRowEvaluator.for_embedded_ruleset(
+            self._function_registry
+        )
 
         def diagnose(row: Any) -> dict[str, Any] | None:
             return evaluator.closest_rule_diagnostic(
@@ -187,7 +190,7 @@ class RulesetCoverageAnalyzer:
                 row.asDict(recursive=True),
             )
 
-        self._runtime._validate_worker_serializable(diagnose)
+        self._runtime.validate_worker_serializable(diagnose)
         diagnostic_udf = F.udf(diagnose, _CLOSEST_RULE_STRUCT)
         source_columns = required_source_columns(ruleset)
         row_struct = F.struct(

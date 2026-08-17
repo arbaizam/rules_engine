@@ -1643,7 +1643,7 @@ def test_spark_runtime_preflights_custom_function_serialization():
     )
 
     with pytest.raises(ValidationFailedError, match="Spark-worker-serializable"):
-        runtime._validate_worker_serializable(evaluator)
+        runtime.validate_worker_serializable(evaluator)
 
 
 def test_spark_runtime_accepts_serializable_worker_evaluator():
@@ -1663,4 +1663,4 @@ def test_spark_runtime_accepts_serializable_worker_evaluator():
         {"bucket": T.StringType()},
     )
 
-    runtime._validate_worker_serializable(evaluator)
+    runtime.validate_worker_serializable(evaluator)

@@ -356,7 +356,7 @@ class SparkRulesEngineRuntime:
             include_error_traceback=include_error_traceback,
             audit_level=level,
         )
-        self._validate_worker_serializable(row_evaluator)
+        self.validate_worker_serializable(row_evaluator)
         result_udf = F.udf(row_evaluator, _result_struct(assign_schema, level))
         available_columns = set(df.columns)
         assignment_target_columns = (
@@ -408,7 +408,7 @@ class SparkRulesEngineRuntime:
         )
         return output
 
-    def _validate_worker_serializable(self, evaluator: Any) -> None:
+    def validate_worker_serializable(self, evaluator: Any) -> None:
         """Fail before job submission when a UDF closure cannot be serialized."""
         try:
             CloudPickleSerializer().dumps(evaluator)
@@ -442,9 +442,8 @@ class SparkRulesEngineRuntime:
     ):
         """Build the serializable Python callable used by the Spark UDF."""
         level = _coerce_audit_level(audit_level)
-        runtime = _SparkRowUdfEvaluator(
-            None,
-            self._function_registry,
+        runtime = _SparkRowUdfEvaluator.for_embedded_ruleset(
+            self._function_registry
         )
         ordered_rules = sorted(ruleset.rules, key=lambda item: item.rule_order)
         active_rules: list[_PreparedRule] = []

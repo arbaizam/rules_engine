@@ -9,7 +9,6 @@ from pathlib import Path
 from pyspark.sql import DataFrame, SparkSession
 
 from rules_engine.analytics import CoverageReport, RulesetCoverageAnalyzer
-from rules_engine.backtest import BacktestReport, RulesetBacktester
 from rules_engine.change_control import RulesetDiff, RulesetDiffer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.enums import AuditLevel
@@ -68,7 +67,6 @@ class RulesEngineService:
         self.rule_formatter = HumanReadableRulesetFormatter()
         self.ruleset_differ = RulesetDiffer()
         self.coverage_analyzer = RulesetCoverageAnalyzer(self.runtime, registry)
-        self.backtester = RulesetBacktester(self.runtime)
 
     @classmethod
     def from_schema(
@@ -291,7 +289,12 @@ class RulesEngineService:
         broad_match_threshold: float = 0.40,
         column_prefix: str = "rules_engine_coverage",
     ) -> CoverageReport:
-        """Report rule coverage and closest-rule diagnostics for no matches."""
+        """Report coverage and reevaluated closest-rule diagnostics.
+
+        Computing aggregate counts starts one Spark action. The returned
+        no-match DataFrame is lazy; materializing it reevaluates the rules and
+        invokes custom condition functions again for closest-rule scoring.
+        """
         if ruleset is None:
             if ruleset_name is None:
                 raise ValueError("ruleset or ruleset_name is required.")
@@ -301,39 +304,6 @@ class RulesEngineService:
             ruleset,
             broad_match_threshold=broad_match_threshold,
             column_prefix=column_prefix,
-        )
-
-    def backtest(
-        self,
-        df: DataFrame,
-        *,
-        key: str,
-        baseline: Ruleset | None = None,
-        candidate: Ruleset | None = None,
-        ruleset_name: str | None = None,
-        baseline_version: str | None = None,
-        candidate_version: str | None = None,
-        compare_field: str | None = None,
-        sample_size: int = 100,
-    ) -> BacktestReport:
-        """Compare baseline and candidate rulesets on the same keyed tape."""
-        if (baseline is None) != (candidate is None):
-            raise ValueError("baseline and candidate must be supplied together.")
-        if baseline is None and candidate is None:
-            if ruleset_name is None or not baseline_version or not candidate_version:
-                raise ValueError(
-                    "Supply both rulesets, or ruleset_name with baseline_version "
-                    "and candidate_version."
-                )
-            baseline = self.load_published(ruleset_name, baseline_version)
-            candidate = self.load_published(ruleset_name, candidate_version)
-        return self.backtester.analyze(
-            df,
-            baseline,
-            candidate,
-            key=key,
-            compare_field=compare_field,
-            sample_size=sample_size,
         )
 
     def retire(
