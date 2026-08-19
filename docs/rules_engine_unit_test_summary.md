@@ -2,7 +2,7 @@
 
 Source: current behavioral pytest suite under `tests/`.
 
-The suite contains **212 explicit test functions** and currently collects **236 pytest cases** after parameter expansion. **16 cases** require `RULES_ENGINE_RUN_SPARK_TESTS=1` and a live Spark runtime.
+The suite contains **218 explicit test functions** and currently collects **249 pytest cases** after parameter expansion. **16 cases** require `RULES_ENGINE_RUN_SPARK_TESTS=1` and a live Spark runtime.
 
 Standalone wheel-building, Databricks bundle-layout, package-version alignment, README, and notebook source-layout tests are intentionally excluded. Those surfaces differ between this repository and the integrated work Databricks deployment and are validated separately during packaging and deployment.
 
@@ -101,7 +101,7 @@ Ruleset version comparison remains covered because it is engine behavior rather 
 | UT-067 | In-memory runtime | Critical | `test_runtime.py::test_numeric_membership_uses_decimal_equality` | Worker floats match exact Decimal collection literals consistently. | Local and Databricks |
 | UT-068 | In-memory runtime | Medium | `test_runtime.py::test_string_membership_semantics_are_unchanged` | Membership still applies exact equality to ordinary strings. | Local and Databricks |
 | UT-069 | In-memory runtime | Medium | `test_runtime.py::test_scalar_string_membership_fails_with_contains_guidance` | IN rejects scalar strings instead of silently applying character matching. | Local and Databricks |
-| UT-070 | In-memory runtime | Medium | `test_runtime.py::test_result_payload_keys_are_derived_from_the_declared_schema` | Success and error payloads cannot drift from the Spark result schema. | Local and Databricks |
+| UT-070 | In-memory runtime | Medium | `test_runtime.py::test_result_payload_keys_match_the_declared_schema` | Compact and full success/error payload keys cannot drift from their Spark result schemas. | Local and Databricks |
 | UT-071 | In-memory runtime | Medium | `test_runtime.py::test_assignment_provenance_uses_stable_event_positions` | Last-assignment precedence does not depend on dictionary identity. | Local and Databricks |
 | UT-072 | In-memory runtime | Medium | `test_runtime.py::test_set_trace_text_is_deterministic` | Unordered values produce stable audit text across worker processes. | Local and Databricks |
 | UT-073 | In-memory runtime | Medium | `test_runtime.py::test_human_readable_values_sort_sets_and_use_iso_temporal_text` | Authored audit expressions are deterministic across Python workers. | Local and Databricks |
@@ -175,7 +175,7 @@ Ruleset version comparison remains covered because it is engine behavior rather 
 | UT-141 | Spark runtime | High | `test_spark_runtime.py::test_spark_runtime_evaluates_and_assigns_standard_date_functions` | Date arithmetic remains typed through the real Spark UDF boundary. | Databricks Spark |
 | UT-142 | Spark runtime | High | `test_spark_runtime.py::test_spark_runtime_serializes_only_required_literal_source_columns` | Evaluates a dotted source field while retaining an unrelated input column. | Databricks Spark |
 | UT-143 | Spark runtime | Medium | `test_spark_runtime.py::test_spark_runtime_evaluates_literal_only_rule_without_source_dependencies` | Evaluates a literal-only rule with an empty dependency set. | Databricks Spark |
-| UT-144 | Spark runtime | Medium | `test_spark_runtime.py::test_spark_runtime_applies_column_prefix_to_all_new_outputs` | Every additive audit output respects the configured column prefix. | Databricks Spark |
+| UT-144 | Spark runtime | Medium | `test_spark_runtime.py::test_spark_runtime_applies_column_prefix_to_all_new_outputs` | Custom prefixes preserve the exact compact and full-audit column contracts. | Databricks Spark |
 | UT-145 | Spark runtime | High | `test_spark_runtime.py::test_spark_runtime_validates_schema_before_building_udf` | An incompatible existing target fails before row evaluation. | Databricks Spark |
 | UT-146 | Spark runtime | Medium | `test_spark_runtime.py::test_spark_runtime_preserves_mapping_literal_assignment_as_struct` | Emits mapping literal assignments as nested Spark structs. | Databricks Spark |
 | UT-147 | Spark runtime | Critical | `test_spark_runtime.py::test_spark_runtime_preserves_decimal_and_array_assignments` | Financial values stay exact across the real Python UDF boundary. | Databricks Spark |
@@ -183,7 +183,7 @@ Ruleset version comparison remains covered because it is engine behavior rather 
 | UT-149 | Spark runtime | Critical | `test_spark_runtime.py::test_fail_on_error_remains_lazy_until_callers_action` | Building output does not hide a separate full-data validation action. | Databricks Spark |
 | UT-150 | Spark runtime | Critical | `test_spark_runtime.py::test_spark_runtime_preserves_timestamp_assignment_type` | Timestamp assignment values survive the real worker serialization path. | Databricks Spark |
 | UT-151 | Spark runtime | Critical | `test_spark_runtime.py::test_spark_runtime_preserves_timestamp_ntz_assignment_type` | TimestampNTZ survives schema inference and live worker serialization. | Databricks Spark |
-| UT-152 | Spark runtime | Critical | `test_spark_runtime.py::test_full_audit_emits_ordered_optional_detail_and_identity` | Default and full-audit schemas preserve ordered results and identity. | Databricks Spark |
+| UT-152 | Spark runtime | Critical | `test_spark_runtime.py::test_full_audit_emits_ordered_optional_detail_and_identity` | Multiple original columns retain order before exact compact/full-audit outputs and identity. | Databricks Spark |
 | UT-153 | Spark runtime | High | `test_spark_runtime.py::test_coverage_report_finds_dead_broad_and_closest_rules` | Coverage aggregates matches and diagnoses clean no-match rows. | Databricks Spark |
 | UT-154 | Spark validation | High | `test_spark_validator.py::test_spark_validator_allows_condition_null_result_error_for_udf_row_path` | Allows condition-level null_result_mode=error for ordinary row UDF checks. | Local and Databricks |
 | UT-155 | Spark validation | High | `test_spark_validator.py::test_spark_validator_rejects_missing_condition_field` | Spark validator rejects missing condition field. | Local and Databricks |
@@ -244,6 +244,12 @@ Ruleset version comparison remains covered because it is engine behavior rather 
 | UT-210 | Ruleset validation | Medium | `test_validator.py::test_code_authored_nonfinite_tolerance_fails_validation_cleanly` | NaN tolerances produce a validation issue instead of Decimal failure. | Local and Databricks |
 | UT-211 | Ruleset validation | Medium | `test_validator.py::test_code_authored_nonfinite_float_literal_fails_validation` | Dataclass authoring cannot bypass finite floating-point validation. | Local and Databricks |
 | UT-212 | YAML compilation | High | `test_compiler_yaml.py::test_explicit_date_literal_normalizes_quoted_iso_text` | A date hint turns portable quoted ISO authoring text into a Python date. | Local and Databricks |
+| UT-213 | Spark runtime safety | Critical | `test_runtime.py::test_dataframe_evaluation_reserves_every_output_name_in_compact_mode` | Compact mode rejects collisions with every compact, identity, and temporary output name. | Local and Databricks |
+| UT-214 | Spark runtime safety | Critical | `test_runtime.py::test_compact_evaluation_reserves_full_audit_only_names` | Full-audit-only names remain reserved during compact evaluation so later mode changes cannot overwrite inputs. | Local and Databricks |
+| UT-215 | Spark runtime safety | High | `test_runtime.py::test_dataframe_evaluation_rejects_an_empty_column_prefix` | An empty output namespace fails before Spark schema or worker construction. | Local and Databricks |
+| UT-216 | Spark runtime parity | Critical | `test_runtime.py::test_compact_and_full_audit_payloads_have_core_result_parity` | Compact and full audit produce identical core results for success, no-match, and quarantined-error rows. | Local and Databricks |
+| UT-217 | Spark runtime functions | Critical | `test_runtime.py::test_losing_custom_condition_is_invoked_once_during_full_audit` | A losing custom condition before the first match executes exactly once under full audit. | Local and Databricks |
+| UT-218 | Spark runtime performance | Medium | `test_runtime.py::test_base_payload_field_construction_is_hoisted_out_of_row_evaluation` | Stable payload field construction occurs once when the worker closure is built, not once per row. | Local and Databricks |
 
 ## Execution
 

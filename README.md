@@ -964,10 +964,12 @@ text later with `RulesEngineService.describe_rules()`.
 | `rule_id` | `STRING` | ID of the first matched rule. |
 | `rule_name` | `STRING` | Name of the first matched rule. |
 | `rule_order` | `BIGINT` | Evaluation order of the first matched rule. |
-| `matched` | `BOOLEAN` | True for this first-match trace. |
 | `explanation` | `STRING` | Author-facing expression containing the condition branches that passed, preserving `AND`/`OR` grouping. |
 | `assignments_applied` | `ARRAY<STRING>` | Target fields authored on this rule. Later rules may override their values. |
 | `conditions` | `ARRAY<STRUCT>` | Resolved trace entries for the rule's evaluated conditions. |
+
+The trace is present only for the first matched rule, so it does not repeat a
+`matched` field. No-match and quarantined-error rows return a null trace.
 
 Condition trace fields:
 

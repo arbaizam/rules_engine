@@ -63,12 +63,6 @@ def _spark_runtime():
     return SparkRulesEngineRuntime(DummyRepository(), FunctionRegistry())
 
 
-def _error_on_bad_value(*, value):
-    if value == "bad":
-        raise ValueError("bad test value")
-    return True
-
-
 def _compile(condition, assign=None):
     return YamlRulesetCompiler().compile_payload(
         {
@@ -306,7 +300,7 @@ def test_spark_runtime_evaluates_literal_only_rule_without_source_dependencies(s
 
 
 def test_spark_runtime_applies_column_prefix_to_all_new_outputs(spark):
-    """Every additive audit output respects the configured column prefix."""
+    """Custom prefixes preserve exact compact and full-audit column contracts."""
     ruleset = _compile(
         {
             "left": {"field": "account"},
@@ -318,21 +312,39 @@ def test_spark_runtime_applies_column_prefix_to_all_new_outputs(spark):
     )
     df = spark.createDataFrame([{"account": "A"}])
 
-    output = _spark_runtime().evaluate_dataframe(
+    compact = _spark_runtime().evaluate_dataframe(
+        df,
+        ruleset,
+        column_prefix="audit",
+    )
+    full = _spark_runtime().evaluate_dataframe(
         df,
         ruleset,
         column_prefix="audit",
         full_audit=True,
     )
 
-    assert {
+    assert compact.columns == [
+        "account",
+        "audit_error",
+        "audit_matched",
+        "audit_matched_rule_ids",
+        "audit_assign",
+        "audit_ruleset",
+        "audit_engine_version",
+    ]
+    assert full.columns == [
+        "account",
+        "audit_error",
+        "audit_matched",
+        "audit_matched_rule_ids",
+        "audit_assign",
         "audit_matched_rules",
         "audit_first_matched_rule_trace",
         "audit_assignment_results",
         "audit_ruleset",
         "audit_engine_version",
-    } <= set(output.columns)
-    assert "rules_engine_first_matched_rule_trace" not in output.columns
+    ]
 
 
 def test_spark_runtime_validates_schema_before_building_udf(spark):
@@ -461,6 +473,11 @@ def test_spark_runtime_preserves_decimal_and_array_assignments(spark):
 
 def test_spark_runtime_quarantines_errors_without_failing_job(spark):
     """Production quarantine mode retains good rows and marks bad rows."""
+    def error_on_bad_value(*, value):
+        if value == "bad":
+            raise ValueError("bad test value")
+        return True
+
     registry = FunctionRegistry()
     registry.register(
         CustomFunctionSpec(
@@ -471,7 +488,7 @@ def test_spark_runtime_quarantines_errors_without_failing_job(spark):
             allowed_in_assignment_flag=False,
             return_type_hint="boolean",
         ),
-        _error_on_bad_value,
+        error_on_bad_value,
     )
     ruleset = _compile(
         {
@@ -600,18 +617,23 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
             "right": {"literal": "A"},
         }
     )
-    df = spark.createDataFrame([{"account": "A"}])
+    df = spark.createDataFrame(
+        [(7, "A", "retained")],
+        ["row_id", "account", "source_note"],
+    )
 
-    standard = _spark_runtime().evaluate_dataframe(df, ruleset)
+    compact = _spark_runtime().evaluate_dataframe(df, ruleset)
     full = _spark_runtime().evaluate_dataframe(
         df,
         ruleset,
         full_audit=True,
     )
-    standard_row = standard.collect()[0]
+    compact_row = compact.collect()[0]
 
-    assert standard.columns == [
+    assert compact.columns == [
+        "row_id",
         "account",
+        "source_note",
         "rules_engine_error",
         "rules_engine_matched",
         "rules_engine_matched_rule_ids",
@@ -620,7 +642,9 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
         "rules_engine_engine_version",
     ]
     assert full.columns == [
+        "row_id",
         "account",
+        "source_note",
         "rules_engine_error",
         "rules_engine_matched",
         "rules_engine_matched_rule_ids",
@@ -631,14 +655,14 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
         "rules_engine_ruleset",
         "rules_engine_engine_version",
     ]
-    assert "rules_engine_first_matched_rule_trace" not in standard.columns
-    assert "rules_engine_assignment_results" not in standard.columns
-    assert standard_row["rules_engine_ruleset"].asDict() == {
+    assert "rules_engine_first_matched_rule_trace" not in compact.columns
+    assert "rules_engine_assignment_results" not in compact.columns
+    assert compact_row["rules_engine_ruleset"].asDict() == {
         "id": ruleset.ruleset_id,
         "version": ruleset.version,
         "content_hash": DeltaRowSerializer().content_hash(ruleset),
     }
-    assert standard_row["rules_engine_engine_version"]
+    assert compact_row["rules_engine_engine_version"]
 
 
 def test_coverage_report_finds_dead_broad_and_closest_rules(spark):

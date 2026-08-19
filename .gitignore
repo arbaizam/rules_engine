@@ -20,3 +20,8 @@ README_files/
 manual_pyspark_logic.xlsx
 rules_engine_package_scaffold.py
 handoff_plan.md
+
+# Local position-hierarchy performance/reprocessing notebooks
+notebooks/position_hierarchy_performance_test.py
+notebooks/position_hierarchy_serverless_performance_test.py
+notebooks/position_hierarchy_serverless_reprocess.py

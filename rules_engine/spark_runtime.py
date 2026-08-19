@@ -130,7 +130,6 @@ FIRST_MATCHED_RULE_TRACE_STRUCT = T.StructType(
         T.StructField("rule_id", T.StringType(), True),
         T.StructField("rule_name", T.StringType(), True),
         T.StructField("rule_order", T.LongType(), True),
-        T.StructField("matched", T.BooleanType(), True),
         T.StructField("explanation", T.StringType(), True),
         T.StructField("assignments_applied", T.ArrayType(T.StringType(), False), True),
         T.StructField("conditions", T.ArrayType(CONDITION_TRACE_STRUCT, False), True),
@@ -176,6 +175,23 @@ class _PreparedRule:
     summary: dict[str, Any] | None
 
 
+COMPACT_RESULT_FIELD_NAMES = (
+    "error",
+    "matched",
+    "matched_rule_ids",
+    "assign",
+)
+FULL_AUDIT_ONLY_RESULT_FIELD_NAMES = (
+    "matched_rules",
+    "first_matched_rule_trace",
+    "assignment_results",
+)
+FULL_AUDIT_RESULT_FIELD_NAMES = (
+    *COMPACT_RESULT_FIELD_NAMES,
+    *FULL_AUDIT_ONLY_RESULT_FIELD_NAMES,
+)
+
+
 def _result_struct(
     assign_schema: T.StructType,
     *,
@@ -183,11 +199,13 @@ def _result_struct(
 ) -> T.StructType:
     """Build the Spark UDF result schema for the requested audit detail."""
     _require_bool("full_audit", full_audit)
-    fields = [
+    compact_fields = [
         T.StructField("error", T.StringType(), True),
         T.StructField("matched", T.BooleanType(), False),
         T.StructField("matched_rule_ids", T.ArrayType(T.StringType(), False), False),
         T.StructField("assign", assign_schema, True),
+    ]
+    full_audit_only_fields = [
         T.StructField(
             "matched_rules",
             T.ArrayType(MATCHED_RULE_SUMMARY_STRUCT, False),
@@ -204,15 +222,9 @@ def _result_struct(
             False,
         ),
     ]
-    full_only = {
-        "matched_rules",
-        "first_matched_rule_trace",
-        "assignment_results",
-    }
-    included = {field.name for field in fields}
-    if not full_audit:
-        included -= full_only
-    return T.StructType([field for field in fields if field.name in included])
+    return T.StructType(
+        compact_fields + (full_audit_only_fields if full_audit else [])
+    )
 
 
 def _require_bool(name: str, value: Any) -> None:
@@ -226,8 +238,11 @@ def result_field_names(
     full_audit: bool = False,
 ) -> tuple[str, ...]:
     """Return result field names emitted for the requested audit detail."""
-    return tuple(
-        _result_struct(EMPTY_ASSIGN_STRUCT, full_audit=full_audit).fieldNames()
+    _require_bool("full_audit", full_audit)
+    return (
+        FULL_AUDIT_RESULT_FIELD_NAMES
+        if full_audit
+        else COMPACT_RESULT_FIELD_NAMES
     )
 
 
@@ -236,9 +251,6 @@ EMPTY_ASSIGN_STRUCT = T.StructType(
         T.StructField("__empty", T.StringType(), True),
     ]
 )
-
-RESULT_FIELD_NAMES = result_field_names(full_audit=True)
-
 
 class SparkRulesEngineRuntime:
     """Spark DataFrame runtime for ruleset evaluation."""
@@ -308,7 +320,7 @@ class SparkRulesEngineRuntime:
         output_names = {
             *{
                 f"{column_prefix}_{field_name}"
-                for field_name in result_field_names(full_audit=full_audit)
+                for field_name in FULL_AUDIT_RESULT_FIELD_NAMES
             },
             f"{column_prefix}_ruleset",
             f"{column_prefix}_engine_version",
@@ -486,6 +498,7 @@ class SparkRulesEngineRuntime:
                     summary=summary,
                 )
             )
+        base_payload_template = runtime._base_payload(full_audit=full_audit)
 
         def evaluate(row: Any) -> dict[str, Any]:
             """Evaluate one Spark row struct and return the declared result struct."""
@@ -582,6 +595,7 @@ class SparkRulesEngineRuntime:
                     first_matched_rule_trace=first_matched_rule_trace,
                     assignment_results=assignment_results,
                     full_audit=full_audit,
+                    base_payload_template=base_payload_template,
                 )
             except Exception as exc:
                 if raise_on_error:
@@ -593,6 +607,7 @@ class SparkRulesEngineRuntime:
                     exc,
                     include_traceback=include_error_traceback,
                     full_audit=full_audit,
+                    base_payload_template=base_payload_template,
                 )
 
         return evaluate
@@ -675,9 +690,14 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         first_matched_rule_trace: dict[str, Any] | None,
         assignment_results: list[dict[str, Any]],
         full_audit: bool = False,
+        base_payload_template: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the stable Spark result payload."""
-        payload = self._base_payload(full_audit=full_audit)
+        payload = dict(
+            base_payload_template
+            if base_payload_template is not None
+            else self._base_payload(full_audit=full_audit)
+        )
         payload.update(
             matched=bool(matched_rule_ids),
             matched_rule_ids=matched_rule_ids,
@@ -697,12 +717,24 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         *,
         include_traceback: bool,
         full_audit: bool = False,
+        base_payload_template: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build a compact production error, optionally with a debug traceback."""
         error = f"{type(exc).__name__}: {exc}"
         if include_traceback:
             error = f"{error}\n{traceback.format_exc()}"
-        payload = self._base_payload(full_audit=full_audit)
+        payload = dict(
+            base_payload_template
+            if base_payload_template is not None
+            else self._base_payload(full_audit=full_audit)
+        )
+        for field_name in (
+            "matched_rule_ids",
+            "matched_rules",
+            "assignment_results",
+        ):
+            if field_name in payload:
+                payload[field_name] = list(payload[field_name])
         payload["error"] = error
         return payload
 
@@ -855,7 +887,6 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
             "rule_id": trace.rule_id,
             "rule_name": trace.rule_name,
             "rule_order": trace.rule_order,
-            "matched": trace.matched,
             "explanation": explanation,
             "assignments_applied": list(trace.assignments_applied),
             "conditions": [

@@ -1963,7 +1963,6 @@ assert rows["A"]["rules_engine_assign"] == {"bucket": "A"}
 assert rows["A"]["rules_engine_first_matched_rule_trace"]["rule_id"] == "r1"
 assert rows["A"]["rules_engine_first_matched_rule_trace"]["rule_name"] == "Account A"
 assert rows["A"]["rules_engine_first_matched_rule_trace"]["explanation"] == "account == 'A'"
-assert rows["A"]["rules_engine_first_matched_rule_trace"]["matched"] is True
 assert rows["A"]["rules_engine_first_matched_rule_trace"]["conditions"][0]["columns"] == ["account"]
 assert rows["A"]["rules_engine_error"] is None
 assert rows["B"]["rules_engine_matched"] is False
@@ -2832,7 +2831,6 @@ assert match_trace["explanation"] == (
     "upper(value=account) == 'A' AND "
     "status == 'open'"
 )
-assert match_trace["matched"] is True
 assert match_trace["assignments_applied"] == ["bucket"]
 
 precomputed_condition = conditions[0]
@@ -4089,9 +4087,9 @@ rules:
 """
 ruleset = service.compile_yaml_text(yaml_text)
 source = spark.createDataFrame([{"account": "A"}])
-standard = service.evaluate_dataframe(source, ruleset=ruleset)
+compact = service.evaluate_dataframe(source, ruleset=ruleset)
 full = service.evaluate_dataframe(source, ruleset=ruleset, full_audit=True)
-assert standard.columns == [
+assert compact.columns == [
     "account",
     "rules_engine_error",
     "rules_engine_matched",
@@ -4116,17 +4114,17 @@ identity_columns = {
     "rules_engine_ruleset",
     "rules_engine_engine_version",
 }
-assert identity_columns <= set(standard.columns)
+assert identity_columns <= set(compact.columns)
 assert identity_columns <= set(full.columns)
-assert "rules_engine_first_matched_rule_trace" not in standard.columns
-assert "rules_engine_assignment_results" not in standard.columns
+assert "rules_engine_first_matched_rule_trace" not in compact.columns
+assert "rules_engine_assignment_results" not in compact.columns
 assert "rules_engine_first_matched_rule_trace" in full.columns
 assert "rules_engine_assignment_results" in full.columns
-standard_row = standard.collect()[0]
-assert standard_row["rules_engine_ruleset"]["id"] == ruleset.ruleset_id
-assert standard_row["rules_engine_ruleset"]["version"] == ruleset.version
-assert standard_row["rules_engine_ruleset"]["content_hash"]
-assert standard_row["rules_engine_engine_version"]
+compact_row = compact.collect()[0]
+assert compact_row["rules_engine_ruleset"]["id"] == ruleset.ruleset_id
+assert compact_row["rules_engine_ruleset"]["version"] == ruleset.version
+assert compact_row["rules_engine_ruleset"]["content_hash"]
+assert compact_row["rules_engine_engine_version"]
 print("PASS: Default and full-audit outputs retained identity and emitted documented detail.")
 
 # COMMAND ----------

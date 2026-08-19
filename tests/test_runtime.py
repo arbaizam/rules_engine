@@ -11,12 +11,15 @@ from rules_engine.human_readable import HumanReadableRulesetFormatter
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 from rules_engine.runtime import SparkRowEvaluator
 from rules_engine.spark_runtime import (
+    COMPACT_RESULT_FIELD_NAMES,
     EMPTY_ASSIGN_STRUCT,
-    RESULT_FIELD_NAMES,
+    FULL_AUDIT_ONLY_RESULT_FIELD_NAMES,
+    FULL_AUDIT_RESULT_FIELD_NAMES,
     SparkRulesEngineRuntime,
     _result_struct,
     _SparkRowUdfEvaluator,
     required_source_columns,
+    result_field_names,
 )
 
 
@@ -169,8 +172,18 @@ def test_scalar_string_membership_fails_with_contains_guidance():
     assert "Use contains/not_contains" in result["error"]
 
 
-def test_result_payload_keys_are_derived_from_the_declared_schema():
-    """Success and error payloads cannot drift from the Spark result schema."""
+@pytest.mark.parametrize(
+    ("full_audit", "expected_field_names"),
+    [
+        (False, COMPACT_RESULT_FIELD_NAMES),
+        (True, FULL_AUDIT_RESULT_FIELD_NAMES),
+    ],
+)
+def test_result_payload_keys_match_the_declared_schema(
+    full_audit,
+    expected_field_names,
+):
+    """Compact and full payloads cannot drift from their Spark result schemas."""
     evaluator = object.__new__(_SparkRowUdfEvaluator)
 
     success = evaluator._success_payload(
@@ -179,19 +192,92 @@ def test_result_payload_keys_are_derived_from_the_declared_schema():
         assign_payload=None,
         first_matched_rule_trace=None,
         assignment_results=[],
-        full_audit=True,
+        full_audit=full_audit,
     )
     error = evaluator._error_payload(
         ValueError("bad"),
         include_traceback=False,
-        full_audit=True,
+        full_audit=full_audit,
     )
 
-    assert RESULT_FIELD_NAMES == tuple(
-        _result_struct(EMPTY_ASSIGN_STRUCT, full_audit=True).fieldNames()
+    assert expected_field_names == tuple(
+        _result_struct(
+            EMPTY_ASSIGN_STRUCT,
+            full_audit=full_audit,
+        ).fieldNames()
     )
-    assert tuple(success) == RESULT_FIELD_NAMES
-    assert tuple(error) == RESULT_FIELD_NAMES
+    assert tuple(success) == expected_field_names
+    assert tuple(error) == expected_field_names
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "error",
+        "matched",
+        "matched_rule_ids",
+        "assign",
+        "ruleset",
+        "engine_version",
+        "result",
+    ),
+)
+def test_dataframe_evaluation_reserves_every_output_name_in_compact_mode(
+    field_name,
+):
+    """Compact evaluation cannot accept a name that another mode may overwrite."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    column_name = f"rules_engine_{field_name}"
+    input_frame = type("InputFrame", (), {"columns": [column_name]})()
+
+    with pytest.raises(ValueError, match=column_name):
+        _spark_runtime().evaluate_dataframe(input_frame, ruleset)
+
+
+def test_compact_evaluation_reserves_full_audit_only_names():
+    """Switching audit detail later cannot silently overwrite an input column."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+
+    for field_name in (
+        "matched_rules",
+        "first_matched_rule_trace",
+        "assignment_results",
+    ):
+        column_name = f"rules_engine_{field_name}"
+        input_frame = type("InputFrame", (), {"columns": [column_name]})()
+        with pytest.raises(ValueError, match=column_name):
+            _spark_runtime().evaluate_dataframe(input_frame, ruleset)
+
+
+def test_dataframe_evaluation_rejects_an_empty_column_prefix():
+    """The output namespace must be explicit and non-empty."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    input_frame = type("InputFrame", (), {"columns": []})()
+
+    with pytest.raises(ValueError, match="column_prefix must be non-empty"):
+        _spark_runtime().evaluate_dataframe(
+            input_frame,
+            ruleset,
+            column_prefix="",
+        )
 
 
 def test_assignment_provenance_uses_stable_event_positions():
@@ -524,7 +610,6 @@ def test_spark_row_evaluator_returns_native_first_match_trace():
     assert match_trace["rule_id"] == "r1"
     assert match_trace["rule_name"] == "Rule 1"
     assert match_trace["rule_order"] == 1
-    assert match_trace["matched"] is True
     assert match_trace["explanation"] == "account == 'A'"
     assert match_trace["conditions"][0]["columns"] == ["account"]
     assert match_trace["conditions"][0]["left"]["column"] == "account"
@@ -1087,6 +1172,59 @@ def test_spark_row_evaluator_no_match_returns_empty_audit_arrays():
     assert result["first_matched_rule_trace"] is None
 
 
+def test_compact_and_full_audit_payloads_have_core_result_parity():
+    """Audit detail changes observability, not success, no-match, or error decisions."""
+    ruleset = _compile(
+        {
+            "left": {"field": "amount"},
+            "operator": "gt",
+            "right": {"literal": 10},
+            "null_input_mode": "propagate",
+            "null_result_mode": "null",
+        }
+    )
+    cases = {
+        "success": ({"amount": 20}, True, ["r1"], {"bucket": "matched"}),
+        "no_match": ({"amount": 5}, False, [], None),
+        "error": ({"amount": "invalid"}, False, [], None),
+    }
+
+    for case_name, (row, matched, matched_rule_ids, assign) in cases.items():
+        compact = _evaluate_worker(ruleset, row, full_audit=False)
+        full = _evaluate_worker(ruleset, row, full_audit=True)
+
+        assert {
+            field_name: compact[field_name]
+            for field_name in COMPACT_RESULT_FIELD_NAMES
+        } == {
+            field_name: full[field_name]
+            for field_name in COMPACT_RESULT_FIELD_NAMES
+        }, case_name
+        assert compact["matched"] is matched
+        assert compact["matched_rule_ids"] == matched_rule_ids
+        assert compact["assign"] == assign
+        assert not any(
+            field_name in compact
+            for field_name in FULL_AUDIT_ONLY_RESULT_FIELD_NAMES
+        )
+
+        if case_name == "success":
+            assert full["error"] is None
+            assert [item["rule_id"] for item in full["matched_rules"]] == ["r1"]
+            assert full["first_matched_rule_trace"]["rule_id"] == "r1"
+            assert len(full["assignment_results"]) == 1
+        elif case_name == "no_match":
+            assert full["error"] is None
+            assert full["matched_rules"] == []
+            assert full["first_matched_rule_trace"] is None
+            assert full["assignment_results"] == []
+        else:
+            assert full["error"] is not None
+            assert full["matched_rules"] == []
+            assert full["first_matched_rule_trace"] is None
+            assert full["assignment_results"] == []
+
+
 def test_rule_summaries_are_precomputed_once_per_row_evaluator(monkeypatch):
     """Static human-readable rule descriptions are not rebuilt per row."""
     ruleset = _compile(
@@ -1266,6 +1404,120 @@ def test_spark_row_evaluator_builds_condition_traces_only_for_first_match(monkey
 
     assert result["first_matched_rule_trace"]["rule_id"] == "first_match"
     assert traced_condition_ids == ["first_match_condition"]
+
+
+def test_losing_custom_condition_is_invoked_once_during_full_audit():
+    """A losing custom condition is not repeated while searching for the first match."""
+    calls = []
+
+    def never_matches(**kwargs):
+        calls.append(dict(kwargs))
+        return False
+
+    registry = FunctionRegistry()
+    registry.register(
+        CustomFunctionSpec(
+            function_name="never_matches",
+            implementation_reference="tests.never_matches",
+            arg_names=("value",),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=False,
+            return_type_hint="boolean",
+        ),
+        implementation=never_matches,
+    )
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "custom_call_count",
+            "ruleset_name": "Custom Call Count",
+            "version": "1",
+            "status": "published",
+            "rules": [
+                {
+                    "rule_id": "custom_loser",
+                    "rule_name": "Custom Loser",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {
+                                    "custom_function": {
+                                        "name": "never_matches",
+                                        "args": {"value": {"field": "account"}},
+                                    }
+                                },
+                                "operator": "eq",
+                                "right": {"literal": True},
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "loser"},
+                },
+                {
+                    "rule_id": "plain_match",
+                    "rule_name": "Plain Match",
+                    "rule_order": 2,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "matched"},
+                },
+            ],
+        }
+    )
+
+    result = _evaluate_worker(
+        ruleset,
+        {"account": "A"},
+        registry=registry,
+        full_audit=True,
+    )
+
+    assert result["matched_rule_ids"] == ["plain_match"]
+    assert calls == [{"value": "A"}]
+
+
+def test_base_payload_field_construction_is_hoisted_out_of_row_evaluation(
+    monkeypatch,
+):
+    """Stable payload field construction runs once when the worker closure is built."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    calls = []
+    original = result_field_names
+
+    def tracked_result_field_names(*, full_audit=False):
+        calls.append(full_audit)
+        return original(full_audit=full_audit)
+
+    monkeypatch.setattr(
+        "rules_engine.spark_runtime.result_field_names",
+        tracked_result_field_names,
+    )
+    runtime = _spark_runtime()
+    assign_schema = runtime._assignment_schema(ruleset, T.StructType())
+    evaluator = runtime._build_row_evaluator(
+        ruleset,
+        [field.name for field in assign_schema.fields],
+        {field.name: field.dataType for field in assign_schema.fields},
+        full_audit=True,
+    )
+
+    evaluator(FakeSparkRow({"account": "A"}))
+    evaluator(FakeSparkRow({"account": "B"}))
+
+    assert calls == [True]
 
 
 def test_match_only_losing_rule_preserves_later_condition_errors():

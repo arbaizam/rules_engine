@@ -512,12 +512,17 @@ display(result_df.orderBy("row_id"))
 
 rows = result_df.orderBy("row_id").collect()
 for row in rows:
+    first_match_trace = row["rules_engine_first_matched_rule_trace"]
     print(
         row["row_id"],
         row["rules_engine_matched"],
         row["rules_engine_matched_rule_ids"],
         row["rules_engine_assign"],
-        row["rules_engine_first_matched_rule_trace"]["explanation"],
+        (
+            first_match_trace["explanation"]
+            if first_match_trace is not None
+            else None
+        ),
         row["rules_engine_assignment_results"],
         row["rules_engine_error"],
     )
