@@ -4,7 +4,7 @@ Source: current behavioral pytest suite under `tests/`.
 
 The suite contains **218 explicit test functions** and currently collects **249 pytest cases** after parameter expansion. **16 cases** require `RULES_ENGINE_RUN_SPARK_TESTS=1` and a live Spark runtime.
 
-Standalone wheel-building, Databricks bundle-layout, package-version alignment, README, and notebook source-layout tests are intentionally excluded. Those surfaces differ between this repository and the integrated work Databricks deployment and are validated separately during packaging and deployment.
+Standalone wheel-building, README, and notebook source-layout tests are intentionally excluded. Those surfaces are validated separately from the unit suite.
 
 Ruleset version comparison remains covered because it is engine behavior rather than package or repository version alignment.
 

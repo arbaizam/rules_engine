@@ -34,7 +34,7 @@ semantic weakening.
 - [Reconciliation CSV Translation Utility](#reconciliation-csv-translation-utility)
 - [Databricks System Test](#databricks-system-test)
 - [Testing](#testing)
-- [Packaging And Asset Bundles](#packaging-and-asset-bundles)
+- [Packaging](#packaging)
 - [Developer Workflow](#developer-workflow)
 - [Troubleshooting](#troubleshooting)
 - [Migration Notes For 0.4.0](#migration-notes-for-040)
@@ -1458,8 +1458,7 @@ Retirement changes the persisted row to `status = retired`, stamps
 This diagram shows the full ruleset lifecycle from authoring through runtime
 evaluation and retirement.
 
-These Mermaid fences use GitHub Markdown syntax. The companion `README.qmd`
-uses Quarto Mermaid cell syntax for Quarto HTML/PDF rendering.
+These Mermaid fences use GitHub Markdown syntax.
 
 ```mermaid
 flowchart TD
@@ -1736,45 +1735,15 @@ gated suite on every supported Databricks Runtime line, including Decimal,
 Date, `TimestampType`, `TimestampNTZType` (where available), array/struct,
 custom-function serialization, and both error modes.
 
-## Packaging And Asset Bundles
+## Packaging
 
-The recommended production deployment pattern is wheel-based:
+This repository owns the Python source and package build only. Deployment
+configuration is intentionally maintained by each consuming environment.
 
-```text
-source repo -> build wheel -> deploy Asset Bundle -> install wheel on job task
-```
-
-This avoids production dependencies on workspace source folders and removes the
-need for `sys.path.append(...)` in production jobs. Shipped operational and guide
-notebooks import the installed package and print its version/path. The system
-test appends the checkout only after asserting wheel provenance, and only so
-pytest can discover repository tests and tooling:
-
-```python
-from rules_engine import YamlRulesetCompiler, SparkRulesEngineRuntime
-```
-
-The repo includes:
-
-```text
-pyproject.toml
-databricks.yml
-```
-
-The production wheel includes the `rules_engine` package only. Repository
-utilities under `tools/` are intentionally excluded from the wheel because they
-are migration/support tooling, not runtime dependencies.
-`pyproject.toml` currently requires PySpark 3.5 or newer. Pin and test the wheel
-against the exact Databricks Runtime lines used in production; in particular,
-do not author `timestamp_ntz` hints unless every target runtime exposes
-`TimestampNTZType`.
-
-The wheel build is constrained by `pyproject.toml` to packages matching
-`rules_engine*`. Generated folders such as `build/`, `dist/`, egg-info, and
-Python caches are ignored by git and are not intended deployment inputs.
-Source artifacts supplied for release review must start at the repository root
-and include `pyproject.toml` and `databricks.yml`; a package-directory-only ZIP
-is not a reproducible build input.
+The wheel includes the `rules_engine` package only. Repository utilities under
+`tools/` are migration and support tooling rather than runtime dependencies.
+`pyproject.toml` requires PySpark 3.5 or newer; test against every target runtime
+before adopting runtime-specific types such as `timestamp_ntz`.
 
 Build the wheel locally:
 
@@ -1783,75 +1752,13 @@ python -m pip install build
 python tools/build_release_wheel.py
 ```
 
-The release builder removes only repository-local `build/`,
-`rules_engine.egg-info/`, and prior `dist/rules_engine-*.whl` outputs before
-building. It then requires exactly one wheel whose filename matches the
-`pyproject.toml` version, preventing stale deleted modules or mislabeled wheels
-from entering a bundle deployment. Builds use a fixed `SOURCE_DATE_EPOCH`, so
-archive timestamps do not vary with build time or checkout mtimes. The builder
-also requires the resulting wheel to match `EXPECTED_WHEEL_SHA256` in
-`tools/build_release_wheel.py`. A bundle deploy therefore either rebuilds the
-reviewed bytes exactly or stops before upload; update that digest only after
-reviewing an intentional release-content change.
+The release builder removes stale repository-local build outputs, requires one
+wheel whose filename matches the package version, uses deterministic archive
+timestamps, and verifies the reviewed SHA-256 digest recorded in
+`tools/build_release_wheel.py`.
 
-Validate and deploy the bundle from the repo root after configuring Databricks
-CLI authentication. The targets are deliberately bound to separate
-`rules-engine-dev` and `rules-engine-prod` profiles:
-
-```powershell
-databricks auth login --host https://<dev-workspace-host> --profile rules-engine-dev
-databricks bundle validate --target dev --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>"
-databricks bundle deploy --target dev --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>"
-databricks bundle run --target dev --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>" rules_engine_system_tests
-```
-
-The bundle job installs the exact versioned wheel plus pytest on the supplied
-existing cluster, then runs `notebooks/rules_engine_system_tests.py` with live
-Spark tests enabled. It asserts that `rules_engine` came from the installed
-distribution and equals the bundle-pinned `EXPECTED_RULES_ENGINE_VERSION`
-before executing 67 named system tests and the repository pytest suite.
-`system_test_schema` must be disposable, must not name a production metadata
-schema, and its schema component must contain `test`, `scratch`, or `tmp`. Keep
-`docs/rules_engine_system_test_uat_plan.md` synchronized with the notebook when
-adding, removing, or changing system-test coverage.
-
-The `prod` target is a release-validation target, not a definition of every
-downstream production evaluation job. It can deploy only from `main`, uses the
-`rules-engine-prod` profile and a controlled `/Workspace/Production` root, and
-requires a service-principal application ID plus a cloud-specific job-cluster
-node type. DBR is pinned to `15.4.x-scala2.12`; production does not reuse the
-development all-purpose cluster.
-
-```powershell
-databricks auth login --host https://<prod-workspace-host> --profile rules-engine-prod
-databricks bundle validate --target prod --var "prod_service_principal_name=<application-id>" --var "prod_job_cluster_node_type_id=<node-type-id>" --var "system_test_schema=<disposable-catalog.schema>"
-databricks bundle deploy --target prod --var "prod_service_principal_name=<application-id>" --var "prod_job_cluster_node_type_id=<node-type-id>" --var "system_test_schema=<disposable-catalog.schema>"
-databricks bundle run --target prod --var "prod_service_principal_name=<application-id>" --var "prod_job_cluster_node_type_id=<node-type-id>" --var "system_test_schema=<disposable-catalog.schema>" rules_engine_system_tests
-```
-
-Provision the `/Workspace/Production` folder with write access restricted to
-the production deployer before the first deploy. Inventory and migrate every
-downstream reader of pre-0.4 output columns separately; this validation bundle
-cannot discover external SQL views, DLT pipelines, or BI models.
-
-Use `notebooks/rules_engine_serverless_performance.py` for cache-free
-Databricks serverless benchmarks. It materializes every timed case to Delta and
-stores durable comparison metrics. Configuration and acceptance guidance are in
-`docs/rules_engine_serverless_performance.md`.
-
-For Azure DevOps, keep the same sequence in the pipeline:
-
-```text
-install dependencies
-run pytest
-build wheel
-databricks bundle validate
-databricks bundle deploy
-databricks bundle run rules_engine_system_tests
-```
-
-Production deployment should use a service principal or your organization's
-approved Databricks authentication pattern rather than a personal token.
+Keep `docs/rules_engine_system_test_uat_plan.md` synchronized with
+`notebooks/rules_engine_system_tests.py` when changing system-test coverage.
 
 ## Developer Workflow
 

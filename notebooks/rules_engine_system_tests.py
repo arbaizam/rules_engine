@@ -1,10 +1,7 @@
 # Databricks notebook source
-from importlib.metadata import distribution
-from pathlib import Path
 import os
 import re
-
-import rules_engine
+from pathlib import Path
 
 
 def _job_parameter(name):
@@ -16,7 +13,7 @@ def _job_parameter(name):
 
 
 def _find_repo_root():
-    """Locate the bundle checkout without changing package import precedence."""
+    """Locate the repository checkout containing tests and fixtures."""
     configured = globals().get("RULES_ENGINE_REPO_ROOT") or _job_parameter(
         "RULES_ENGINE_REPO_ROOT"
     )
@@ -31,7 +28,7 @@ def _find_repo_root():
             if (candidate / "tests").is_dir() and (candidate / "pyproject.toml").is_file():
                 return candidate
     raise AssertionError(
-        "Could not locate the deployed repository root. Set RULES_ENGINE_REPO_ROOT."
+        "Could not locate the repository root. Set RULES_ENGINE_REPO_ROOT."
     )
 
 
@@ -54,10 +51,6 @@ def _as_bool(value, *, name):
 
 REPO_ROOT = _find_repo_root()
 SCHEMA = globals().get("SCHEMA") or _job_parameter("SCHEMA")
-EXPECTED_RULES_ENGINE_VERSION = (
-    globals().get("EXPECTED_RULES_ENGINE_VERSION")
-    or _job_parameter("EXPECTED_RULES_ENGINE_VERSION")
-)
 RULES_ENGINE_RUN_SPARK_TESTS = _as_bool(
     globals().get("RULES_ENGINE_RUN_SPARK_TESTS")
     or _job_parameter("RULES_ENGINE_RUN_SPARK_TESTS")
@@ -76,9 +69,6 @@ if not RULESET_YAML_PATH.is_absolute():
 
 assert RULESET_YAML_PATH.is_file(), f"Ruleset fixture does not exist: {RULESET_YAML_PATH}"
 assert SCHEMA, "Set SCHEMA before running this test."
-assert EXPECTED_RULES_ENGINE_VERSION, (
-    "Set EXPECTED_RULES_ENGINE_VERSION to the release version under test."
-)
 schema_parts = SCHEMA.split(".")
 assert len(schema_parts) == 2 and all(
     re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part) for part in schema_parts
@@ -88,26 +78,6 @@ assert any(marker in schema_leaf for marker in ("test", "scratch", "tmp")), (
     "SCHEMA must visibly identify a disposable test/scratch/tmp schema."
 )
 
-package_distribution = distribution("rules-engine")
-package_file = Path(rules_engine.__file__).resolve()
-distribution_root = Path(package_distribution.locate_file("")).resolve()
-try:
-    package_file.relative_to(distribution_root)
-except ValueError as exc:
-    raise AssertionError(
-        "rules_engine was not imported from the installed distribution: "
-        f"module={package_file}, distribution_root={distribution_root}"
-    ) from exc
-assert package_distribution.version == EXPECTED_RULES_ENGINE_VERSION, (
-    "Installed distribution does not match the requested release: "
-    f"expected={EXPECTED_RULES_ENGINE_VERSION}, installed={package_distribution.version}"
-)
-assert rules_engine.__version__ == EXPECTED_RULES_ENGINE_VERSION, (
-    "Imported package does not match the requested release: "
-    f"expected={EXPECTED_RULES_ENGINE_VERSION}, imported={rules_engine.__version__}"
-)
-print(f"Installed rules_engine version: {rules_engine.__version__}")
-print(f"Installed rules_engine package: {package_file}")
 print(f"Repository test root: {REPO_ROOT}")
 print(f"Ruleset path fixture: {RULESET_YAML_PATH}")
 
@@ -4307,8 +4277,7 @@ PYTEST_ARGS = globals().get(
 )
 
 if str(REPO_ROOT) not in sys.path:
-    # Tests and package tooling live in the checkout. Append the path so the
-    # already-verified installed rules_engine distribution retains precedence.
+    # Tests and package tooling live in the checkout.
     sys.path.append(str(REPO_ROOT))
 
 previous_cwd = Path(os.getcwd())

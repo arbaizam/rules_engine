@@ -13,7 +13,7 @@ build/
 .venv/
 venv/
 *.log
-.bundle/
+.databricks/
 ~$*
 README.html
 README_files/
