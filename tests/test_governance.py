@@ -5,7 +5,6 @@ from pyspark.sql import types as T
 
 from rules_engine.change_control import RulesetDiffer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.enums import AuditLevel
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.exporter_yaml import YamlRulesetExporter
 from rules_engine.normalizer import RulesetNormalizer
@@ -332,10 +331,10 @@ def test_semantic_diff_reports_expected_cases_individually_by_name():
     assert "expected_cases" not in fields
 
 
-# Audit-level contracts and production/publish differential behavior
+# Audit contracts and production/publish differential behavior
 
 
-def test_audit_levels_have_distinct_schemas_and_payloads():
+def test_full_audit_controls_detailed_schema_and_payload():
     ruleset = YamlRulesetCompiler().compile_payload(_payload())
     runtime = SparkRulesEngineRuntime(NoOpRepository(), FunctionRegistry())
     assign_fields = ["bucket", "rate", "review"]
@@ -346,35 +345,41 @@ def test_audit_levels_have_distinct_schemas_and_payloads():
     }
 
     payloads = {}
-    for level in AuditLevel:
+    for full_audit in (False, True):
         evaluator = runtime._build_row_evaluator(
             ruleset,
             assign_fields,
             assign_types,
-            audit_level=level,
+            full_audit=full_audit,
         )
-        payloads[level] = evaluator(FakeSparkRow({"fico": 740}))
-        assert tuple(payloads[level]) == result_field_names(level)
-        assert tuple(payloads[level]) == tuple(
-            _result_struct(T.StructType(), level).fieldNames()
+        payloads[full_audit] = evaluator(FakeSparkRow({"fico": 740}))
+        assert tuple(payloads[full_audit]) == result_field_names(
+            full_audit=full_audit
+        )
+        assert tuple(payloads[full_audit]) == tuple(
+            _result_struct(
+                T.StructType(),
+                full_audit=full_audit,
+            ).fieldNames()
         )
 
-    assert set(payloads[AuditLevel.MINIMAL]) == {
+    assert tuple(payloads[False]) == (
+        "error",
         "matched",
         "matched_rule_ids",
         "assign",
-        "error",
-    }
-    assert "first_matched_rule" in payloads[AuditLevel.STANDARD]
-    assert "assignment_results" not in payloads[AuditLevel.STANDARD]
-    assert "matched_rules" not in payloads[AuditLevel.STANDARD]
-    assert "assignment_results" in payloads[AuditLevel.FULL]
-    assert "matched_rules" in payloads[AuditLevel.FULL]
+    )
+    assert "first_matched_rule_trace" not in payloads[False]
+    assert "assignment_results" not in payloads[False]
+    assert "matched_rules" not in payloads[False]
+    assert "first_matched_rule_trace" in payloads[True]
+    assert "assignment_results" in payloads[True]
+    assert "matched_rules" in payloads[True]
 
 
-def test_invalid_audit_level_fails_before_spark_execution():
-    with pytest.raises(ValueError, match="Invalid audit_level"):
-        result_field_names("verbose")
+def test_non_boolean_full_audit_fails_before_spark_execution():
+    with pytest.raises(TypeError, match="full_audit must be a bool"):
+        result_field_names(full_audit="true")
 
 
 def test_publish_evaluator_and_spark_worker_share_rule_ordering_semantics():
@@ -459,7 +464,6 @@ def test_publish_evaluator_and_spark_worker_share_rule_ordering_semantics():
             "shared": T.StringType(),
             "after": T.StringType(),
         },
-        audit_level=AuditLevel.MINIMAL,
     )
 
     for row in (

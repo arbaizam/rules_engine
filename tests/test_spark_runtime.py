@@ -8,7 +8,6 @@ from pyspark.sql import types as T
 import rules_engine.spark_runtime as spark_runtime_module
 from rules_engine.analytics import RulesetCoverageAnalyzer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.enums import AuditLevel
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 from rules_engine.serializer import DeltaRowSerializer
@@ -107,7 +106,7 @@ def test_spark_runtime_evaluates_row_rule(spark):
     )
     df = spark.createDataFrame([{"account": "A"}, {"account": "B"}])
 
-    output = _spark_runtime().evaluate_dataframe(df, ruleset)
+    output = _spark_runtime().evaluate_dataframe(df, ruleset, full_audit=True)
     matched_rules_type = output.schema["rules_engine_matched_rules"].dataType
     assignment_results_type = output.schema[
         "rules_engine_assignment_results"
@@ -124,33 +123,25 @@ def test_spark_runtime_evaluates_row_rule(spark):
 
     assert rows[0]["rules_engine_matched"] is True
     assert rows[0]["rules_engine_assign"]["bucket"] == "matched"
-    winning_rule = rows[0]["rules_engine_winning_rule"]
-    assert rows[0]["rules_engine_winning_rule_id"] == "r1"
-    assert rows[0]["rules_engine_winning_rule_name"] == "Rule 1"
-    assert rows[0]["rules_engine_winning_rule_explanation"] == "account == 'A'"
-    assert rows[0]["rules_engine_first_matched_rule"] == winning_rule
-    assert rows[0]["rules_engine_first_matched_rule_id"] == "r1"
-    assert rows[0]["rules_engine_first_matched_rule_name"] == "Rule 1"
-    assert rows[0]["rules_engine_first_matched_rule_explanation"] == "account == 'A'"
+    match_trace = rows[0]["rules_engine_first_matched_rule_trace"]
     assert [item["rule_id"] for item in rows[0]["rules_engine_matched_rules"]] == [
         "r1"
     ]
-    assert rows[0]["rules_engine_last_matched_rule"]["rule_id"] == "r1"
     assert rows[0]["rules_engine_assignment_results"][0]["effective"] is True
     assert rows[0]["rules_engine_assignment_results"][0]["authored_expression"] == (
         "bucket = 'matched'"
     )
-    assert winning_rule["rule_id"] == "r1"
-    assert winning_rule["conditions"][0]["columns"] == ["account"]
-    assert winning_rule["conditions"][0]["left"]["column"] == "account"
-    assert winning_rule["conditions"][0]["left"]["value"] == "A"
+    assert match_trace["rule_id"] == "r1"
+    assert match_trace["rule_name"] == "Rule 1"
+    assert match_trace["rule_order"] == 1
+    assert match_trace["explanation"] == "account == 'A'"
+    assert match_trace["conditions"][0]["columns"] == ["account"]
+    assert match_trace["conditions"][0]["left"]["column"] == "account"
+    assert match_trace["conditions"][0]["left"]["value"] == "A"
     assert "rules_engine_rule_results" not in rows[0].asDict()
     assert rows[1]["rules_engine_matched"] is False
-    assert rows[1]["rules_engine_winning_rule"] is None
-    assert rows[1]["rules_engine_winning_rule_explanation"] is None
-    assert rows[1]["rules_engine_first_matched_rule"] is None
+    assert rows[1]["rules_engine_first_matched_rule_trace"] is None
     assert rows[1]["rules_engine_matched_rules"] == []
-    assert rows[1]["rules_engine_last_matched_rule"] is None
     assert rows[1]["rules_engine_assignment_results"] == []
 
 
@@ -275,12 +266,18 @@ def test_spark_runtime_serializes_only_required_literal_source_columns(spark):
 
     assert required_source_columns(ruleset) == ("risk.score", "source_value")
 
-    row = _spark_runtime().evaluate_dataframe(df, ruleset).collect()[0]
+    row = _spark_runtime().evaluate_dataframe(
+        df,
+        ruleset,
+        full_audit=True,
+    ).collect()[0]
 
     assert row["unused_payload"] == "kept"
     assert row["rules_engine_matched"] is True
     assert row["rules_engine_assign"]["copied"] == "assigned"
-    assert row["rules_engine_winning_rule"]["conditions"][0]["left"]["value"] == "A"
+    assert row["rules_engine_first_matched_rule_trace"]["conditions"][0]["left"][
+        "value"
+    ] == "A"
 
 
 def test_spark_runtime_evaluates_literal_only_rule_without_source_dependencies(spark):
@@ -325,18 +322,17 @@ def test_spark_runtime_applies_column_prefix_to_all_new_outputs(spark):
         df,
         ruleset,
         column_prefix="audit",
+        full_audit=True,
     )
 
     assert {
-        "audit_first_matched_rule",
-        "audit_first_matched_rule_id",
-        "audit_first_matched_rule_name",
-        "audit_first_matched_rule_explanation",
         "audit_matched_rules",
-        "audit_last_matched_rule",
+        "audit_first_matched_rule_trace",
         "audit_assignment_results",
+        "audit_ruleset",
+        "audit_engine_version",
     } <= set(output.columns)
-    assert "rules_engine_first_matched_rule" not in output.columns
+    assert "rules_engine_first_matched_rule_trace" not in output.columns
 
 
 def test_spark_runtime_validates_schema_before_building_udf(spark):
@@ -595,8 +591,8 @@ def test_spark_runtime_preserves_timestamp_ntz_assignment_type(spark):
     assert row["rules_engine_assign"]["copied_timestamp"] == expected
 
 
-def test_audit_levels_emit_identity_and_only_requested_detail(spark):
-    """Every level is attributable while lighter levels omit expensive fields."""
+def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
+    """The default stays compact while full audit adds ordered diagnostics."""
     ruleset = _compile(
         {
             "left": {"field": "account"},
@@ -606,28 +602,43 @@ def test_audit_levels_emit_identity_and_only_requested_detail(spark):
     )
     df = spark.createDataFrame([{"account": "A"}])
 
-    minimal = _spark_runtime().evaluate_dataframe(
+    standard = _spark_runtime().evaluate_dataframe(df, ruleset)
+    full = _spark_runtime().evaluate_dataframe(
         df,
         ruleset,
-        audit_level=AuditLevel.MINIMAL,
+        full_audit=True,
     )
-    standard = _spark_runtime().evaluate_dataframe(
-        df,
-        ruleset,
-        audit_level="standard",
-    )
-    minimal_row = minimal.collect()[0]
+    standard_row = standard.collect()[0]
 
-    assert "rules_engine_first_matched_rule" not in minimal.columns
-    assert "rules_engine_assignment_results" not in minimal.columns
-    assert "rules_engine_first_matched_rule" in standard.columns
+    assert standard.columns == [
+        "account",
+        "rules_engine_error",
+        "rules_engine_matched",
+        "rules_engine_matched_rule_ids",
+        "rules_engine_assign",
+        "rules_engine_ruleset",
+        "rules_engine_engine_version",
+    ]
+    assert full.columns == [
+        "account",
+        "rules_engine_error",
+        "rules_engine_matched",
+        "rules_engine_matched_rule_ids",
+        "rules_engine_assign",
+        "rules_engine_matched_rules",
+        "rules_engine_first_matched_rule_trace",
+        "rules_engine_assignment_results",
+        "rules_engine_ruleset",
+        "rules_engine_engine_version",
+    ]
+    assert "rules_engine_first_matched_rule_trace" not in standard.columns
     assert "rules_engine_assignment_results" not in standard.columns
-    assert minimal_row["rules_engine_ruleset_id"] == ruleset.ruleset_id
-    assert minimal_row["rules_engine_ruleset_version"] == ruleset.version
-    assert minimal_row["rules_engine_content_hash"] == (
-        DeltaRowSerializer().content_hash(ruleset)
-    )
-    assert minimal_row["rules_engine_engine_version"]
+    assert standard_row["rules_engine_ruleset"].asDict() == {
+        "id": ruleset.ruleset_id,
+        "version": ruleset.version,
+        "content_hash": DeltaRowSerializer().content_hash(ruleset),
+    }
+    assert standard_row["rules_engine_engine_version"]
 
 
 def test_coverage_report_finds_dead_broad_and_closest_rules(spark):

@@ -154,7 +154,6 @@ result_df = service.evaluate_dataframe(
     ruleset_name="Quickstart Account Review",
     version="1",
     fail_on_error=True,
-    audit_level="standard",
 )
 
 display(result_df.orderBy("account"))
@@ -177,9 +176,9 @@ assert rows["A"]["rules_engine_assign"] == {"review_bucket": "high_value_open"}
 assert rows["B"]["rules_engine_matched"] is False
 assert rows["C"]["rules_engine_matched"] is False
 assert all(row["rules_engine_error"] is None for row in rows.values())
-assert all(row["rules_engine_ruleset_id"] == ruleset.ruleset_id for row in rows.values())
-assert all(row["rules_engine_ruleset_version"] == ruleset.version for row in rows.values())
-assert all(row["rules_engine_content_hash"] for row in rows.values())
+assert all(row["rules_engine_ruleset"]["id"] == ruleset.ruleset_id for row in rows.values())
+assert all(row["rules_engine_ruleset"]["version"] == ruleset.version for row in rows.values())
+assert all(row["rules_engine_ruleset"]["content_hash"] for row in rows.values())
 assert all(row["rules_engine_engine_version"] == rules_engine.__version__ for row in rows.values())
 assert result_df.where(F.col("rules_engine_matched")).count() == 1
 

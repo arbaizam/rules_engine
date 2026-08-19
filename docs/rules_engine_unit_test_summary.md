@@ -12,7 +12,7 @@ Ruleset version comparison remains covered because it is engine behavior rather 
 
 | Area | Explicit Tests | Representative Coverage |
 | --- | ---: | --- |
-| Governance and change control | 15 | Expected cases, audit levels, semantic diffs, and coverage diagnostics. |
+| Governance and change control | 15 | Expected cases, compact/full-audit output, semantic diffs, and coverage diagnostics. |
 | In-memory runtime | 44 | Row evaluation, errors, provenance, and worker-safe behavior without Spark. |
 | Publish workflow | 4 | Validation and governance gates before repository persistence. |
 | Reconciliation translation | 11 | Translation of legacy reconciliation definitions into canonical YAML. |
@@ -64,8 +64,8 @@ Ruleset version comparison remains covered because it is engine behavior rather 
 | UT-030 | Governance and change control | Critical | `test_governance.py::test_semantic_diff_detects_null_behavior_and_identity_changes` | Semantic diff detects null behavior and identity changes. | Local and Databricks |
 | UT-031 | Governance and change control | High | `test_governance.py::test_semantic_diff_renders_only_changed_condition_leaves` | Semantic diff renders only changed condition leaves. | Local and Databricks |
 | UT-032 | Governance and change control | High | `test_governance.py::test_semantic_diff_reports_expected_cases_individually_by_name` | Semantic diff reports expected cases individually by name. | Local and Databricks |
-| UT-033 | Governance and change control | High | `test_governance.py::test_audit_levels_have_distinct_schemas_and_payloads` | Audit levels have distinct schemas and payloads. | Local and Databricks |
-| UT-034 | Governance and change control | High | `test_governance.py::test_invalid_audit_level_fails_before_spark_execution` | Invalid audit level fails before spark execution. | Local and Databricks |
+| UT-033 | Governance and change control | High | `test_governance.py::test_full_audit_controls_detailed_schema_and_payload` | The boolean full-audit option controls detailed schemas and payloads. | Local and Databricks |
+| UT-034 | Governance and change control | High | `test_governance.py::test_non_boolean_full_audit_fails_before_spark_execution` | Non-boolean full-audit values fail before Spark execution. | Local and Databricks |
 | UT-035 | Governance and change control | Critical | `test_governance.py::test_publish_evaluator_and_spark_worker_share_rule_ordering_semantics` | Publish evaluator and spark worker share rule ordering semantics. | Local and Databricks |
 | UT-036 | Ruleset version comparison | Medium | `test_pipeline_versioning.py::test_compare_versions_orders_numeric_dot_versions` | Compares numeric dot-notation versions using integer segments. | Local and Databricks |
 | UT-037 | Ruleset version comparison | High | `test_pipeline_versioning.py::test_parse_numeric_version_rejects_tags_and_dates` | Rejects non-numeric versions for automatic retirement. | Local and Databricks |
@@ -112,14 +112,14 @@ Ruleset version comparison remains covered because it is engine behavior rather 
 | UT-078 | In-memory runtime | High | `test_runtime.py::test_spark_row_evaluator_rejects_numeric_tolerance_for_dates` | Spark row evaluator rejects numeric tolerance for dates. | Local and Databricks |
 | UT-079 | In-memory runtime | Medium | `test_runtime.py::test_required_source_columns_returns_only_active_runtime_dependencies` | Reports active condition, custom-function, and assignment source fields. | Local and Databricks |
 | UT-080 | In-memory runtime | Medium | `test_runtime.py::test_required_source_columns_can_return_no_dependencies` | Returns an empty tuple for literal-only rules and assignments. | Local and Databricks |
-| UT-081 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_returns_native_winning_rule_trace` | Returns assignment and winning-rule trace payloads through the Spark row UDF. | Local and Databricks |
-| UT-082 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_winning_rule_trace_keeps_default_options_null` | Leaves default condition options null in the winning-rule Spark trace. | Local and Databricks |
+| UT-081 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_returns_native_first_match_trace` | Returns assignment and first-match trace payloads through the Spark row UDF. | Local and Databricks |
+| UT-082 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_first_match_trace_keeps_default_options_null` | Leaves default condition options null in the first-match Spark trace. | Local and Databricks |
 | UT-083 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_assignment_struct_includes_unassigned_fields_as_null` | Returns all assignment struct fields with nulls for fields not assigned. | Local and Databricks |
-| UT-084 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_winning_rule_explanation_uses_any_joiner` | Uses OR when a winning root any group has multiple passed conditions. | Local and Databricks |
-| UT-085 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_winning_rule_explanation_drops_failing_any_branches` | Omits failed OR branches from the winning-rule explanation. | Local and Databricks |
-| UT-086 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_winning_rule_explanation_preserves_nested_groups` | Preserves parentheses and OR joiners for nested winning groups. | Local and Databricks |
-| UT-087 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_winning_rule_explanation_drops_failing_nested_or_arm` | Omits a failed nested OR arm while preserving the passed nested path. | Local and Databricks |
-| UT-088 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_winning_rule_explanation_matches_service_formatter` | Uses the same author-facing syntax as the service helper when all branches pass. | Local and Databricks |
+| UT-084 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_match_trace_explanation_uses_any_joiner` | Uses OR when a matched root any group has multiple passed conditions. | Local and Databricks |
+| UT-085 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_match_trace_explanation_drops_failing_any_branches` | Omits failed OR branches from the first-match explanation. | Local and Databricks |
+| UT-086 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_match_trace_explanation_preserves_nested_groups` | Preserves parentheses and OR joiners for nested matched groups. | Local and Databricks |
+| UT-087 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_match_trace_explanation_drops_failing_nested_or_arm` | Omits a failed nested OR arm while preserving the passed nested path. | Local and Databricks |
+| UT-088 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_match_trace_explanation_matches_service_formatter` | Uses the same author-facing syntax as the service helper when all branches pass. | Local and Databricks |
 | UT-089 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_preserves_mapping_literal_assignment_as_struct` | Preserves a mapping literal assignment as a nested struct payload. | Local and Databricks |
 | UT-090 | In-memory runtime | Medium | `test_runtime.py::test_spark_assignment_schema_ignores_inactive_rules` | Infers assignment schema from active rules only. | Local and Databricks |
 | UT-091 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_merges_assignments_when_stop_on_match_false` | Merges assignments from multiple matching rules when evaluation continues. | Local and Databricks |
@@ -127,12 +127,12 @@ Ruleset version comparison remains covered because it is engine behavior rather 
 | UT-093 | In-memory runtime | Medium | `test_runtime.py::test_rule_summaries_are_precomputed_once_per_row_evaluator` | Static human-readable rule descriptions are not rebuilt per row. | Local and Databricks |
 | UT-094 | In-memory runtime | High | `test_runtime.py::test_spark_row_evaluator_rejects_lossy_assignment_coercion` | Typed assignment values fail instead of being silently truncated. | Local and Databricks |
 | UT-095 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_stop_on_match_excludes_later_summaries_and_assignments` | stop_on_match prevents later rules from appearing in either audit array. | Local and Databricks |
-| UT-096 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_builds_condition_traces_only_for_winner` | Builds condition trace objects only for the first matching rule. | Local and Databricks |
+| UT-096 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_builds_condition_traces_only_for_first_match` | Builds condition trace objects only for the first matching rule. | Local and Databricks |
 | UT-097 | In-memory runtime | High | `test_runtime.py::test_match_only_losing_rule_preserves_later_condition_errors` | Evaluates every condition in a losing group when a later one errors. | Local and Databricks |
 | UT-098 | In-memory runtime | Medium | `test_runtime.py::test_match_only_and_traced_paths_agree_on_inactive_condition_groups` | Pins inactive conditions as false in both ALL and ANY groups. | Local and Databricks |
 | UT-099 | In-memory runtime | High | `test_runtime.py::test_spark_assignment_schema_rejects_incompatible_same_target_assignments` | Rejects incompatible active assignments to one target. | Local and Databricks |
-| UT-100 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_winning_rule_trace_includes_precomputed_aggregate_field` | Emits precomputed aggregate columns like ordinary field operands. | Local and Databricks |
-| UT-101 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_winning_rule_trace_includes_custom_function_args` | Emits custom-function argument summaries in the winning-rule trace. | Local and Databricks |
+| UT-100 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_first_match_trace_includes_precomputed_aggregate_field` | Emits precomputed aggregate columns like ordinary field operands. | Local and Databricks |
+| UT-101 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_first_match_trace_includes_custom_function_args` | Emits custom-function argument summaries in the first-match trace. | Local and Databricks |
 | UT-102 | In-memory runtime | High | `test_runtime.py::test_trace_value_returns_common_scalars_without_json_serialization` | Returns primitive trace values without invoking the JSON encoder. | Local and Databricks |
 | UT-103 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_like_uses_sql_wildcard_semantics` | Evaluates SQL LIKE percent wildcard behavior in the Spark row evaluator. | Local and Databricks |
 | UT-104 | In-memory runtime | Medium | `test_runtime.py::test_spark_row_evaluator_null_result_default_controls_condition_result` | Evaluates null_result_mode=default on a null comparison result. | Local and Databricks |
@@ -183,7 +183,7 @@ Ruleset version comparison remains covered because it is engine behavior rather 
 | UT-149 | Spark runtime | Critical | `test_spark_runtime.py::test_fail_on_error_remains_lazy_until_callers_action` | Building output does not hide a separate full-data validation action. | Databricks Spark |
 | UT-150 | Spark runtime | Critical | `test_spark_runtime.py::test_spark_runtime_preserves_timestamp_assignment_type` | Timestamp assignment values survive the real worker serialization path. | Databricks Spark |
 | UT-151 | Spark runtime | Critical | `test_spark_runtime.py::test_spark_runtime_preserves_timestamp_ntz_assignment_type` | TimestampNTZ survives schema inference and live worker serialization. | Databricks Spark |
-| UT-152 | Spark runtime | Critical | `test_spark_runtime.py::test_audit_levels_emit_identity_and_only_requested_detail` | Every level is attributable while lighter levels omit expensive fields. | Databricks Spark |
+| UT-152 | Spark runtime | Critical | `test_spark_runtime.py::test_full_audit_emits_ordered_optional_detail_and_identity` | Default and full-audit schemas preserve ordered results and identity. | Databricks Spark |
 | UT-153 | Spark runtime | High | `test_spark_runtime.py::test_coverage_report_finds_dead_broad_and_closest_rules` | Coverage aggregates matches and diagnoses clean no-match rows. | Databricks Spark |
 | UT-154 | Spark validation | High | `test_spark_validator.py::test_spark_validator_allows_condition_null_result_error_for_udf_row_path` | Allows condition-level null_result_mode=error for ordinary row UDF checks. | Local and Databricks |
 | UT-155 | Spark validation | High | `test_spark_validator.py::test_spark_validator_rejects_missing_condition_field` | Spark validator rejects missing condition field. | Local and Databricks |

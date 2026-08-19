@@ -1916,7 +1916,7 @@ print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: Matched flags, matched rule IDs, assignments, winning-rule trace, and errors match expected outcomes.")
+print("Expected Result: Matched flags, matched rule IDs, assignments, first-match trace, and errors match expected outcomes.")
 print("")
 
 from datetime import datetime, timezone
@@ -1949,24 +1949,27 @@ rules:
 """
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
 df = spark.createDataFrame([{"account": "A"}, {"account": "B"}])
-result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
+result = service.evaluate_dataframe(
+    df,
+    ruleset_name=ruleset.ruleset_name,
+    version=ruleset.version,
+    full_audit=True,
+)
 rows = {row["account"]: row.asDict(recursive=True) for row in result.collect()}
 
 assert rows["A"]["rules_engine_matched"] is True
 assert rows["A"]["rules_engine_matched_rule_ids"] == ["r1"]
 assert rows["A"]["rules_engine_assign"] == {"bucket": "A"}
-assert rows["A"]["rules_engine_winning_rule_id"] == "r1"
-assert rows["A"]["rules_engine_winning_rule_name"] == "Account A"
-assert rows["A"]["rules_engine_winning_rule_explanation"] == "account == 'A'"
-assert rows["A"]["rules_engine_winning_rule"]["rule_id"] == "r1"
-assert rows["A"]["rules_engine_winning_rule"]["matched"] is True
-assert rows["A"]["rules_engine_winning_rule"]["conditions"][0]["columns"] == ["account"]
+assert rows["A"]["rules_engine_first_matched_rule_trace"]["rule_id"] == "r1"
+assert rows["A"]["rules_engine_first_matched_rule_trace"]["rule_name"] == "Account A"
+assert rows["A"]["rules_engine_first_matched_rule_trace"]["explanation"] == "account == 'A'"
+assert rows["A"]["rules_engine_first_matched_rule_trace"]["matched"] is True
+assert rows["A"]["rules_engine_first_matched_rule_trace"]["conditions"][0]["columns"] == ["account"]
 assert rows["A"]["rules_engine_error"] is None
 assert rows["B"]["rules_engine_matched"] is False
 assert rows["B"]["rules_engine_matched_rule_ids"] == []
 assert rows["B"]["rules_engine_assign"] is None
-assert rows["B"]["rules_engine_winning_rule"] is None
-assert rows["B"]["rules_engine_winning_rule_explanation"] is None
+assert rows["B"]["rules_engine_first_matched_rule_trace"] is None
 assert rows["B"]["rules_engine_error"] is None
 display(result)
 print("PASS: Runtime evaluation completed for ST-038.")
@@ -2027,13 +2030,18 @@ rules:
 """
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
 df = spark.createDataFrame([{"account": "A"}, {"account": "B"}])
-result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
+result = service.evaluate_dataframe(
+    df,
+    ruleset_name=ruleset.ruleset_name,
+    version=ruleset.version,
+    full_audit=True,
+)
 rows = {row["account"]: row.asDict(recursive=True) for row in result.collect()}
 
 assert rows["A"]["rules_engine_matched"] is True
 assert rows["A"]["rules_engine_matched_rule_ids"] == ["first_match"]
 assert rows["A"]["rules_engine_assign"] == {"bucket": "first"}
-assert rows["A"]["rules_engine_winning_rule_id"] == "first_match"
+assert rows["A"]["rules_engine_first_matched_rule_trace"]["rule_id"] == "first_match"
 assert rows["B"]["rules_engine_matched"] is False
 assert rows["B"]["rules_engine_matched_rule_ids"] == []
 assert rows["B"]["rules_engine_assign"] is None
@@ -2119,6 +2127,7 @@ rules:
 output = runtime.evaluate_dataframe(
     spark.createDataFrame([{"account": None, "amount": None}], "account string, amount double"),
     ruleset,
+    full_audit=True,
 )
 row = output.collect()[0].asDict(recursive=True)
 assert row["rules_engine_matched"] is True
@@ -2128,7 +2137,7 @@ assert row["rules_engine_assign"] == {
     "default_bucket": "default_true",
     "zero_bucket": "zero_match",
 }
-assert row["rules_engine_winning_rule_id"] == "default_true"
+assert row["rules_engine_first_matched_rule_trace"]["rule_id"] == "default_true"
 
 error_ruleset = compiler.compile_text("""
 ruleset_id: st_040_error_ruleset
@@ -2246,7 +2255,7 @@ print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: Output DataFrame contains matched, matched_rule_ids, assign, winning_rule, and error columns with expected values.")
+print("Expected Result: Output DataFrame contains the compact result and lineage columns with expected values.")
 print("")
 
 from datetime import datetime, timezone
@@ -2279,33 +2288,31 @@ rules:
 """
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
 df = spark.createDataFrame([{"record_id": "r1", "account": "A"}, {"record_id": "r2", "account": "B"}])
-result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
+result = service.evaluate_dataframe(
+    df,
+    ruleset_name=ruleset.ruleset_name,
+    version=ruleset.version,
+    full_audit=True,
+)
 rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
 required_columns = {
+    "rules_engine_error",
     "rules_engine_matched",
     "rules_engine_matched_rule_ids",
     "rules_engine_assign",
-    "rules_engine_winning_rule",
-    "rules_engine_winning_rule_id",
-    "rules_engine_winning_rule_name",
-    "rules_engine_winning_rule_explanation",
-    "rules_engine_error",
+    "rules_engine_ruleset",
+    "rules_engine_engine_version",
 }
 missing_columns = required_columns - set(result.columns)
 assert not missing_columns, f"Missing output columns: {sorted(missing_columns)}"
 assert rows["r1"]["rules_engine_matched"] is True
 assert rows["r1"]["rules_engine_matched_rule_ids"] == ["r1"]
 assert rows["r1"]["rules_engine_assign"] == {"bucket": "A"}
-assert rows["r1"]["rules_engine_winning_rule_id"] == "r1"
-assert rows["r1"]["rules_engine_winning_rule_explanation"] == "account == 'A'"
 assert rows["r1"]["rules_engine_error"] is None
 assert rows["r2"]["rules_engine_matched"] is False
 assert rows["r2"]["rules_engine_matched_rule_ids"] == []
 assert rows["r2"]["rules_engine_assign"] is None
-assert rows["r2"]["rules_engine_winning_rule"] is None
-assert rows["r2"]["rules_engine_winning_rule_explanation"] is None
 assert rows["r2"]["rules_engine_error"] is None
-assert rows["r1"]["rules_engine_winning_rule"]["rule_id"] == "r1"
 display(result)
 print("PASS: Spark runtime output columns and values matched expected results.")
 # COMMAND ----------
@@ -2421,12 +2428,12 @@ assert rows["r2"]["rules_engine_assign"] is None
 display(result)
 print("PASS: Standard upper() function transformed input and produced expected outputs.")
 # COMMAND ----------
-print("ST-045: Spark runtime emits native assignment and winning-rule structs")
+print("ST-045: Spark runtime emits native assignment and first-match trace structs")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Medium")
 print("Owner Role: Engineering")
-print("Expected Result: Matched flags, assignments, and winning-rule trace are Spark-native structs.")
+print("Expected Result: Matched flags, assignments, and first-match trace are Spark-native structs.")
 print("")
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
@@ -2466,14 +2473,19 @@ input_rows = [
     {"row_id": 2, "amount": 20, "dataset_amount_sum": 30},
 ]
 registry = FunctionRegistry()
-spark_result = SparkRulesEngineRuntime(ST045Repository(), registry).evaluate_dataframe(spark.createDataFrame(input_rows), ruleset, fail_on_error=True)
+spark_result = SparkRulesEngineRuntime(ST045Repository(), registry).evaluate_dataframe(
+    spark.createDataFrame(input_rows),
+    ruleset,
+    fail_on_error=True,
+    full_audit=True,
+)
 spark_rows = [row.asDict(recursive=True) for row in spark_result.orderBy("row_id").collect()]
 assert [row["rules_engine_matched"] for row in spark_rows] == [True, True]
 assert [row["rules_engine_matched_rule_ids"] for row in spark_rows] == [["dataset_total"], ["dataset_total"]]
 assert [row["rules_engine_assign"] for row in spark_rows] == [{"bucket": "dataset_match"}, {"bucket": "dataset_match"}]
-assert [row["rules_engine_winning_rule"]["rule_id"] for row in spark_rows] == ["dataset_total", "dataset_total"]
+assert [row["rules_engine_first_matched_rule_trace"]["rule_id"] for row in spark_rows] == ["dataset_total", "dataset_total"]
 display(spark_result)
-print("PASS: Spark runtime emitted native assignment and winning-rule structs.")
+print("PASS: Spark runtime emitted native assignment and first-match trace structs.")
 # COMMAND ----------
 print("ST-046: Payload JSON excludes mutable lifecycle fields and reconstructs ruleset content")
 print("-" * 80)
@@ -2738,7 +2750,7 @@ print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: winning_rule exposes source columns, evaluated operand values, comparison results, and readable winning-rule output.")
+print("Expected Result: Full audit exposes source columns, evaluated operand values, comparison results, and a readable first-match trace.")
 print("")
 
 from datetime import datetime, timezone
@@ -2798,27 +2810,30 @@ df = spark.createDataFrame(
         {"record_id": "r3", "account": "b", "amount": 5, "account_amount_sum": 5, "status": "open"},
     ]
 )
-result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
+result = service.evaluate_dataframe(
+    df,
+    ruleset_name=ruleset.ruleset_name,
+    version=ruleset.version,
+    full_audit=True,
+)
 rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
 
 matched_row = rows["r1"]
-winning_rule = matched_row["rules_engine_winning_rule"]
-conditions = winning_rule["conditions"]
+match_trace = matched_row["rules_engine_first_matched_rule_trace"]
+conditions = match_trace["conditions"]
 
 assert matched_row["rules_engine_matched"] is True
 assert matched_row["rules_engine_matched_rule_ids"] == ["trace_rule"]
 assert matched_row["rules_engine_assign"] == {"bucket": "traced"}
-assert matched_row["rules_engine_winning_rule_id"] == "trace_rule"
-assert matched_row["rules_engine_winning_rule_name"] == "Traceability Rule"
-assert matched_row["rules_engine_winning_rule_explanation"] == (
+assert match_trace["rule_id"] == "trace_rule"
+assert match_trace["rule_name"] == "Traceability Rule"
+assert match_trace["explanation"] == (
     "account_amount_sum > 15 AND "
     "upper(value=account) == 'A' AND "
     "status == 'open'"
 )
-assert winning_rule["rule_id"] == "trace_rule"
-assert winning_rule["rule_name"] == "Traceability Rule"
-assert winning_rule["matched"] is True
-assert winning_rule["assignments_applied"] == ["bucket"]
+assert match_trace["matched"] is True
+assert match_trace["assignments_applied"] == ["bucket"]
 
 precomputed_condition = conditions[0]
 assert precomputed_condition["columns"] == ["account_amount_sum"]
@@ -2856,11 +2871,9 @@ assert field_condition["comparison_result"] is True
 assert field_condition["passed"] is True
 
 assert rows["r2"]["rules_engine_matched"] is False
-assert rows["r2"]["rules_engine_winning_rule"] is None
-assert rows["r2"]["rules_engine_winning_rule_explanation"] is None
+assert rows["r2"]["rules_engine_first_matched_rule_trace"] is None
 assert rows["r3"]["rules_engine_matched"] is False
-assert rows["r3"]["rules_engine_winning_rule"] is None
-assert rows["r3"]["rules_engine_winning_rule_explanation"] is None
+assert rows["r3"]["rules_engine_first_matched_rule_trace"] is None
 
 display(result)
 print("PASS: Spark runtime traceability payloads included useful evaluated condition details.")
@@ -2982,7 +2995,7 @@ print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: Output columns that existed before winning-rule traceability remain present and populated with the same semantics.")
+print("Expected Result: Compact output columns remain present and populated with documented semantics.")
 print("")
 
 from datetime import datetime, timezone
@@ -3026,16 +3039,16 @@ result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, versi
 rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
 
 previous_input_columns = {"record_id", "account", "amount"}
-previous_output_columns = {
+required_output_columns = {
+    "rules_engine_error",
     "rules_engine_matched",
     "rules_engine_matched_rule_ids",
     "rules_engine_assign",
-    "rules_engine_winning_rule",
-    "rules_engine_winning_rule_id",
-    "rules_engine_error",
+    "rules_engine_ruleset",
+    "rules_engine_engine_version",
 }
-missing_columns = (previous_input_columns | previous_output_columns) - set(result.columns)
-assert not missing_columns, f"Missing previously available columns: {sorted(missing_columns)}"
+missing_columns = (previous_input_columns | required_output_columns) - set(result.columns)
+assert not missing_columns, f"Missing required columns: {sorted(missing_columns)}"
 
 matched = rows["r1"]
 unmatched = rows["r2"]
@@ -3046,8 +3059,6 @@ assert matched["amount"] == 10
 assert matched["rules_engine_matched"] is True
 assert matched["rules_engine_matched_rule_ids"] == ["legacy_rule"]
 assert matched["rules_engine_assign"] == {"bucket": "legacy_a"}
-assert matched["rules_engine_winning_rule"]["rule_id"] == "legacy_rule"
-assert matched["rules_engine_winning_rule"]["matched"] is True
 assert matched["rules_engine_error"] is None
 
 assert unmatched["record_id"] == "r2"
@@ -3056,7 +3067,6 @@ assert unmatched["amount"] == 20
 assert unmatched["rules_engine_matched"] is False
 assert unmatched["rules_engine_matched_rule_ids"] == []
 assert unmatched["rules_engine_assign"] is None
-assert unmatched["rules_engine_winning_rule"] is None
 assert unmatched["rules_engine_error"] is None
 
 display(result)
@@ -3134,12 +3144,12 @@ display(result)
 print("PASS: Spark runtime preserved mapping literal assignments as nested structs.")
 
 # COMMAND ----------
-print("ST-055: Spark runtime winning-rule explanations use service-style boolean logic")
+print("ST-055: Spark runtime match-trace explanations use service-style boolean logic")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: Winning-rule explanations use author-facing service syntax while trace structs retain evaluated values.")
+print("Expected Result: Match-trace explanations use author-facing service syntax while trace structs retain evaluated values.")
 print("")
 
 from datetime import datetime, timezone
@@ -3150,7 +3160,7 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
 ruleset_id: st_055_{stamp}
-ruleset_name: ST-055 Winning Explanation Ruleset
+ruleset_name: ST-055 Match Trace Explanation Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3199,22 +3209,27 @@ df = spark.createDataFrame(
         }
     ]
 )
-result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
+result = service.evaluate_dataframe(
+    df,
+    ruleset_name=ruleset.ruleset_name,
+    version=ruleset.version,
+    full_audit=True,
+)
 row = result.collect()[0].asDict(recursive=True)
 service_logic = service.describe_rules(ruleset_name=ruleset.ruleset_name, version=ruleset.version)[0]["rule_logic"]
 
 assert row["rules_engine_matched"] is True
-assert row["rules_engine_winning_rule_explanation"] == service_logic
-assert row["rules_engine_winning_rule_explanation"] == (
+assert row["rules_engine_first_matched_rule_trace"]["explanation"] == service_logic
+assert row["rules_engine_first_matched_rule_trace"]["explanation"] == (
     "record_type == 'asset' AND (market_value == true OR book_value == true)"
 )
-conditions = row["rules_engine_winning_rule"]["conditions"]
+conditions = row["rules_engine_first_matched_rule_trace"]["conditions"]
 assert conditions[0]["left"]["value"] == "asset"
 assert conditions[1]["left"]["value"] == "True"
 assert conditions[2]["left"]["value"] == "True"
 
 display(result)
-print("PASS: Spark runtime winning-rule explanations matched service-style boolean logic.")
+print("PASS: Spark runtime match-trace explanations matched service-style boolean logic.")
 
 # COMMAND ----------
 print("ST-056: Spark runtime ignores inactive rule assignment schemas")
@@ -3297,7 +3312,6 @@ assert row["rules_engine_assign"] == {
         "book_value": False,
     },
 }
-assert row["rules_engine_winning_rule_id"] == "active_struct_rule"
 assert row["rules_engine_error"] is None
 
 display(result)
@@ -3363,7 +3377,12 @@ rules:
 """
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
 df = spark.createDataFrame([{"record_id": "r1", "account": "A"}])
-result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
+result = service.evaluate_dataframe(
+    df,
+    ruleset_name=ruleset.ruleset_name,
+    version=ruleset.version,
+    full_audit=True,
+)
 row = result.collect()[0].asDict(recursive=True)
 assign_schema = result.schema["rules_engine_assign"].dataType
 
@@ -3374,9 +3393,9 @@ assign = row["rules_engine_assign"]
 assert assign["bucket"] == "second"
 assert assign["review_status"] == "follow_up"
 assert assign["review_result"] == "approved"
-assert row["rules_engine_winning_rule_id"] == "first_match"
-assert row["rules_engine_winning_rule_name"] == "First Match"
-assert row["rules_engine_winning_rule_explanation"] == "account == 'A'"
+assert row["rules_engine_first_matched_rule_trace"]["rule_id"] == "first_match"
+assert row["rules_engine_first_matched_rule_trace"]["rule_name"] == "First Match"
+assert row["rules_engine_first_matched_rule_trace"]["explanation"] == "account == 'A'"
 assert row["rules_engine_error"] is None
 
 incompatible_yaml = yaml_text.replace(
@@ -3448,13 +3467,13 @@ df = spark.createDataFrame(
     [("A", "assigned", "not serialized")],
     ["risk.score", "source_value", "unused_payload"],
 )
-result = service.evaluate_dataframe(df, ruleset=ruleset)
+result = service.evaluate_dataframe(df, ruleset=ruleset, full_audit=True)
 row = result.collect()[0].asDict(recursive=True)
 
 assert row["unused_payload"] == "not serialized"
 assert row["rules_engine_matched"] is True
 assert row["rules_engine_assign"] == {"copied_value": "assigned"}
-assert row["rules_engine_winning_rule"]["conditions"][0]["left"]["value"] == "A"
+assert row["rules_engine_first_matched_rule_trace"]["conditions"][0]["left"]["value"] == "A"
 assert row["rules_engine_error"] is None
 
 display(result)
@@ -3466,7 +3485,7 @@ print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
 print("Owner Role: Engineering")
-print("Expected Result: Losing rules avoid trace output without hiding later-condition errors, while the winner retains full traceability.")
+print("Expected Result: Losing rules avoid trace output without hiding later-condition errors, while the first match retains full traceability.")
 print("")
 
 from rules_engine import RulesEngineService
@@ -3504,8 +3523,8 @@ rules:
           null_result_mode: error
     assign:
       bucket: losing
-  - rule_id: winning_rule
-    rule_name: Winning Rule
+  - rule_id: matching_rule
+    rule_name: Matching Rule
     rule_order: 2
     stop_on_match: true
     when:
@@ -3519,7 +3538,7 @@ rules:
           null_input_mode: propagate
           null_result_mode: "null"
     assign:
-      bucket: winning
+      bucket: matched
 """
 )
 
@@ -3530,7 +3549,12 @@ df = spark.createDataFrame(
     ],
     ["record_id", "account", "status"],
 )
-result = service.evaluate_dataframe(df, ruleset=ruleset, fail_on_error=False)
+result = service.evaluate_dataframe(
+    df,
+    ruleset=ruleset,
+    fail_on_error=False,
+    full_audit=True,
+)
 rows = {
     row["record_id"]: row.asDict(recursive=True)
     for row in result.collect()
@@ -3538,11 +3562,11 @@ rows = {
 
 normal = rows["normal"]
 assert normal["rules_engine_matched"] is True
-assert normal["rules_engine_matched_rule_ids"] == ["winning_rule"]
-assert normal["rules_engine_assign"] == {"bucket": "winning"}
-assert normal["rules_engine_winning_rule_id"] == "winning_rule"
-assert len(normal["rules_engine_winning_rule"]["conditions"]) == 1
-assert normal["rules_engine_winning_rule"]["conditions"][0]["left"]["column"] == "account"
+assert normal["rules_engine_matched_rule_ids"] == ["matching_rule"]
+assert normal["rules_engine_assign"] == {"bucket": "matched"}
+assert normal["rules_engine_first_matched_rule_trace"]["rule_id"] == "matching_rule"
+assert len(normal["rules_engine_first_matched_rule_trace"]["conditions"]) == 1
+assert normal["rules_engine_first_matched_rule_trace"]["conditions"][0]["left"]["column"] == "account"
 assert normal["rules_engine_error"] is None
 
 error = rows["error"]
@@ -3550,7 +3574,7 @@ assert error["rules_engine_matched"] is False
 assert "null_result_mode=error" in error["rules_engine_error"]
 
 display(result)
-print("PASS: Match-only evaluation preserved winning trace and losing-rule errors.")
+print("PASS: Match-only evaluation preserved first-match trace and losing-rule errors.")
 
 # COMMAND ----------
 print("ST-060: Financial and temporal types cross the real worker boundary exactly")
@@ -3923,6 +3947,7 @@ result = service.evaluate_dataframe(
         ),
     ),
     ruleset=ruleset,
+    full_audit=True,
 )
 row = result.collect()[0].asDict(recursive=True)
 assert row["rules_engine_assign"] == {
@@ -4028,12 +4053,12 @@ assert failed_rows == 0
 print("PASS: Expected cases passed and blocked publication at the correct boundaries.")
 
 # COMMAND ----------
-print("ST-065: Audit levels retain immutable execution identity")
+print("ST-065: Compact and full-audit outputs retain immutable execution identity")
 print("-" * 80)
 print("Area: Auditability")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: Minimal, standard, and full schemas differ only in documented detail while every level remains attributable.")
+print("Expected Result: Compact and full-audit schemas differ only in documented detail while both remain attributable.")
 print("")
 
 from datetime import datetime, timezone
@@ -4044,7 +4069,7 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
 ruleset_id: st_065_{stamp}
-ruleset_name: ST-065 Audit Levels Ruleset
+ruleset_name: ST-065 Audit Contract Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -4064,28 +4089,45 @@ rules:
 """
 ruleset = service.compile_yaml_text(yaml_text)
 source = spark.createDataFrame([{"account": "A"}])
-minimal = service.evaluate_dataframe(source, ruleset=ruleset, audit_level="minimal")
-standard = service.evaluate_dataframe(source, ruleset=ruleset, audit_level="standard")
-full = service.evaluate_dataframe(source, ruleset=ruleset, audit_level="full")
+standard = service.evaluate_dataframe(source, ruleset=ruleset)
+full = service.evaluate_dataframe(source, ruleset=ruleset, full_audit=True)
+assert standard.columns == [
+    "account",
+    "rules_engine_error",
+    "rules_engine_matched",
+    "rules_engine_matched_rule_ids",
+    "rules_engine_assign",
+    "rules_engine_ruleset",
+    "rules_engine_engine_version",
+]
+assert full.columns == [
+    "account",
+    "rules_engine_error",
+    "rules_engine_matched",
+    "rules_engine_matched_rule_ids",
+    "rules_engine_assign",
+    "rules_engine_matched_rules",
+    "rules_engine_first_matched_rule_trace",
+    "rules_engine_assignment_results",
+    "rules_engine_ruleset",
+    "rules_engine_engine_version",
+]
 identity_columns = {
-    "rules_engine_ruleset_id",
-    "rules_engine_ruleset_version",
-    "rules_engine_content_hash",
+    "rules_engine_ruleset",
     "rules_engine_engine_version",
 }
-assert identity_columns <= set(minimal.columns)
 assert identity_columns <= set(standard.columns)
 assert identity_columns <= set(full.columns)
-assert "rules_engine_first_matched_rule" not in minimal.columns
-assert "rules_engine_first_matched_rule" in standard.columns
+assert "rules_engine_first_matched_rule_trace" not in standard.columns
 assert "rules_engine_assignment_results" not in standard.columns
+assert "rules_engine_first_matched_rule_trace" in full.columns
 assert "rules_engine_assignment_results" in full.columns
-minimal_row = minimal.collect()[0]
-assert minimal_row["rules_engine_ruleset_id"] == ruleset.ruleset_id
-assert minimal_row["rules_engine_ruleset_version"] == ruleset.version
-assert minimal_row["rules_engine_content_hash"]
-assert minimal_row["rules_engine_engine_version"]
-print("PASS: Every audit level retained identity and emitted only its documented detail.")
+standard_row = standard.collect()[0]
+assert standard_row["rules_engine_ruleset"]["id"] == ruleset.ruleset_id
+assert standard_row["rules_engine_ruleset"]["version"] == ruleset.version
+assert standard_row["rules_engine_ruleset"]["content_hash"]
+assert standard_row["rules_engine_engine_version"]
+print("PASS: Default and full-audit outputs retained identity and emitted documented detail.")
 
 # COMMAND ----------
 print("ST-066: Semantic diffs compare immutable published versions")

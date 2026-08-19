@@ -456,7 +456,7 @@ result_df = service.evaluate_dataframe(
     ruleset_name="Account Review Rules",
     version="1",
     fail_on_error=True,
-    audit_level="full",
+    full_audit=True,
 )
 
 display(result_df.orderBy("row_id"))
@@ -468,27 +468,18 @@ display(result_df.orderBy("row_id"))
 # MAGIC
 # MAGIC The Spark runtime appends:
 # MAGIC
+# MAGIC - `rules_engine_error`
 # MAGIC - `rules_engine_matched`
 # MAGIC - `rules_engine_matched_rule_ids`
 # MAGIC - `rules_engine_assign`
-# MAGIC - `rules_engine_first_matched_rule`
-# MAGIC - `rules_engine_first_matched_rule_id`
-# MAGIC - `rules_engine_first_matched_rule_name`
-# MAGIC - `rules_engine_first_matched_rule_explanation`
 # MAGIC - `rules_engine_matched_rules`
-# MAGIC - `rules_engine_last_matched_rule`
+# MAGIC - `rules_engine_first_matched_rule_trace`
 # MAGIC - `rules_engine_assignment_results`
-# MAGIC - `rules_engine_winning_rule`
-# MAGIC - `rules_engine_winning_rule_id`
-# MAGIC - `rules_engine_winning_rule_name`
-# MAGIC - `rules_engine_winning_rule_explanation`
-# MAGIC - `rules_engine_error`
-# MAGIC - `rules_engine_ruleset_id`
-# MAGIC - `rules_engine_ruleset_version`
-# MAGIC - `rules_engine_content_hash`
+# MAGIC - `rules_engine_ruleset`
 # MAGIC - `rules_engine_engine_version`
 # MAGIC
-# MAGIC Assignment output, first-match detail, lightweight match summaries, and
+# MAGIC The three detailed audit columns are present only because this example sets
+# MAGIC `full_audit=True`. Assignment output, trace detail, match summaries, and
 # MAGIC per-assignment provenance are Spark-native structs and arrays.
 # MAGIC
 # MAGIC What this cell does:
@@ -504,21 +495,15 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_matched_rule_ids`: ordered list of matched rule IDs.
 # MAGIC - `rules_engine_assign`: struct containing assignments from matched rules,
 # MAGIC   or null when no rule matched.
-# MAGIC - `rules_engine_first_matched_rule`: the detailed first-match trace, including
+# MAGIC - `rules_engine_first_matched_rule_trace`: the detailed first-match trace, including
 # MAGIC   condition-level source columns, evaluated values, and pass/fail state.
 # MAGIC - `rules_engine_matched_rules`: ordered lightweight summaries of every match.
-# MAGIC - `rules_engine_last_matched_rule`: final lightweight summary, or null.
 # MAGIC - `rules_engine_assignment_results`: every proposed assignment plus its
 # MAGIC   authored expression, original value, changed/effective flags, and override
 # MAGIC   provenance.
-# MAGIC - `rules_engine_winning_rule*`: deprecated aliases of the corresponding
-# MAGIC   `rules_engine_first_matched_rule*` columns.
-# MAGIC - `rules_engine_first_matched_rule_explanation`: readable summary of the passed
-# MAGIC   conditions from the first matched rule.
 # MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
-# MAGIC - The four identity columns make every evaluated row attributable to the
-# MAGIC   immutable ruleset payload and installed engine version at every audit
-# MAGIC   level.
+# MAGIC - `rules_engine_ruleset`: immutable ruleset ID, version, and content hash.
+# MAGIC - `rules_engine_engine_version`: installed evaluator version.
 # MAGIC
 # MAGIC In production, avoid collecting large DataFrames. Use aggregations,
 # MAGIC displays, or writes instead.
@@ -532,7 +517,7 @@ for row in rows:
         row["rules_engine_matched"],
         row["rules_engine_matched_rule_ids"],
         row["rules_engine_assign"],
-        row["rules_engine_first_matched_rule_explanation"],
+        row["rules_engine_first_matched_rule_trace"]["explanation"],
         row["rules_engine_assignment_results"],
         row["rules_engine_error"],
     )
@@ -541,9 +526,9 @@ assert result_df.where("rules_engine_error IS NOT NULL").count() == 0
 assert result_df.where("rules_engine_matched").count() == 2
 assert [row["row_id"] for row in rows if row["rules_engine_matched"]] == [1, 2]
 assert all(
-    row["rules_engine_ruleset_id"] == ruleset.ruleset_id
-    and row["rules_engine_ruleset_version"] == ruleset.version
-    and row["rules_engine_content_hash"]
+    row["rules_engine_ruleset"]["id"] == ruleset.ruleset_id
+    and row["rules_engine_ruleset"]["version"] == ruleset.version
+    and row["rules_engine_ruleset"]["content_hash"]
     and row["rules_engine_engine_version"] == rules_engine.__version__
     for row in rows
 )

@@ -52,13 +52,13 @@ class HumanReadableRulesetFormatter:
             "match_payload": self._format_assignments(rule.assignments),
         }
 
-    def format_winning_rule_explanation(
+    def format_matched_rule_explanation(
         self,
         rule: Rule,
         passed_condition_ids: set[str],
     ) -> str | None:
         """
-        Render the passed branches of a winning rule using author-facing syntax.
+        Render the passed branches of a matched rule using author-facing syntax.
         """
         passed, explanation = self._format_passed_group(
             rule.root_group,

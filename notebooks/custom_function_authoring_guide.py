@@ -247,6 +247,7 @@ output_df = runtime.evaluate_dataframe(
         ]
     ),
     ruleset,
+    full_audit=True,
 )
 
 display(output_df)

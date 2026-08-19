@@ -220,12 +220,13 @@ def _input_floor(source):
     return source.select(F.lit(1).cast("long").alias("source_hash"))
 
 
-def _evaluated_output(source, *, fail_on_error: bool):
+def _evaluated_output(source, *, fail_on_error: bool, full_audit: bool):
     """Build the rules-engine output used by measured cases."""
     return service.evaluate_dataframe(
         source,
         ruleset=ruleset,
         fail_on_error=fail_on_error,
+        full_audit=full_audit,
     )
 
 
@@ -236,7 +237,11 @@ def _benchmark_dataframe(case_name: str):
         return _input_floor(source)
 
     fail_on_error = case_name == "assignment_only_fail_on_error"
-    evaluated = _evaluated_output(source, fail_on_error=fail_on_error)
+    evaluated = _evaluated_output(
+        source,
+        fail_on_error=fail_on_error,
+        full_audit=case_name == "full_output",
+    )
     if case_name in {"assignment_only", "assignment_only_fail_on_error"}:
         assignment = F.col("rules_engine_assign")
         if PERF_ASSIGNMENT_FIELD:
@@ -287,7 +292,7 @@ METRICS_SCHEMA = T.StructType(
         T.StructField("row_count", T.LongType(), True),
         T.StructField("error_count", T.LongType(), True),
         T.StructField("assignment_counts_json", T.StringType(), True),
-        T.StructField("winner_counts_json", T.StringType(), True),
+        T.StructField("first_match_counts_json", T.StringType(), True),
         T.StructField("failure_text", T.StringType(), True),
         T.StructField("output_table", T.StringType(), False),
         T.StructField("source_table", T.StringType(), False),
@@ -327,7 +332,7 @@ def _materialized_metrics(output_table: str):
     row_count = materialized.count()
     error_count = None
     assignment_counts_json = None
-    winner_counts_json = None
+    first_match_counts_json = None
     if "rules_engine_error" in materialized.columns:
         error_count = materialized.where(
             F.col("rules_engine_error").isNotNull()
@@ -343,15 +348,19 @@ def _materialized_metrics(output_table: str):
             .collect()
         }
         assignment_counts_json = json.dumps(assignment_counts, sort_keys=True)
-    if "rules_engine_winning_rule_id" in materialized.columns:
-        winner_counts = {
-            (row["rules_engine_winning_rule_id"] or "<unmatched>"): row["count"]
-            for row in materialized.groupBy("rules_engine_winning_rule_id")
+    if "rules_engine_matched_rule_ids" in materialized.columns:
+        first_match_counts = {
+            (row["first_match_rule_id"] or "<unmatched>"): row["count"]
+            for row in materialized.withColumn(
+                "first_match_rule_id",
+                F.try_element_at("rules_engine_matched_rule_ids", F.lit(1)),
+            )
+            .groupBy("first_match_rule_id")
             .count()
             .collect()
         }
-        winner_counts_json = json.dumps(winner_counts, sort_keys=True)
-    return row_count, error_count, assignment_counts_json, winner_counts_json
+        first_match_counts_json = json.dumps(first_match_counts, sort_keys=True)
+    return row_count, error_count, assignment_counts_json, first_match_counts_json
 
 
 metrics = []
@@ -370,7 +379,7 @@ for case_name, repetition, is_warmup in schedule:
     row_count = None
     error_count = None
     assignment_counts_json = None
-    winner_counts_json = None
+    first_match_counts_json = None
     try:
         benchmark_df = _benchmark_dataframe(case_name)
         benchmark_df.write.format("delta").mode("overwrite").saveAsTable(output_table)
@@ -384,7 +393,7 @@ for case_name, repetition, is_warmup in schedule:
             row_count,
             error_count,
             assignment_counts_json,
-            winner_counts_json,
+            first_match_counts_json,
         ) = _materialized_metrics(output_table)
 
     metrics.append(
@@ -401,7 +410,7 @@ for case_name, repetition, is_warmup in schedule:
             "row_count": row_count,
             "error_count": error_count,
             "assignment_counts_json": assignment_counts_json,
-            "winner_counts_json": winner_counts_json,
+            "first_match_counts_json": first_match_counts_json,
             "failure_text": failure_text,
             "output_table": output_table,
             "source_table": PERF_SOURCE_TABLE,

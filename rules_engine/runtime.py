@@ -363,27 +363,27 @@ class SparkRowEvaluator:
             rule_order=rule.rule_order,
         )
 
-    def _winning_rule_explanation_from_trace(
+    def _matched_rule_explanation_from_trace(
         self,
         rule: Rule,
         condition_traces: list[ResolvedConditionTrace],
     ) -> str | None:
         """
-        Return a readable winning-rule explanation that preserves group logic.
+        Return a readable matched-rule explanation that preserves group logic.
         """
         passed_condition_ids = {
             trace.condition_id
             for trace in condition_traces
             if trace.passed
         }
-        return self._rule_formatter.format_winning_rule_explanation(
+        return self._rule_formatter.format_matched_rule_explanation(
             rule,
             passed_condition_ids,
         )
 
     def _operand_trace_summary(self, operand: Any) -> str | None:
         """
-        Return a compact resolved-value summary for winning-rule trace arguments.
+        Return a compact resolved-value summary for matched-rule trace arguments.
         """
         if not isinstance(operand, Mapping):
             return None

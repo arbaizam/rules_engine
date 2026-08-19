@@ -238,8 +238,8 @@ assert actual["B"]["rules_engine_assign"] is None
 assert actual["C"]["rules_engine_matched_rule_ids"] == ["closed_account"]
 assert actual["C"]["rules_engine_assign"] == {"review_bucket": "closed"}
 assert all(row["rules_engine_error"] is None for row in actual.values())
-assert all(row["rules_engine_ruleset_id"] == ruleset.ruleset_id for row in actual.values())
-assert all(row["rules_engine_content_hash"] for row in actual.values())
+assert all(row["rules_engine_ruleset"]["id"] == ruleset.ruleset_id for row in actual.values())
+assert all(row["rules_engine_ruleset"]["content_hash"] for row in actual.values())
 assert all(
     row["rules_engine_engine_version"] == rules_engine.__version__
     for row in actual.values()

@@ -273,6 +273,7 @@ def test_standard_date_functions_work_in_conditions_and_typed_assignments():
         ruleset,
         [field.name for field in assignment_schema.fields],
         {field.name: field.dataType for field in assignment_schema.fields},
+        full_audit=True,
     )
     output = evaluator(
         FakeSparkRow(
@@ -287,7 +288,7 @@ def test_standard_date_functions_work_in_conditions_and_typed_assignments():
     assert assignment_schema["review_date"].dataType == T.DateType()
     assert assignment_schema["age_days"].dataType == T.LongType()
     assert output["matched"] is True
-    assert output["winning_rule_explanation"] == (
+    assert output["first_matched_rule_trace"]["explanation"] == (
         "date_add_months(value=funded_date, months=1) >= 2024-02-29"
     )
     assert output["assign"] == {

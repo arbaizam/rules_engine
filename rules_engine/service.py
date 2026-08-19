@@ -11,7 +11,6 @@ from pyspark.sql import DataFrame, SparkSession
 from rules_engine.analytics import CoverageReport, RulesetCoverageAnalyzer
 from rules_engine.change_control import RulesetDiff, RulesetDiffer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.enums import AuditLevel
 from rules_engine.human_readable import HumanReadableRulesetFormatter
 from rules_engine.models import FunctionRegistryRow, Ruleset
 from rules_engine.normalizer import RulesetNormalizer
@@ -261,7 +260,7 @@ class RulesEngineService:
         column_prefix: str = "rules_engine",
         fail_on_error: bool = True,
         include_error_traceback: bool = False,
-        audit_level: AuditLevel | str = AuditLevel.FULL,
+        full_audit: bool = False,
     ) -> DataFrame:
         """
         Evaluate a Spark DataFrame using a supplied or loaded ruleset.
@@ -276,7 +275,7 @@ class RulesEngineService:
             column_prefix=column_prefix,
             fail_on_error=fail_on_error,
             include_error_traceback=include_error_traceback,
-            audit_level=audit_level,
+            full_audit=full_audit,
         )
 
     def coverage_report(

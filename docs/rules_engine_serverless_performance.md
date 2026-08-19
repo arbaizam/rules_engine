@@ -7,7 +7,7 @@ changes on Databricks serverless. The notebook intentionally avoids `cache`,
 ## Measurement Contract
 
 Every timed case performs an actual Delta write to a unique managed table.
-Post-run row counts, error counts, assignment distributions, and winner
+Post-run row counts, error counts, assignment distributions, and first-match
 distributions read that materialized output and therefore do not execute the
 rules UDF again. Measured case order is randomized, warm-up runs are recorded
 separately, and durable results are appended to `PERF_METRICS_TABLE` before
@@ -19,7 +19,7 @@ The cases are:
 | --- | --- |
 | `input_floor` | Reads every column the tested runtime serializes, computes one `xxhash64` value per row, and writes it. The baseline runtime reads all source columns; the optimized runtime reads only rule dependencies. This is context, not a value to subtract mechanically from other cases. |
 | `assignment_only` | Evaluates the ruleset with `fail_on_error=False` and writes only the configured assignment field. This most closely represents leaf-key production use. |
-| `full_output` | Evaluates once and writes every `rules_engine_` output emitted by the tested version, including full trace/provenance and immutable ruleset/engine identity. Materialized output supplies error and winner-distribution evidence. |
+| `full_output` | Evaluates once with `full_audit=True` and writes every `rules_engine_` output, including trace/provenance and immutable ruleset/engine identity. Materialized output supplies error and first-match-distribution evidence. |
 | `assignment_only_fail_on_error` | Runs assignment-only output with the lazy single-pass `fail_on_error=True` contract. Its difference from `assignment_only` measures worker exception-checking overhead on clean data. |
 
 ## Required Parameters
@@ -47,6 +47,10 @@ globals before running the notebook.
 | `PERF_METRICS_TABLE` | No | `<output_schema>.rules_engine_performance_results` | Durable Delta metrics table. |
 | `PERF_OUTPUT_PREFIX` | No | `rules_engine_perf` | Prefix for temporary managed tables. |
 
+The 0.4 notebook renames the persisted diagnostic field from
+`winner_counts_json` to `first_match_counts_json`. Migrate or recreate an
+existing `PERF_METRICS_TABLE` before appending 0.4 results.
+
 ## Comparison Procedure
 
 1. Use one immutable Delta source table version and one explicit published
@@ -59,8 +63,8 @@ globals before running the notebook.
    spread and Databricks query profile for skew, retries, input bytes, and task
    time.
 5. Confirm `row_count`, `error_count`, `assignment_counts_json`, and
-   `winner_counts_json` before accepting a faster variant. Winner position
-   determines how much losing-rule work each row performs.
+   `first_match_counts_json` before accepting a faster variant. First-match
+   position determines how much losing-rule work each row performs.
 6. Treat `input_floor` as context only. Delta output shapes differ across cases,
    so durations are not algebraically interchangeable.
 
@@ -80,7 +84,7 @@ Accept an optimization only when:
   and a 100-plus-rule ruleset;
 - no measured case fails;
 - materialized row counts and error counts match;
-- assignment and winner distributions match exactly; and
+- assignment and first-match distributions match exactly; and
 - the query profile does not reveal increased retries, spill, or skew that the
   wall-clock median conceals.
 

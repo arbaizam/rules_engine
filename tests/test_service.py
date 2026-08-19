@@ -1,7 +1,6 @@
 import pytest
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.enums import AuditLevel
 from rules_engine.exceptions import RepositoryError
 from rules_engine.registry import FunctionRegistry
 from rules_engine.repository import RulesEngineTableNames
@@ -216,6 +215,7 @@ def test_service_passes_runtime_error_options_through(monkeypatch):
         ruleset=ruleset,
         fail_on_error=False,
         include_error_traceback=True,
+        full_audit=True,
     )
 
     assert result == "evaluated"
@@ -223,7 +223,7 @@ def test_service_passes_runtime_error_options_through(monkeypatch):
         "column_prefix": "rules_engine",
         "fail_on_error": False,
         "include_error_traceback": True,
-        "audit_level": AuditLevel.FULL,
+        "full_audit": True,
     }
 
 

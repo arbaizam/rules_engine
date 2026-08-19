@@ -146,7 +146,7 @@ print("-" * 80)
 print("Area: Business authoring")
 print("Priority: High")
 print("Owner Role: Business Owner")
-print("Expected Result: The chosen rule order and stop behavior produce the intended winning assignment.")
+print("Expected Result: The chosen rule order and stop behavior produce the intended final assignment.")
 print("")
 
 from rules_engine import RulesEngineService
@@ -885,14 +885,12 @@ results_by_id = {row["record_id"]: row.asDict(recursive=True) for row in result_
 assert len(results_by_id) == len(UAT_INPUT_ROWS), "Expected one output row per UAT input row."
 
 required_columns = {
+    "rules_engine_error",
     "rules_engine_matched",
     "rules_engine_matched_rule_ids",
     "rules_engine_assign",
-    "rules_engine_winning_rule",
-    "rules_engine_winning_rule_id",
-    "rules_engine_winning_rule_name",
-    "rules_engine_winning_rule_explanation",
-    "rules_engine_error",
+    "rules_engine_ruleset",
+    "rules_engine_engine_version",
 }
 actual_columns = set(service.evaluate_dataframe(
     spark.createDataFrame(UAT_INPUT_ROWS),

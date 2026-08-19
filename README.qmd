@@ -37,6 +37,7 @@ semantic weakening.
 - [Packaging And Asset Bundles](#packaging-and-asset-bundles)
 - [Developer Workflow](#developer-workflow)
 - [Troubleshooting](#troubleshooting)
+- [Migration Notes For 0.4.0](#migration-notes-for-040)
 - [Migration Notes For 0.3.1](#migration-notes-for-031)
 - [Migration Notes For 0.3.0](#migration-notes-for-030)
 - [Migration Notes For 0.2.0](#migration-notes-for-020)
@@ -424,7 +425,7 @@ only required fields that exist in the input DataFrame. The helper is also
 available to callers through `from rules_engine import required_source_columns`
 for source projection, dependency inspection, and validation workflows.
 
-### `SparkRulesEngineRuntime.evaluate_dataframe(df, ruleset, fail_on_error=True, include_error_traceback=False, audit_level="full")`
+### `SparkRulesEngineRuntime.evaluate_dataframe(df, ruleset, fail_on_error=True, include_error_traceback=False, full_audit=False)`
 
 Purpose:
 
@@ -438,41 +439,17 @@ Detailed sequence:
    for full audit only, include existing assignment targets for old-value auditing.
 3. Preflight cloudpickle serialization of the worker evaluator and registered
    implementations, then serialize only required fields into the Python UDF.
-4. Evaluate rules through the work path selected by `audit_level`. Minimal skips
-   all trace/provenance rendering; standard builds only the first-match trace;
-   full also builds match summaries and assignment events.
+4. Evaluate rules through the compact path by default. When `full_audit=True`,
+   also build match summaries, the first-match trace, and assignment events.
 5. Resolve typed assignments against the original row.
 6. Append `rules_engine_*` result columns in one Spark projection.
 7. If `fail_on_error=True`, raise from the UDF during the caller's first Spark
    action. If false, retain a compact typed message in `rules_engine_error`.
 
-Returned columns:
-
-- `rules_engine_matched`
-- `rules_engine_matched_rule_ids`
-- `rules_engine_assign`
-- `rules_engine_first_matched_rule`
-- `rules_engine_first_matched_rule_id`
-- `rules_engine_first_matched_rule_name`
-- `rules_engine_first_matched_rule_explanation`
-- `rules_engine_matched_rules`
-- `rules_engine_last_matched_rule`
-- `rules_engine_assignment_results`
-- `rules_engine_winning_rule`
-- `rules_engine_winning_rule_id`
-- `rules_engine_winning_rule_name`
-- `rules_engine_winning_rule_explanation`
-- `rules_engine_error`
-- `rules_engine_ruleset_id`
-- `rules_engine_ruleset_version`
-- `rules_engine_content_hash`
-- `rules_engine_engine_version`
-
-The first three business-result columns and `error` are emitted at every audit
-level. Standard adds the `first_matched_rule*` and backward-compatible
-`winning_rule*` columns. Full, the compatibility default, also adds
-`matched_rules`, `last_matched_rule`, and `assignment_results`. Identity columns
-are driver-side literals at every level and do not enlarge the Python UDF result.
+The runtime preserves existing DataFrame columns, then appends the result
+columns in the order documented under [Spark Runtime](#spark-runtime).
+`full_audit=True` adds only the three detailed audit columns. Ruleset and engine
+identity are driver-side literals and do not enlarge the Python UDF result.
 
 Side effects:
 
@@ -546,10 +523,10 @@ review.
   field. Different target fields merge; a later match overrides only an earlier
   assignment to the same field. `stop_on_match` controls rule evaluation and is
   separate from assignment precedence.
-- `first_matched_rule` has the only detailed resolved condition trace.
-  `matched_rules` contains lightweight static summaries for all matches, and
-  `last_matched_rule` is its final element. A last matched rule need not supply
-  every effective assigned field.
+- `matched_rule_ids` is the ordered source of truth for rule matches. Full audit
+  adds lightweight summaries for every match and a detailed trace for only the
+  first match. A single matched rule need not supply every effective assigned
+  field.
 
 ## Supported Operators
 
@@ -869,15 +846,31 @@ result_df = spark_runtime.evaluate_dataframe(
     input_df,
     ruleset,
     fail_on_error=True,
-    audit_level="minimal",  # minimal | standard | full
+    full_audit=False,
 )
 ```
 
-Use `minimal` for high-volume production outputs that need typed assignments,
-match IDs, errors, and immutable execution identity. Use `standard` when the
-first winning trace is also needed. Use `full` for investigations or governed
-outputs that require all match summaries and per-assignment provenance. Full is
-the default so existing consumers retain their current schema.
+The compact default returns typed assignments, ordered match IDs, errors, and
+immutable evaluation identity. Set `full_audit=True` for investigations or
+governed outputs that also require match summaries, a detailed first-match
+trace, and per-assignment provenance. `full_audit` must be a Python `bool`.
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `column_prefix` | `"rules_engine"` | Prefixes every appended runtime column. The input must not already contain any output column for that prefix. |
+| `fail_on_error` | `True` | Raises from the UDF during the caller's first materializing action when a row fails. `False` quarantines the error in the row. |
+| `include_error_traceback` | `False` | Adds a Python traceback to quarantined error text. Use only for controlled debugging and only with `fail_on_error=False`. |
+| `full_audit` | `False` | Adds ordered match summaries, the detailed first-match trace, and assignment provenance. |
+
+For example, these evaluation options change the returned schema or error row:
+
+| Call option | Returned-value effect |
+|---|---|
+| `full_audit=False` | Returns the compact six-column runtime contract; detailed audit columns are absent. |
+| `full_audit=True` | Inserts `matched_rules`, `first_matched_rule_trace`, and `assignment_results` after `assign`. The core match IDs and final assignments do not change. |
+| `fail_on_error=False` | A failing row returns `error="ExceptionType: message"`, `matched=False`, `matched_rule_ids=[]`, and `assign=null`; full-audit arrays are empty and the first-match trace is null. |
+| `fail_on_error=False, include_error_traceback=True` | Returns the same quarantined values, with the Python traceback appended to `error`. |
+| `column_prefix="decision"` | Uses names such as `decision_error`, `decision_assign`, and `decision_ruleset` without changing their contents. |
 
 `fail_on_error=True` remains lazy: building `result_df` starts no hidden Spark
 job. A row failure raises during the caller's first materializing action, such
@@ -908,66 +901,164 @@ row errors. Schema validation cannot detect these data-dependent values. Before
 a fail-fast production run, profile numeric columns referenced by active rules,
 or use a quarantine canary to measure and remediate non-finite inputs.
 
-The Spark runtime appends:
+### Output columns
 
-```text
-rules_engine_matched
-rules_engine_matched_rule_ids
-rules_engine_assign
-rules_engine_first_matched_rule
-rules_engine_first_matched_rule_id
-rules_engine_first_matched_rule_name
-rules_engine_first_matched_rule_explanation
-rules_engine_matched_rules
-rules_engine_last_matched_rule
-rules_engine_assignment_results
-rules_engine_winning_rule
-rules_engine_winning_rule_id
-rules_engine_winning_rule_name
-rules_engine_winning_rule_explanation
-rules_engine_error
+Existing DataFrame columns remain first and retain their order. Runtime columns
+are appended in the following order:
+
+| Order | Column | Availability | Spark type | Definition |
+|---:|---|---|---|---|
+| 1 | `rules_engine_error` | Always | `STRING` | Null for a clean row. With `fail_on_error=False`, contains compact `ExceptionType: message` text for a row evaluation failure. |
+| 2 | `rules_engine_matched` | Always | `BOOLEAN` | True when at least one active rule matched before evaluation ended. |
+| 3 | `rules_engine_matched_rule_ids` | Always | `ARRAY<STRING>` | Rule IDs in evaluation order. Empty for no match or a quarantined error row. First and last matches are the first and last array elements; no duplicate scalar columns are emitted. |
+| 4 | `rules_engine_assign` | Always | ruleset-derived `STRUCT` | Authoritative typed assignments merged from all matched rules. Every active assignment target is a struct field. Unassigned fields are null; the whole struct is null when no assignment was produced. |
+| 5 | `rules_engine_matched_rules` | `full_audit=True` | `ARRAY<STRUCT>` | Lightweight authored summaries for every matched rule in evaluation order. Empty when no rule matched. |
+| 6 | `rules_engine_first_matched_rule_trace` | `full_audit=True` | `STRUCT` | Detailed resolved-condition trace for the first matched rule only. Null when no rule matched. |
+| 7 | `rules_engine_assignment_results` | `full_audit=True` | `ARRAY<STRUCT>` | Every assignment event in evaluation order, including events later overridden. Empty when no assignment ran. |
+| 8 | `rules_engine_ruleset` | Always | `STRUCT` | Immutable identity of the evaluated ruleset payload. |
+| 9 | `rules_engine_engine_version` | Always | `STRING` | Installed rules-engine package version that evaluated the row. |
+
+The default therefore appends six columns: `error`, `matched`,
+`matched_rule_ids`, `assign`, `ruleset`, and `engine_version`. Full audit inserts
+the three detailed audit columns between `assign` and `ruleset`.
+
+### `rules_engine_assign` fields
+
+The assignment struct is ruleset-specific rather than fixed:
+
+| Nested field | Spark type | Definition |
+|---|---|---|
+| `<target_field>` | Inferred and schema-validated from the assignment | Final typed value for that target after all matched-rule assignments. If several matches assign the same target, the later assignment wins. If no matched rule assigns the target, the field is null. |
+
+All conditions and assignment expressions read the original input row. An
+earlier assignment does not become an input to a later rule or assignment.
+
+### `rules_engine_ruleset` fields
+
+| Nested field | Spark type | Definition |
+|---|---|---|
+| `id` | `STRING` | Immutable `ruleset_id`. |
+| `version` | `STRING` | Published or supplied ruleset version. |
+| `content_hash` | `STRING` | SHA-256 identity of the canonical immutable ruleset payload. |
+
+### `rules_engine_matched_rules` element fields
+
+| Nested field | Spark type | Definition |
+|---|---|---|
+| `rule_id` | `STRING` | Stable matched-rule identifier. |
+| `rule_name` | `STRING` | Author-facing matched-rule name. |
+| `rule_order` | `BIGINT` | Evaluation order of the rule. |
+| `human_readable_condition` | `STRING` | Complete authored condition rendered with readable boolean syntax. |
+| `human_readable_assignment` | `STRING` | Complete authored assignment payload rendered as text. |
+| `assigned_fields` | `ARRAY<STRING>` | Assignment targets authored on the matched rule, in assignment order. |
+
+These static descriptions are precomputed once per evaluator. Because they
+repeat on every matched row, omit full audit from wide production writes when
+the summaries are not required; retain `matched_rule_ids` and recover static
+text later with `RulesEngineService.describe_rules()`.
+
+### `rules_engine_first_matched_rule_trace` fields
+
+| Nested field | Spark type | Definition |
+|---|---|---|
+| `rule_id` | `STRING` | ID of the first matched rule. |
+| `rule_name` | `STRING` | Name of the first matched rule. |
+| `rule_order` | `BIGINT` | Evaluation order of the first matched rule. |
+| `matched` | `BOOLEAN` | True for this first-match trace. |
+| `explanation` | `STRING` | Author-facing expression containing the condition branches that passed, preserving `AND`/`OR` grouping. |
+| `assignments_applied` | `ARRAY<STRING>` | Target fields authored on this rule. Later rules may override their values. |
+| `conditions` | `ARRAY<STRUCT>` | Resolved trace entries for the rule's evaluated conditions. |
+
+Condition trace fields:
+
+| Nested field | Spark type | Definition |
+|---|---|---|
+| `columns` | `ARRAY<STRING>` | Deduplicated source columns referenced by both operands. |
+| `left` | `STRUCT` | Resolved left operand; null only when absent. |
+| `right` | `STRUCT` | Resolved right operand; null for unary operators. |
+| `operator` | `STRING` | Canonical comparison operator. |
+| `comparison_result` | `BOOLEAN` | Raw comparison result before `null_result_mode` resolves a null result. May be null. |
+| `passed` | `BOOLEAN` | Final condition pass/fail result used by group logic. |
+| `tolerance_abs` | `STRING` | Non-default absolute numeric tolerance; null when the default zero applies. |
+| `null_input_mode` | `STRING` | Non-default null-input behavior; null when `propagate` applies. |
+| `null_result_mode` | `STRING` | Non-default null-result behavior; null when `null` applies. |
+| `null_default_value` | `STRING` | Trace-safe default value used by `null_result_mode=default`, otherwise null. |
+
+Operand trace fields used by `left` and `right`:
+
+| Nested field | Spark type | Definition |
+|---|---|---|
+| `kind` | `STRING` | `field`, `literal`, or `custom_function`. |
+| `column` | `STRING` | Source column for a field operand; otherwise null. |
+| `value` | `STRING` | Resolved value rendered as trace-safe text. The typed assignment remains in `rules_engine_assign`. |
+| `value_type` | `STRING` | Explicit authored literal value type when present. |
+| `function_name` | `STRING` | Registered custom-function name when applicable. |
+| `source_columns` | `ARRAY<STRING>` | Source columns used to resolve this operand. |
+| `arguments` | `MAP<STRING,STRING>` | Custom-function arguments rendered as compact trace-safe summaries. |
+
+### `rules_engine_assignment_results` element fields
+
+| Nested field | Spark type | Definition |
+|---|---|---|
+| `assignment_id` | `STRING` | Stable assignment identifier. |
+| `rule_id` | `STRING` | ID of the matched rule that proposed the assignment. |
+| `rule_name` | `STRING` | Name of that rule. |
+| `rule_order` | `BIGINT` | Evaluation order of that rule. |
+| `target_field` | `STRING` | Assigned output field. |
+| `authored_expression` | `STRING` | Complete author-facing assignment expression. |
+| `old_value` | `STRING` | Original input value rendered as trace-safe text. |
+| `proposed_value` | `STRING` | Proposed assignment rendered as trace-safe text. |
+| `changed` | `BOOLEAN` | Null-safe comparison of original and proposed values. |
+| `effective` | `BOOLEAN` | True when this event supplies the final value for its target. |
+| `overridden_by_rule_id` | `STRING` | Later effective rule that replaced this event, otherwise null. |
+| `overridden_by_assignment_id` | `STRING` | Later effective assignment that replaced this event, otherwise null. |
+
+### How rule controls affect returned values
+
+Rules run by ascending `rule_order`. With the default `stop_on_match: false`,
+evaluation continues after a match and assignments merge by target field:
+
+```yaml
+rules:
+  - rule_id: first
+    rule_name: First
+    rule_order: 1
+    stop_on_match: false
+    when:
+      all:
+        - left: { field: account }
+          operator: eq
+          right: { literal: A }
+    assign:
+      bucket: first
+      review: true
+
+  - rule_id: second
+    rule_name: Second
+    rule_order: 2
+    stop_on_match: false
+    when:
+      all:
+        - left: { field: account }
+          operator: eq
+          right: { literal: A }
+    assign:
+      bucket: second
+      priority: high
 ```
 
-`rules_engine_assign` is the authoritative, typed ruleset-derived Spark
-`STRUCT`; fields not assigned for a row are null.
+For input `account = "A"`, the important returned values are:
 
-`rules_engine_first_matched_rule` is a Spark `STRUCT` containing the only
-detailed resolved condition trace, including source columns, resolved operand
-values, comparison result, and final pass/fail state.
-`rules_engine_first_matched_rule_explanation` is an author-facing summary of the
-passed conditions from the first matched rule, using the same expression syntax
-as `RulesEngineService.describe_rules`. Resolved operand values remain available
-in the nested trace struct. The `rules_engine_winning_rule*` columns are
-deprecated terminology but remain exact backward-compatible aliases of the
-`rules_engine_first_matched_rule*` values.
+| Setting | `matched_rule_ids` | `assign` | Full-audit effect |
+|---|---|---|---|
+| Both rules use `stop_on_match: false` | `["first", "second"]` | `{bucket: "second", review: true, priority: "high"}` | Both summaries are emitted. The first bucket event is ineffective and points to the second assignment as its override. The trace describes `first`. |
+| `first` uses `stop_on_match: true` | `["first"]` | `{bucket: "first", review: true, priority: null}` | Only the first summary and its assignment events are emitted. The trace still describes `first`; `second` is never evaluated. |
+| `first` does not match | `["second"]` | `{bucket: "second", review: null, priority: "high"}` | Full-audit arrays contain only `second`, and the trace describes `second`. |
 
-`rules_engine_matched_rules` is an evaluation-ordered array of lightweight
-summaries with `rule_id`, `rule_name`, `rule_order`, the complete authored
-`human_readable_condition`, `human_readable_assignment`, and ordered
-`assigned_fields`. These descriptions are precomputed once per evaluator, not
-rebuilt per row. `rules_engine_last_matched_rule` is the last summary or null.
-Because the authored descriptions repeat on every matched row, drop
-`rules_engine_matched_rules` before wide production writes when it is not a
-required audit artifact. Persist `rules_engine_matched_rule_ids` and recover
-static text from `RulesEngineService.describe_rules()` instead.
-
-`rules_engine_assignment_results` contains every assignment event, including
-events later overridden. Audit values use trace-safe string rendering while the
-typed value remains in `rules_engine_assign`. Each event records the assignment
-and rule IDs, target, complete author-facing `authored_expression`, original
-`old_value`, resolved `proposed_value`, null-safe `changed`, `effective`, and
-the effective later assignment that overrode it.
-No-match rows return empty `matched_rules` and `assignment_results` arrays.
-
-When multiple rules match and `stop_on_match` is false, `rules_engine_assign`
-uses field-specific `last_assignment_wins`: assignments to different fields are
-merged and a later matching assignment replaces only the same target. The last
-matched rule is therefore not necessarily the effective source for every field.
-
-Evaluation is non-cascading. Every condition and assignment sees the original
-input row; assignments never mutate the row used by later operands. Express a
-dependent calculation as one nested assignment or run explicitly separate
-evaluation phases outside this runtime.
+`stop_on_match` stops traversal only when that rule matches. Assignments to
+different fields accumulate; only repeated assignments to the same target use
+last-assignment-wins. Assignment target types must still be mutually compatible
+across active rules, even when a particular row stops before reaching one.
 
 Spark evaluation strategy:
 
@@ -1597,7 +1688,7 @@ Databricks or copy cells into a Databricks notebook. It walks through:
 - publish/load/retire workflow,
 - Spark DataFrame evaluation,
 - embedded expected-case publication gates,
-- audit-level identity, semantic diffs, and coverage diagnostics,
+- compact/full-audit identity, semantic diffs, and coverage diagnostics,
 - reconciliation CSV translation.
 
 The quickstart notebook is:
@@ -1862,6 +1953,30 @@ service.retire("<ruleset_id>", "<version>", retired_by="operator")
 
 Published and retired `(ruleset_name, version)` pairs are immutable. Increment
 the version before publishing a replacement under the same ruleset name.
+
+## Migration Notes For 0.4.0
+
+Version `0.4.0` intentionally simplifies the pre-1.0 Spark output contract:
+
+- `evaluate_dataframe(..., audit_level=...)` is replaced by
+  `evaluate_dataframe(..., full_audit=False)`. The compact schema is now the
+  default; pass the boolean `full_audit=True` for detailed audit artifacts.
+- `AuditLevel` is removed from the public package API.
+- `first_matched_rule*`, `last_matched_rule`, and `winning_rule*` columns are
+  removed. Ordered `matched_rule_ids` and, under full audit, `matched_rules`
+  are the canonical match history.
+- Full audit emits `first_matched_rule_trace`, with the row-specific readable
+  explanation nested inside the trace, plus `matched_rules` and
+  `assignment_results`.
+- `ruleset_id`, `ruleset_version`, and `content_hash` output columns are grouped
+  into `rules_engine_ruleset STRUCT<id,version,content_hash>`.
+- Existing input columns remain first. Runtime columns now have a stable order:
+  error, matched, matched IDs, typed assign, optional full-audit detail,
+  ruleset identity, and engine version.
+
+This is a breaking output-schema change. Migrate persisted Delta targets and
+downstream projections explicitly before their first 0.4 write; do not rely on
+implicit `mergeSchema` for the removed and reshaped columns.
 
 ## Migration Notes For 0.3.1
 

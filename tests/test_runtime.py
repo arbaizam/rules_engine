@@ -85,6 +85,7 @@ def _evaluate_worker(
     *,
     raise_on_error=False,
     include_error_traceback=False,
+    full_audit=True,
 ):
     runtime = _spark_runtime(registry)
     assign_schema = runtime._assignment_schema(ruleset, T.StructType())
@@ -100,6 +101,7 @@ def _evaluate_worker(
         assign_field_types,
         raise_on_error=raise_on_error,
         include_error_traceback=include_error_traceback,
+        full_audit=full_audit,
     )
     return evaluator(FakeSparkRow(row))
 
@@ -175,13 +177,19 @@ def test_result_payload_keys_are_derived_from_the_declared_schema():
         matched_rule_ids=[],
         matched_rules=[],
         assign_payload=None,
-        first_matched_rule=None,
-        first_matched_rule_explanation=None,
+        first_matched_rule_trace=None,
         assignment_results=[],
+        full_audit=True,
     )
-    error = evaluator._error_payload(ValueError("bad"), include_traceback=False)
+    error = evaluator._error_payload(
+        ValueError("bad"),
+        include_traceback=False,
+        full_audit=True,
+    )
 
-    assert RESULT_FIELD_NAMES == tuple(_result_struct(EMPTY_ASSIGN_STRUCT).fieldNames())
+    assert RESULT_FIELD_NAMES == tuple(
+        _result_struct(EMPTY_ASSIGN_STRUCT, full_audit=True).fieldNames()
+    )
     assert tuple(success) == RESULT_FIELD_NAMES
     assert tuple(error) == RESULT_FIELD_NAMES
 
@@ -491,11 +499,11 @@ def test_required_source_columns_can_return_no_dependencies():
     assert required_source_columns(ruleset) == ()
 
 
-def test_spark_row_evaluator_returns_native_winning_rule_trace():
+def test_spark_row_evaluator_returns_native_first_match_trace():
     """
-    What: Returns assignment and winning-rule trace payloads through the Spark row UDF.
+    What: Returns assignment and first-match trace payloads through the Spark row UDF.
     Why: Spark output should avoid full JSON rule-results payloads.
-    Fails when: Spark reintroduces all-rule trace output or stringifies winning traces.
+    Fails when: Spark reintroduces all-rule trace output or stringifies match traces.
     """
     ruleset = _compile(
         {
@@ -508,24 +516,24 @@ def test_spark_row_evaluator_returns_native_winning_rule_trace():
     )
 
     result = _evaluate_worker(ruleset, {"account": "A"})
-    winning_rule = result["winning_rule"]
+    match_trace = result["first_matched_rule_trace"]
 
     assert result["matched"] is True
     assert result["assign"] == {"bucket": "matched"}
     assert "rule_results" not in result
-    assert result["winning_rule_id"] == "r1"
-    assert result["winning_rule_name"] == "Rule 1"
-    assert result["winning_rule_explanation"] == "account == 'A'"
-    assert winning_rule["rule_id"] == "r1"
-    assert winning_rule["matched"] is True
-    assert winning_rule["conditions"][0]["columns"] == ["account"]
-    assert winning_rule["conditions"][0]["left"]["column"] == "account"
-    assert winning_rule["conditions"][0]["left"]["value"] == "A"
+    assert match_trace["rule_id"] == "r1"
+    assert match_trace["rule_name"] == "Rule 1"
+    assert match_trace["rule_order"] == 1
+    assert match_trace["matched"] is True
+    assert match_trace["explanation"] == "account == 'A'"
+    assert match_trace["conditions"][0]["columns"] == ["account"]
+    assert match_trace["conditions"][0]["left"]["column"] == "account"
+    assert match_trace["conditions"][0]["left"]["value"] == "A"
 
 
-def test_spark_row_evaluator_winning_rule_trace_keeps_default_options_null():
+def test_spark_row_evaluator_first_match_trace_keeps_default_options_null():
     """
-    What: Leaves default condition options null in the winning-rule Spark trace.
+    What: Leaves default condition options null in the first-match Spark trace.
     Why: The Spark trace struct intentionally omits default-valued metadata.
     Fails when: Trace simplification starts emitting default values as strings.
     """
@@ -540,7 +548,7 @@ def test_spark_row_evaluator_winning_rule_trace_keeps_default_options_null():
     )
 
     result = _evaluate_worker(ruleset, {"account": "A"})
-    condition = result["winning_rule"]["conditions"][0]
+    condition = result["first_matched_rule_trace"]["conditions"][0]
 
     assert condition["tolerance_abs"] is None
     assert condition["null_input_mode"] is None
@@ -608,10 +616,10 @@ def test_spark_row_evaluator_assignment_struct_includes_unassigned_fields_as_nul
     assert result["assign"] == {"bucket": "A", "secondary_bucket": None}
 
 
-def test_spark_row_evaluator_winning_rule_explanation_uses_any_joiner():
+def test_spark_row_evaluator_match_trace_explanation_uses_any_joiner():
     """
-    What: Uses OR when a winning root any group has multiple passed conditions.
-    Why: The readable explanation should preserve the winning rule's boolean logic.
+    What: Uses OR when a matched root any group has multiple passed conditions.
+    Why: The readable explanation should preserve the matched rule's boolean logic.
     Fails when: Passed conditions are flattened and always joined with AND.
     """
     ruleset = _compile_when(
@@ -637,14 +645,16 @@ def test_spark_row_evaluator_winning_rule_explanation_uses_any_joiner():
 
     result = _evaluate_worker(ruleset, {"account": "A", "status": "open"})
 
-    assert result["winning_rule_explanation"] == "account == 'A' OR status == 'open'"
+    assert result["first_matched_rule_trace"]["explanation"] == (
+        "account == 'A' OR status == 'open'"
+    )
 
 
-def test_spark_row_evaluator_winning_rule_explanation_drops_failing_any_branches():
+def test_spark_row_evaluator_match_trace_explanation_drops_failing_any_branches():
     """
-    What: Omits failed OR branches from the winning-rule explanation.
+    What: Omits failed OR branches from the first-match explanation.
     Why: The explanation should describe the passed path, not every authored branch.
-    Fails when: Failed sibling conditions appear in the winning-rule explanation.
+    Fails when: Failed sibling conditions appear in the first-match explanation.
     """
     ruleset = _compile_when(
         {
@@ -669,12 +679,12 @@ def test_spark_row_evaluator_winning_rule_explanation_drops_failing_any_branches
 
     result = _evaluate_worker(ruleset, {"account": "A", "status": "closed"})
 
-    assert result["winning_rule_explanation"] == "account == 'A'"
+    assert result["first_matched_rule_trace"]["explanation"] == "account == 'A'"
 
 
-def test_spark_row_evaluator_winning_rule_explanation_preserves_nested_groups():
+def test_spark_row_evaluator_match_trace_explanation_preserves_nested_groups():
     """
-    What: Preserves parentheses and OR joiners for nested winning groups.
+    What: Preserves parentheses and OR joiners for nested matched groups.
     Why: Explanations should not misstate nested boolean rule logic.
     Fails when: Nested group conditions are flattened into a single AND list.
     """
@@ -719,17 +729,17 @@ def test_spark_row_evaluator_winning_rule_explanation_preserves_nested_groups():
         },
     )
 
-    assert result["winning_rule_explanation"] == (
+    assert result["first_matched_rule_trace"]["explanation"] == (
         "record_type == 'asset' AND "
         "(market_value == true OR book_value == true)"
     )
 
 
-def test_spark_row_evaluator_winning_rule_explanation_drops_failing_nested_or_arm():
+def test_spark_row_evaluator_match_trace_explanation_drops_failing_nested_or_arm():
     """
     What: Omits a failed nested OR arm while preserving the passed nested path.
-    Why: Nested explanations should stay concise without misrepresenting the winning logic.
-    Fails when: Failed nested conditions leak into the winning-rule explanation.
+    Why: Nested explanations should stay concise without misrepresenting matched logic.
+    Fails when: Failed nested conditions leak into the first-match explanation.
     """
     ruleset = _compile_when(
         {
@@ -772,12 +782,12 @@ def test_spark_row_evaluator_winning_rule_explanation_drops_failing_nested_or_ar
         },
     )
 
-    assert result["winning_rule_explanation"] == (
+    assert result["first_matched_rule_trace"]["explanation"] == (
         "record_type == 'asset' AND market_value == true"
     )
 
 
-def test_spark_row_evaluator_winning_rule_explanation_matches_service_formatter():
+def test_spark_row_evaluator_match_trace_explanation_matches_service_formatter():
     """
     What: Uses the same author-facing syntax as the service helper when all branches pass.
     Why: Runtime explanations and service rule descriptions should not diverge.
@@ -806,7 +816,7 @@ def test_spark_row_evaluator_winning_rule_explanation_matches_service_formatter(
     result = _evaluate_worker(ruleset, {"account": "A", "amount": 150})
     service_logic = HumanReadableRulesetFormatter().describe_rules(ruleset)[0]["rule_logic"]
 
-    assert result["winning_rule_explanation"] == service_logic
+    assert result["first_matched_rule_trace"]["explanation"] == service_logic
 
 
 def test_spark_row_evaluator_preserves_mapping_literal_assignment_as_struct():
@@ -1012,6 +1022,11 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
         ruleset,
         {"account": "A", "bucket": "original", "risk": "high", "cleared": None},
     )
+    compact_result = _evaluate_worker(
+        ruleset,
+        {"account": "A", "bucket": "original", "risk": "high", "cleared": None},
+        full_audit=False,
+    )
 
     assert result["matched_rule_ids"] == ["first_match", "second_match"]
     assert result["assign"] == {
@@ -1019,6 +1034,9 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
         "risk": "high",
         "cleared": None,
     }
+    assert compact_result["matched_rule_ids"] == result["matched_rule_ids"]
+    assert compact_result["assign"] == result["assign"]
+    assert "assignment_results" not in compact_result
     assert [item["rule_order"] for item in result["matched_rules"]] == [1, 2]
     assert result["matched_rules"][0]["human_readable_condition"] == "account == 'A'"
     assert result["matched_rules"][1]["assigned_fields"] == [
@@ -1026,16 +1044,9 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
         "risk",
         "cleared",
     ]
-    assert result["last_matched_rule"]["rule_id"] == "second_match"
-    assert result["first_matched_rule"] == result["winning_rule"]
-    assert result["first_matched_rule_id"] == result["winning_rule_id"]
-    assert result["first_matched_rule_name"] == result["winning_rule_name"]
-    assert (
-        result["first_matched_rule_explanation"]
-        == result["winning_rule_explanation"]
-    )
-    assert result["winning_rule_id"] == "first_match"
-    assert result["winning_rule_explanation"] == "account == 'A'"
+    assert result["matched_rules"][-1]["rule_id"] == "second_match"
+    assert result["first_matched_rule_trace"]["rule_id"] == "first_match"
+    assert result["first_matched_rule_trace"]["explanation"] == "account == 'A'"
     assignment_results = {
         item["assignment_id"]: item
         for item in result["assignment_results"]
@@ -1072,10 +1083,8 @@ def test_spark_row_evaluator_no_match_returns_empty_audit_arrays():
 
     assert result["matched"] is False
     assert result["matched_rules"] == []
-    assert result["last_matched_rule"] is None
     assert result["assignment_results"] == []
-    assert result["first_matched_rule"] is None
-    assert result["winning_rule"] is None
+    assert result["first_matched_rule_trace"] is None
 
 
 def test_rule_summaries_are_precomputed_once_per_row_evaluator(monkeypatch):
@@ -1108,6 +1117,7 @@ def test_rule_summaries_are_precomputed_once_per_row_evaluator(monkeypatch):
         ruleset,
         [field.name for field in assign_schema.fields],
         {field.name: field.dataType for field in assign_schema.fields},
+        full_audit=True,
     )
 
     evaluator(FakeSparkRow({"account": "A"}))
@@ -1181,7 +1191,7 @@ def test_spark_row_evaluator_stop_on_match_excludes_later_summaries_and_assignme
     assert [item["rule_id"] for item in result["assignment_results"]] == ["r1"]
 
 
-def test_spark_row_evaluator_builds_condition_traces_only_for_winner(monkeypatch):
+def test_spark_row_evaluator_builds_condition_traces_only_for_first_match(monkeypatch):
     """
     What: Builds condition trace objects only for the first matching rule.
     Why: Losing-rule trace allocation is discarded output and a major row-level cost.
@@ -1222,14 +1232,14 @@ def test_spark_row_evaluator_builds_condition_traces_only_for_winner(monkeypatch
                     "assign": {"bucket": "loser"},
                 },
                 {
-                    "rule_id": "winner",
-                    "rule_name": "Winner",
+                    "rule_id": "first_match",
+                    "rule_name": "First Match",
                     "rule_order": 2,
                     "stop_on_match": True,
                     "when": {
                         "all": [
                             {
-                                "condition_id": "winner_condition",
+                                "condition_id": "first_match_condition",
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
@@ -1238,7 +1248,7 @@ def test_spark_row_evaluator_builds_condition_traces_only_for_winner(monkeypatch
                             }
                         ]
                     },
-                    "assign": {"bucket": "winner"},
+                    "assign": {"bucket": "first"},
                 },
             ],
         }
@@ -1254,8 +1264,8 @@ def test_spark_row_evaluator_builds_condition_traces_only_for_winner(monkeypatch
 
     result = _evaluate_worker(ruleset, {"account": "A", "status": "open"})
 
-    assert result["winning_rule_id"] == "winner"
-    assert traced_condition_ids == ["winner_condition"]
+    assert result["first_matched_rule_trace"]["rule_id"] == "first_match"
+    assert traced_condition_ids == ["first_match_condition"]
 
 
 def test_match_only_losing_rule_preserves_later_condition_errors():
@@ -1390,11 +1400,11 @@ def test_spark_assignment_schema_rejects_incompatible_same_target_assignments():
         _spark_runtime()._assignment_schema(ruleset, T.StructType())
 
 
-def test_spark_row_evaluator_winning_rule_trace_includes_precomputed_aggregate_field():
+def test_spark_row_evaluator_first_match_trace_includes_precomputed_aggregate_field():
     """
     What: Emits precomputed aggregate columns like ordinary field operands.
-    Why: Aggregate calculations now live upstream while winning-rule trace remains useful.
-    Fails when: Precomputed field values disappear from the winning-rule trace.
+    Why: Aggregate calculations now live upstream while match trace remains useful.
+    Fails when: Precomputed field values disappear from the first-match trace.
     """
     ruleset = _compile(
         {
@@ -1407,18 +1417,20 @@ def test_spark_row_evaluator_winning_rule_trace_includes_precomputed_aggregate_f
     )
     result = _evaluate_worker(ruleset, {"account": "A", "account_amount_sum": 30})
 
-    left = result["winning_rule"]["conditions"][0]["left"]
+    left = result["first_matched_rule_trace"]["conditions"][0]["left"]
     assert left["kind"] == "field"
     assert left["column"] == "account_amount_sum"
     assert left["source_columns"] == ["account_amount_sum"]
     assert left["value"] == "30"
-    assert result["winning_rule_explanation"] == "account_amount_sum > 15"
+    assert result["first_matched_rule_trace"]["explanation"] == (
+        "account_amount_sum > 15"
+    )
 
 
-def test_spark_row_evaluator_winning_rule_trace_includes_custom_function_args():
+def test_spark_row_evaluator_first_match_trace_includes_custom_function_args():
     """
-    What: Emits custom-function argument summaries in the winning-rule trace.
-    Why: Function-backed winning rules must remain explainable after dropping all-rule traces.
+    What: Emits custom-function argument summaries in the first-match trace.
+    Why: Function-backed matched rules must remain explainable without all-rule traces.
     Fails when: Custom function source columns or resolved argument values disappear.
     """
     registry = FunctionRegistry()
@@ -1455,13 +1467,15 @@ def test_spark_row_evaluator_winning_rule_trace_includes_custom_function_args():
 
     result = _evaluate_worker(ruleset, {"amount": 2}, registry=registry)
 
-    left = result["winning_rule"]["conditions"][0]["left"]
+    left = result["first_matched_rule_trace"]["conditions"][0]["left"]
     assert left["kind"] == "custom_function"
     assert left["function_name"] == "score"
     assert left["source_columns"] == ["amount"]
     assert left["value"] == "5"
     assert left["arguments"] == {"x": "amount=2", "y": "3"}
-    assert result["winning_rule_explanation"] == "score(x=amount, y=3) == 5"
+    assert result["first_matched_rule_trace"]["explanation"] == (
+        "score(x=amount, y=3) == 5"
+    )
     assert calls == [{"x": 2, "y": 3}]
 
 

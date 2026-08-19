@@ -9,7 +9,6 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
-from rules_engine.enums import AuditLevel
 from rules_engine.models import Ruleset
 from rules_engine.registry import FunctionRegistry
 from rules_engine.runtime import SparkRowEvaluator
@@ -104,7 +103,6 @@ class RulesetCoverageAnalyzer:
             ruleset,
             column_prefix=column_prefix,
             fail_on_error=False,
-            audit_level=AuditLevel.MINIMAL,
         )
         matched_col = F.col(f"{column_prefix}_matched")
         matched_ids_col = F.col(f"{column_prefix}_matched_rule_ids")
