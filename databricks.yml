@@ -2,6 +2,12 @@ bundle:
   name: rules_engine
   databricks_cli_version: ">= 0.296.1"
 
+sync:
+  exclude:
+    - .databricks/**
+    - .vscode/**
+    - codex.md
+
 artifacts:
   rules_engine:
     type: whl
