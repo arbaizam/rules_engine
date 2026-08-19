@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -13,6 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_DIR = REPO_ROOT / "build"
 DIST_DIR = REPO_ROOT / "dist"
 EGG_INFO_DIR = REPO_ROOT / "rules_engine.egg-info"
+WHEEL_SOURCE_DATE_EPOCH = "946684800"
+EXPECTED_WHEEL_SHA256 = "E1D0140BEA9B918C6AF55F8DE51A622279582DA575A2EF522D748434A487C8B4"
 
 
 def _project_version() -> str:
@@ -41,6 +44,31 @@ def _remove_old_wheels() -> None:
         resolved_wheel.unlink()
 
 
+def _build_environment() -> dict[str, str]:
+    """Return a deterministic build environment independent of checkout mtimes."""
+    build_environment = os.environ.copy()
+    build_environment["SOURCE_DATE_EPOCH"] = WHEEL_SOURCE_DATE_EPOCH
+    return build_environment
+
+
+def _wheel_sha256(wheel_path: Path) -> str:
+    """Return the uppercase SHA-256 digest for a wheel."""
+    return hashlib.sha256(wheel_path.read_bytes()).hexdigest().upper()
+
+
+def _verify_wheel_digest(wheel_path: Path) -> str:
+    """Require the deterministic wheel to match the reviewed release digest."""
+    digest = _wheel_sha256(wheel_path)
+    expected = EXPECTED_WHEEL_SHA256.upper()
+    if digest != expected:
+        raise RuntimeError(
+            f"Built {wheel_path.name} SHA256={digest}, expected {expected}. "
+            "Review the release diff and update EXPECTED_WHEEL_SHA256 only when "
+            "intentionally approving new wheel bytes."
+        )
+    return digest
+
+
 def main() -> None:
     """Remove stale build outputs, build one wheel, and verify its identity."""
     version = _project_version()
@@ -52,6 +80,7 @@ def main() -> None:
     subprocess.run(
         [sys.executable, "-m", "build", "--wheel"],
         cwd=REPO_ROOT,
+        env=_build_environment(),
         check=True,
     )
 
@@ -61,7 +90,7 @@ def main() -> None:
             f"Expected only {expected_wheel.name}, found "
             f"{[path.name for path in built_wheels]}."
         )
-    digest = hashlib.sha256(expected_wheel.read_bytes()).hexdigest().upper()
+    digest = _verify_wheel_digest(expected_wheel)
     print(f"Built {expected_wheel.name} SHA256={digest}")
 
 

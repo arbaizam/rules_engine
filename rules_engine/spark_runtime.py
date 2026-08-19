@@ -175,20 +175,42 @@ class _PreparedRule:
     summary: dict[str, Any] | None
 
 
-COMPACT_RESULT_FIELD_NAMES = (
-    "error",
-    "matched",
-    "matched_rule_ids",
-    "assign",
+def _copy_rule_summary(summary: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return one row-owned rule summary, including its nested field list."""
+    if summary is None:
+        raise RuntimeError("Full-audit rule summary was not prepared.")
+    copied = dict(summary)
+    copied["assigned_fields"] = list(summary["assigned_fields"])
+    return copied
+
+
+def _require_bool(name: str, value: Any) -> None:
+    """Reject truthy non-booleans for public boolean options."""
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be a bool, not {type(value).__name__}.")
+
+
+_COMPACT_RESULT_FIELDS_BEFORE_ASSIGN = (
+    T.StructField("error", T.StringType(), True),
+    T.StructField("matched", T.BooleanType(), False),
+    T.StructField("matched_rule_ids", T.ArrayType(T.StringType(), False), False),
 )
-FULL_AUDIT_ONLY_RESULT_FIELD_NAMES = (
-    "matched_rules",
-    "first_matched_rule_trace",
-    "assignment_results",
-)
-FULL_AUDIT_RESULT_FIELD_NAMES = (
-    *COMPACT_RESULT_FIELD_NAMES,
-    *FULL_AUDIT_ONLY_RESULT_FIELD_NAMES,
+_FULL_AUDIT_ONLY_RESULT_FIELDS = (
+    T.StructField(
+        "matched_rules",
+        T.ArrayType(MATCHED_RULE_SUMMARY_STRUCT, False),
+        False,
+    ),
+    T.StructField(
+        "first_matched_rule_trace",
+        FIRST_MATCHED_RULE_TRACE_STRUCT,
+        True,
+    ),
+    T.StructField(
+        "assignment_results",
+        T.ArrayType(ASSIGNMENT_RESULT_STRUCT, False),
+        False,
+    ),
 )
 
 
@@ -200,37 +222,21 @@ def _result_struct(
     """Build the Spark UDF result schema for the requested audit detail."""
     _require_bool("full_audit", full_audit)
     compact_fields = [
-        T.StructField("error", T.StringType(), True),
-        T.StructField("matched", T.BooleanType(), False),
-        T.StructField("matched_rule_ids", T.ArrayType(T.StringType(), False), False),
+        *_COMPACT_RESULT_FIELDS_BEFORE_ASSIGN,
         T.StructField("assign", assign_schema, True),
     ]
-    full_audit_only_fields = [
-        T.StructField(
-            "matched_rules",
-            T.ArrayType(MATCHED_RULE_SUMMARY_STRUCT, False),
-            False,
-        ),
-        T.StructField(
-            "first_matched_rule_trace",
-            FIRST_MATCHED_RULE_TRACE_STRUCT,
-            True,
-        ),
-        T.StructField(
-            "assignment_results",
-            T.ArrayType(ASSIGNMENT_RESULT_STRUCT, False),
-            False,
-        ),
-    ]
     return T.StructType(
-        compact_fields + (full_audit_only_fields if full_audit else [])
+        compact_fields + (list(_FULL_AUDIT_ONLY_RESULT_FIELDS) if full_audit else [])
     )
 
 
-def _require_bool(name: str, value: Any) -> None:
-    """Reject truthy non-booleans for public boolean options."""
-    if not isinstance(value, bool):
-        raise TypeError(f"{name} must be a bool, not {type(value).__name__}.")
+COMPACT_RESULT_FIELD_NAMES = tuple(_result_struct(T.StructType()).fieldNames())
+FULL_AUDIT_RESULT_FIELD_NAMES = tuple(
+    _result_struct(T.StructType(), full_audit=True).fieldNames()
+)
+FULL_AUDIT_ONLY_RESULT_FIELD_NAMES = tuple(
+    field.name for field in _FULL_AUDIT_ONLY_RESULT_FIELDS
+)
 
 
 def result_field_names(
@@ -395,24 +401,13 @@ class SparkRulesEngineRuntime:
         )
         result_col = f"{column_prefix}_result"
         evaluated = df.withColumn(result_col, result_udf(row_struct))
-        result = F.col(result_col)
-        output = evaluated.withColumns(
-            {
-                f"{column_prefix}_{field_name}": result.getField(field_name)
-                for field_name in result_field_names(full_audit=full_audit)
-            }
-            | {
-                f"{column_prefix}_ruleset": F.struct(
-                    F.lit(ruleset.ruleset_id).alias("id"),
-                    F.lit(ruleset.version).alias("version"),
-                    F.lit(DeltaRowSerializer().content_hash(ruleset)).alias(
-                        "content_hash"
-                    ),
-                ),
-                f"{column_prefix}_engine_version": F.lit(__version__),
-            }
+        output = self._append_output_columns(
+            evaluated,
+            result_col=result_col,
+            column_prefix=column_prefix,
+            ruleset=ruleset,
+            full_audit=full_audit,
         )
-        output = output.drop(result_col)
         logger.info(
             "Spark runtime evaluation DataFrame built: ruleset_id=%s version=%s output_prefix=%s",
             ruleset.ruleset_id,
@@ -420,6 +415,29 @@ class SparkRulesEngineRuntime:
             column_prefix,
         )
         return output
+
+    @staticmethod
+    def _append_output_columns(
+        evaluated: DataFrame,
+        *,
+        result_col: str,
+        column_prefix: str,
+        ruleset: Ruleset,
+        full_audit: bool,
+    ) -> DataFrame:
+        """Append the public result contract in its documented column order."""
+        result = F.col(result_col)
+        output_columns = {
+            f"{column_prefix}_{field_name}": result.getField(field_name)
+            for field_name in result_field_names(full_audit=full_audit)
+        }
+        output_columns[f"{column_prefix}_ruleset"] = F.struct(
+            F.lit(ruleset.ruleset_id).alias("id"),
+            F.lit(ruleset.version).alias("version"),
+            F.lit(DeltaRowSerializer().content_hash(ruleset)).alias("content_hash"),
+        )
+        output_columns[f"{column_prefix}_engine_version"] = F.lit(__version__)
+        return evaluated.withColumns(output_columns).drop(result_col)
 
     def validate_worker_serializable(self, evaluator: Any) -> None:
         """Fail before job submission when a UDF closure cannot be serialized."""
@@ -512,12 +530,14 @@ class SparkRulesEngineRuntime:
                 for prepared_rule in active_rules:
                     rule = prepared_rule.rule
                     condition_traces = None
+                    need_first_match_trace = (
+                        full_audit and first_matched_rule_trace is None
+                    )
                     # Every active condition remains eager until stop_on_match,
                     # preserving row errors. Full audit reevaluates a pure first
                     # match only; custom first matches stay single-pass.
                     if (
-                        full_audit
-                        and first_matched_rule_trace is None
+                        need_first_match_trace
                         and prepared_rule.has_custom_condition
                     ):
                         matched, condition_traces = runtime._evaluate_rule(
@@ -529,11 +549,10 @@ class SparkRulesEngineRuntime:
                     if matched:
                         matched_rule_ids.append(rule.rule_id)
                         if full_audit:
-                            matched_rules.append(prepared_rule.summary)
-                        if (
-                            full_audit
-                            and first_matched_rule_trace is None
-                        ):
+                            matched_rules.append(
+                                _copy_rule_summary(prepared_rule.summary)
+                            )
+                        if need_first_match_trace:
                             if condition_traces is None:
                                 _, condition_traces = runtime._evaluate_rule(
                                     rule,
@@ -689,15 +708,11 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         assign_payload: dict[str, Any] | None,
         first_matched_rule_trace: dict[str, Any] | None,
         assignment_results: list[dict[str, Any]],
+        base_payload_template: Mapping[str, Any],
         full_audit: bool = False,
-        base_payload_template: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the stable Spark result payload."""
-        payload = dict(
-            base_payload_template
-            if base_payload_template is not None
-            else self._base_payload(full_audit=full_audit)
-        )
+        payload = dict(base_payload_template)
         payload.update(
             matched=bool(matched_rule_ids),
             matched_rule_ids=matched_rule_ids,
@@ -716,26 +731,17 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         exc: Exception,
         *,
         include_traceback: bool,
+        base_payload_template: Mapping[str, Any],
         full_audit: bool = False,
-        base_payload_template: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build a compact production error, optionally with a debug traceback."""
         error = f"{type(exc).__name__}: {exc}"
         if include_traceback:
             error = f"{error}\n{traceback.format_exc()}"
-        payload = dict(
-            base_payload_template
-            if base_payload_template is not None
-            else self._base_payload(full_audit=full_audit)
-        )
-        for field_name in (
-            "matched_rule_ids",
-            "matched_rules",
-            "assignment_results",
-        ):
-            if field_name in payload:
-                payload[field_name] = list(payload[field_name])
-        payload["error"] = error
+        payload = dict(base_payload_template)
+        payload.update(error=error, matched_rule_ids=[])
+        if full_audit:
+            payload.update(matched_rules=[], assignment_results=[])
         return payload
 
     def _base_payload(
@@ -743,7 +749,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         *,
         full_audit: bool = False,
     ) -> dict[str, Any]:
-        """Return schema-derived defaults shared by success and error rows."""
+        """Return an immutable-by-convention template for result payloads."""
         payload = dict.fromkeys(result_field_names(full_audit=full_audit))
         payload.update(
             matched=False,

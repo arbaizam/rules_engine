@@ -185,6 +185,7 @@ def test_result_payload_keys_match_the_declared_schema(
 ):
     """Compact and full payloads cannot drift from their Spark result schemas."""
     evaluator = object.__new__(_SparkRowUdfEvaluator)
+    base_payload_template = evaluator._base_payload(full_audit=full_audit)
 
     success = evaluator._success_payload(
         matched_rule_ids=[],
@@ -192,11 +193,19 @@ def test_result_payload_keys_match_the_declared_schema(
         assign_payload=None,
         first_matched_rule_trace=None,
         assignment_results=[],
+        base_payload_template=base_payload_template,
         full_audit=full_audit,
     )
     error = evaluator._error_payload(
         ValueError("bad"),
         include_traceback=False,
+        base_payload_template=base_payload_template,
+        full_audit=full_audit,
+    )
+    another_error = evaluator._error_payload(
+        ValueError("also bad"),
+        include_traceback=False,
+        base_payload_template=base_payload_template,
         full_audit=full_audit,
     )
 
@@ -208,6 +217,10 @@ def test_result_payload_keys_match_the_declared_schema(
     )
     assert tuple(success) == expected_field_names
     assert tuple(error) == expected_field_names
+    assert error["matched_rule_ids"] is not another_error["matched_rule_ids"]
+    if full_audit:
+        assert error["matched_rules"] is not another_error["matched_rules"]
+        assert error["assignment_results"] is not another_error["assignment_results"]
 
 
 @pytest.mark.parametrize(
@@ -1112,6 +1125,10 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
         {"account": "A", "bucket": "original", "risk": "high", "cleared": None},
         full_audit=False,
     )
+    another_result = _evaluate_worker(
+        ruleset,
+        {"account": "A", "bucket": "original", "risk": "high", "cleared": None},
+    )
 
     assert result["matched_rule_ids"] == ["first_match", "second_match"]
     assert result["assign"] == {
@@ -1130,6 +1147,13 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
         "cleared",
     ]
     assert result["matched_rules"][-1]["rule_id"] == "second_match"
+    assert result["matched_rules"][0] is not another_result["matched_rules"][0]
+    assert (
+        result["matched_rules"][0]["assigned_fields"]
+        is not another_result["matched_rules"][0]["assigned_fields"]
+    )
+    result["matched_rules"][0]["assigned_fields"].append("row-local-mutation")
+    assert another_result["matched_rules"][0]["assigned_fields"] == ["bucket"]
     assert result["first_matched_rule_trace"]["rule_id"] == "first_match"
     assert result["first_matched_rule_trace"]["explanation"] == "account == 'A'"
     assignment_results = {

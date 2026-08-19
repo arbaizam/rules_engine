@@ -54,6 +54,10 @@ def _as_bool(value, *, name):
 
 REPO_ROOT = _find_repo_root()
 SCHEMA = globals().get("SCHEMA") or _job_parameter("SCHEMA")
+EXPECTED_RULES_ENGINE_VERSION = (
+    globals().get("EXPECTED_RULES_ENGINE_VERSION")
+    or _job_parameter("EXPECTED_RULES_ENGINE_VERSION")
+)
 RULES_ENGINE_RUN_SPARK_TESTS = _as_bool(
     globals().get("RULES_ENGINE_RUN_SPARK_TESTS")
     or _job_parameter("RULES_ENGINE_RUN_SPARK_TESTS")
@@ -72,6 +76,9 @@ if not RULESET_YAML_PATH.is_absolute():
 
 assert RULESET_YAML_PATH.is_file(), f"Ruleset fixture does not exist: {RULESET_YAML_PATH}"
 assert SCHEMA, "Set SCHEMA before running this test."
+assert EXPECTED_RULES_ENGINE_VERSION, (
+    "Set EXPECTED_RULES_ENGINE_VERSION to the release version under test."
+)
 schema_parts = SCHEMA.split(".")
 assert len(schema_parts) == 2 and all(
     re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part) for part in schema_parts
@@ -91,7 +98,14 @@ except ValueError as exc:
         "rules_engine was not imported from the installed distribution: "
         f"module={package_file}, distribution_root={distribution_root}"
     ) from exc
-assert rules_engine.__version__ == package_distribution.version
+assert package_distribution.version == EXPECTED_RULES_ENGINE_VERSION, (
+    "Installed distribution does not match the requested release: "
+    f"expected={EXPECTED_RULES_ENGINE_VERSION}, installed={package_distribution.version}"
+)
+assert rules_engine.__version__ == EXPECTED_RULES_ENGINE_VERSION, (
+    "Imported package does not match the requested release: "
+    f"expected={EXPECTED_RULES_ENGINE_VERSION}, imported={rules_engine.__version__}"
+)
 print(f"Installed rules_engine version: {rules_engine.__version__}")
 print(f"Installed rules_engine package: {package_file}")
 print(f"Repository test root: {REPO_ROOT}")

@@ -1788,25 +1788,52 @@ The release builder removes only repository-local `build/`,
 `rules_engine.egg-info/`, and prior `dist/rules_engine-*.whl` outputs before
 building. It then requires exactly one wheel whose filename matches the
 `pyproject.toml` version, preventing stale deleted modules or mislabeled wheels
-from entering a bundle deployment.
+from entering a bundle deployment. Builds use a fixed `SOURCE_DATE_EPOCH`, so
+archive timestamps do not vary with build time or checkout mtimes. The builder
+also requires the resulting wheel to match `EXPECTED_WHEEL_SHA256` in
+`tools/build_release_wheel.py`. A bundle deploy therefore either rebuilds the
+reviewed bytes exactly or stops before upload; update that digest only after
+reviewing an intentional release-content change.
 
 Validate and deploy the bundle from the repo root after configuring Databricks
-CLI authentication:
+CLI authentication. The targets are deliberately bound to separate
+`rules-engine-dev` and `rules-engine-prod` profiles:
 
 ```powershell
-databricks bundle validate --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>"
-databricks bundle deploy --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>"
-databricks bundle run --target dev --var "workspace_host=https://<workspace-host>" --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>" rules_engine_system_tests
+databricks auth login --host https://<dev-workspace-host> --profile rules-engine-dev
+databricks bundle validate --target dev --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>"
+databricks bundle deploy --target dev --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>"
+databricks bundle run --target dev --var "existing_cluster_id=<cluster-id>" --var "system_test_schema=<disposable-catalog.schema>" rules_engine_system_tests
 ```
 
 The bundle job installs the exact versioned wheel plus pytest on the supplied
 existing cluster, then runs `notebooks/rules_engine_system_tests.py` with live
 Spark tests enabled. It asserts that `rules_engine` came from the installed
-distribution before executing 67 named system tests and the repository pytest
-suite. `system_test_schema` must be disposable, must not name a production
-metadata schema, and its schema component must contain `test`, `scratch`, or
-`tmp`. Keep `docs/rules_engine_system_test_uat_plan.md` synchronized with the
-notebook when adding, removing, or changing system-test coverage.
+distribution and equals the bundle-pinned `EXPECTED_RULES_ENGINE_VERSION`
+before executing 67 named system tests and the repository pytest suite.
+`system_test_schema` must be disposable, must not name a production metadata
+schema, and its schema component must contain `test`, `scratch`, or `tmp`. Keep
+`docs/rules_engine_system_test_uat_plan.md` synchronized with the notebook when
+adding, removing, or changing system-test coverage.
+
+The `prod` target is a release-validation target, not a definition of every
+downstream production evaluation job. It can deploy only from `main`, uses the
+`rules-engine-prod` profile and a controlled `/Workspace/Production` root, and
+requires a service-principal application ID plus a cloud-specific job-cluster
+node type. DBR is pinned to `15.4.x-scala2.12`; production does not reuse the
+development all-purpose cluster.
+
+```powershell
+databricks auth login --host https://<prod-workspace-host> --profile rules-engine-prod
+databricks bundle validate --target prod --var "prod_service_principal_name=<application-id>" --var "prod_job_cluster_node_type_id=<node-type-id>" --var "system_test_schema=<disposable-catalog.schema>"
+databricks bundle deploy --target prod --var "prod_service_principal_name=<application-id>" --var "prod_job_cluster_node_type_id=<node-type-id>" --var "system_test_schema=<disposable-catalog.schema>"
+databricks bundle run --target prod --var "prod_service_principal_name=<application-id>" --var "prod_job_cluster_node_type_id=<node-type-id>" --var "system_test_schema=<disposable-catalog.schema>" rules_engine_system_tests
+```
+
+Provision the `/Workspace/Production` folder with write access restricted to
+the production deployer before the first deploy. Inventory and migrate every
+downstream reader of pre-0.4 output columns separately; this validation bundle
+cannot discover external SQL views, DLT pipelines, or BI models.
 
 Use `notebooks/rules_engine_serverless_performance.py` for cache-free
 Databricks serverless benchmarks. It materializes every timed case to Delta and

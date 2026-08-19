@@ -1,5 +1,6 @@
 bundle:
   name: rules_engine
+  databricks_cli_version: ">= 0.296.1"
 
 artifacts:
   rules_engine:
@@ -11,11 +12,13 @@ artifacts:
 
 variables:
   existing_cluster_id:
-    description: Existing Databricks cluster ID used by Databricks jobs.
+    description: Existing Databricks cluster ID used only for dev validation.
   system_test_schema:
     description: Disposable catalog.schema used by the system-test job; schema name must contain test, scratch, or tmp.
-  workspace_host:
-    description: Databricks workspace URL for the selected deployment target.
+  prod_job_cluster_node_type_id:
+    description: Cloud-specific node type for the production validation job cluster.
+  prod_service_principal_name:
+    description: Application ID of the service principal that runs and manages production validation.
 
 resources:
   jobs:
@@ -25,11 +28,13 @@ resources:
       parameters:
         - name: SCHEMA
           default: ${var.system_test_schema}
+        - name: EXPECTED_RULES_ENGINE_VERSION
+          default: "0.4.0"
         - name: RULES_ENGINE_RUN_SPARK_TESTS
           default: "1"
       tasks:
         - task_key: run_system_tests
-          existing_cluster_id: ${var.existing_cluster_id}
+          job_cluster_key: system_tests
           max_retries: 0
           timeout_seconds: 7200
           notebook_task:
@@ -39,15 +44,36 @@ resources:
             - whl: ./dist/rules_engine-0.4.0-py3-none-any.whl
             - pypi:
                 package: pytest>=8,<9
+      job_clusters:
+        - job_cluster_key: system_tests
+          new_cluster:
+            spark_version: 15.4.x-scala2.12
+            num_workers: 1
 
 targets:
   dev:
     mode: development
     default: true
+    cluster_id: ${var.existing_cluster_id}
     workspace:
-      host: ${var.workspace_host}
+      profile: rules-engine-dev
 
   prod:
     mode: production
+    git:
+      branch: main
     workspace:
-      host: ${var.workspace_host}
+      profile: rules-engine-prod
+      root_path: /Workspace/Production/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      service_principal_name: ${var.prod_service_principal_name}
+    permissions:
+      - level: CAN_MANAGE
+        service_principal_name: ${var.prod_service_principal_name}
+    resources:
+      jobs:
+        rules_engine_system_tests:
+          job_clusters:
+            - job_cluster_key: system_tests
+              new_cluster:
+                node_type_id: ${var.prod_job_cluster_node_type_id}

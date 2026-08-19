@@ -98,7 +98,10 @@ def test_spark_runtime_evaluates_row_rule(spark):
             "null_result_mode": "null",
         }
     )
-    df = spark.createDataFrame([{"account": "A"}, {"account": "B"}])
+    df = spark.createDataFrame(
+        [("A", "existing"), ("B", "unchanged")],
+        ["account", "bucket"],
+    )
 
     output = _spark_runtime().evaluate_dataframe(df, ruleset, full_audit=True)
     matched_rules_type = output.schema["rules_engine_matched_rules"].dataType
@@ -125,6 +128,9 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert rows[0]["rules_engine_assignment_results"][0]["authored_expression"] == (
         "bucket = 'matched'"
     )
+    assert rows[0]["rules_engine_assignment_results"][0]["old_value"] == "existing"
+    assert rows[0]["rules_engine_assignment_results"][0]["proposed_value"] == "matched"
+    assert rows[0]["rules_engine_assignment_results"][0]["changed"] is True
     assert match_trace["rule_id"] == "r1"
     assert match_trace["rule_name"] == "Rule 1"
     assert match_trace["rule_order"] == 1
@@ -137,6 +143,85 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert rows[1]["rules_engine_first_matched_rule_trace"] is None
     assert rows[1]["rules_engine_matched_rules"] == []
     assert rows[1]["rules_engine_assignment_results"] == []
+
+    multi_match_ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "multi",
+            "ruleset_name": "Multi-match",
+            "version": "1",
+            "status": "published",
+            "rules": [
+                {
+                    "rule_id": rule_id,
+                    "rule_name": rule_name,
+                    "rule_order": rule_order,
+                    "stop_on_match": False,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                            }
+                        ]
+                    },
+                    "assign": assignments,
+                }
+                for rule_id, rule_name, rule_order, assignments in (
+                    (
+                        "first",
+                        "First",
+                        1,
+                        [
+                            {
+                                "assignment_id": "first_bucket",
+                                "target_field": "bucket",
+                                "value": {"literal": "first"},
+                            }
+                        ],
+                    ),
+                    (
+                        "second",
+                        "Second",
+                        2,
+                        [
+                            {
+                                "assignment_id": "second_bucket",
+                                "target_field": "bucket",
+                                "value": {"literal": "second"},
+                            },
+                            {
+                                "assignment_id": "second_review",
+                                "target_field": "review",
+                                "value": {"literal": True},
+                            },
+                        ],
+                    ),
+                )
+            ],
+        }
+    )
+    multi_row = _spark_runtime().evaluate_dataframe(
+        spark.createDataFrame([("A", "original")], ["account", "bucket"]),
+        multi_match_ruleset,
+        full_audit=True,
+    ).collect()[0]
+    multi_events = {
+        event["assignment_id"]: event
+        for event in multi_row["rules_engine_assignment_results"]
+    }
+
+    assert multi_row["rules_engine_matched_rule_ids"] == ["first", "second"]
+    assert multi_row["rules_engine_assign"].asDict() == {
+        "bucket": "second",
+        "review": True,
+    }
+    assert multi_events["first_bucket"]["effective"] is False
+    assert multi_events["first_bucket"]["overridden_by_rule_id"] == "second"
+    assert multi_events["first_bucket"]["overridden_by_assignment_id"] == (
+        "second_bucket"
+    )
+    assert multi_events["second_bucket"]["old_value"] == "original"
 
 
 def test_spark_runtime_builds_one_python_udf(spark, monkeypatch):
@@ -280,23 +365,42 @@ def test_spark_runtime_evaluates_literal_only_rule_without_source_dependencies(s
     Why: The optimized UDF input struct must support rules requiring no source fields.
     Fails when: Empty source projection produces an invalid Spark struct or row payload.
     """
-    ruleset = _compile(
+    ruleset = YamlRulesetCompiler().compile_payload(
         {
-            "left": {"literal": "A"},
-            "operator": "eq",
-            "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
+            "ruleset_id": "literal_only",
+            "ruleset_name": "Literal only",
+            "version": "1",
+            "status": "published",
+            "rules": [
+                {
+                    "rule_id": "literal_match",
+                    "rule_name": "Literal match",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"literal": "A"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                            }
+                        ]
+                    },
+                    "assign": [],
+                }
+            ],
         }
     )
     df = spark.createDataFrame([{"unused_payload": "kept"}])
 
     assert required_source_columns(ruleset) == ()
 
-    row = _spark_runtime().evaluate_dataframe(df, ruleset).collect()[0]
+    output = _spark_runtime().evaluate_dataframe(df, ruleset)
+    row = output.collect()[0]
 
     assert row["unused_payload"] == "kept"
     assert row["rules_engine_matched"] is True
+    assert row["rules_engine_assign"] is None
+    assert output.schema["rules_engine_assign"].dataType.fieldNames() == ["__empty"]
 
 
 def test_spark_runtime_applies_column_prefix_to_all_new_outputs(spark):
