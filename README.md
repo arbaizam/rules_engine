@@ -1737,25 +1737,13 @@ custom-function serialization, and both error modes.
 
 ## Packaging
 
-This repository owns the Python source and package build only. Deployment
-configuration is intentionally maintained by each consuming environment.
+This repository owns the Python source and package metadata only. Wheel builds
+and deployment configuration are maintained by each consuming environment.
 
 The wheel includes the `rules_engine` package only. Repository utilities under
 `tools/` are migration and support tooling rather than runtime dependencies.
 `pyproject.toml` requires PySpark 3.5 or newer; test against every target runtime
 before adopting runtime-specific types such as `timestamp_ntz`.
-
-Build the wheel locally:
-
-```powershell
-python -m pip install build
-python tools/build_release_wheel.py
-```
-
-The release builder removes stale repository-local build outputs, requires one
-wheel whose filename matches the package version, uses deterministic archive
-timestamps, and verifies the reviewed SHA-256 digest recorded in
-`tools/build_release_wheel.py`.
 
 Keep `docs/rules_engine_system_test_uat_plan.md` synchronized with
 `notebooks/rules_engine_system_tests.py` when changing system-test coverage.
@@ -1770,11 +1758,9 @@ Recommended local workflow:
 4. Run Spark worker-evaluator tests.
 5. Run the default test suite.
 6. Commit the reviewed tree and tag it with the package version.
-7. Build exactly one versioned release wheel from that clean commit.
-8. Run Spark tests in Databricks or Spark-enabled CI.
-9. Review generated Delta metadata rows from Databricks validation.
-10. Run the serverless performance notebook for runtime-sensitive changes.
-11. Promote the hash-identified package artifact to the target environment.
+7. Run Spark tests in Databricks or Spark-enabled CI.
+8. Review generated Delta metadata rows from Databricks validation.
+9. Run the serverless performance notebook for runtime-sensitive changes.
 
 Recommended Databricks workflow:
 
