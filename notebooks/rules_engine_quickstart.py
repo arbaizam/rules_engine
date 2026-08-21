@@ -80,13 +80,9 @@ rules:
         - left: {field: status}
           operator: eq
           right: {literal: OPEN, value_type: string}
-          null_input_mode: propagate
-          null_result_mode: "null"
         - left: {field: amount}
           operator: ge
           right: {literal: 100, value_type: number}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       review_bucket: high_value_open
 expect:

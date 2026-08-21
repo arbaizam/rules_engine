@@ -11,6 +11,7 @@ from typing import Any
 
 from rules_engine.human_readable import HumanReadableRulesetFormatter
 from rules_engine.models import (
+    AssignedOperand,
     Condition,
     ConditionGroup,
     CustomFunctionOperand,
@@ -246,25 +247,29 @@ class RulesetDiffer:
                 else None
             ),
             "tolerance_abs": format(condition.tolerance_abs, "f"),
-            "null_input_mode": condition.null_input_mode.value,
-            "null_result_mode": condition.null_result_mode.value,
-            "null_default_value": self._contract_value(
-                condition.null_default_value
-            ),
+            "error_on_null": condition.error_on_null,
         }
 
     def _operand_contract(self, operand: Operand) -> Any:
         """Return a deterministic representation of an operand tree."""
         if isinstance(operand, FieldOperand):
-            return {"kind": operand.kind.value, "field_name": operand.field_name}
-        if isinstance(operand, LiteralOperand):
-            return {
+            contract: dict[str, Any] = {
+                "kind": operand.kind.value,
+                "field_name": operand.field_name,
+            }
+        elif isinstance(operand, AssignedOperand):
+            contract = {
+                "kind": operand.kind.value,
+                "target_field": operand.target_field,
+            }
+        elif isinstance(operand, LiteralOperand):
+            contract = {
                 "kind": operand.kind.value,
                 "value": self._contract_value(operand.value),
                 "value_type": operand.value_type,
             }
-        if isinstance(operand, CustomFunctionOperand):
-            return {
+        elif isinstance(operand, CustomFunctionOperand):
+            contract = {
                 "kind": operand.kind.value,
                 "function_name": operand.function_name,
                 "args": tuple(
@@ -275,13 +280,20 @@ class RulesetDiffer:
                     )
                 ),
             }
-        raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+        else:
+            raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+        contract["default_if_null"] = (
+            self._operand_contract(operand.default_if_null)
+            if operand.default_if_null is not None
+            else None
+        )
+        return contract
 
     def _argument_contract(self, value: Any) -> Any:
         """Return the contract for an operand-shaped or literal argument."""
         if isinstance(
             value,
-            (FieldOperand, LiteralOperand, CustomFunctionOperand),
+            (AssignedOperand, FieldOperand, LiteralOperand, CustomFunctionOperand),
         ):
             return self._operand_contract(value)
         return self._contract_value(value)

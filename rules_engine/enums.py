@@ -29,6 +29,7 @@ class OperandKind(str, Enum):
     """Kinds of operands that can appear in conditions and assignments."""
 
     FIELD = "field"
+    ASSIGNED = "assigned"
     LITERAL = "literal"
     CUSTOM_FUNCTION = "custom_function"
 
@@ -54,23 +55,6 @@ class ComparisonOperator(str, Enum):
     ENDS_WITH = "ends_with"
     IS_NULL = "is_null"
     IS_NOT_NULL = "is_not_null"
-
-
-class NullInputMode(str, Enum):
-    """How an operand handles null inputs before comparison or aggregation."""
-
-    IGNORE = "ignore"
-    ZERO = "zero"
-    PROPAGATE = "propagate"
-    ERROR = "error"
-
-
-class NullResultMode(str, Enum):
-    """How a condition handles a null comparison result."""
-
-    NULL = "null"
-    DEFAULT = "default"
-    ERROR = "error"
 
 
 class ValidationSeverity(str, Enum):

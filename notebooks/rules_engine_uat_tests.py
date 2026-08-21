@@ -214,8 +214,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -585,44 +583,7 @@ print("PASS: Boundary values produced expected outcomes.")
 print("Business review prompt: Confirm threshold/null/text edge cases are approved.")
 
 # COMMAND ----------
-print("UAT-013: Precomputed aggregate business rules match manual calculations")
-print("-" * 80)
-print("Area: Runtime results")
-print("Priority: High")
-print("Owner Role: Business Owner")
-print("Expected Result: Engine results agree with manual calculations for sampled groups or datasets.")
-print("")
-
-from rules_engine import RulesEngineService
-
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-RULESET_NAME = globals().get("UAT_RULESET_NAME")
-RULESET_VERSION = globals().get("UAT_RULESET_VERSION")
-UAT_AGGREGATE_ROWS = globals().get("UAT_AGGREGATE_ROWS")
-UAT_AGGREGATE_EXPECTED_MATCHES = globals().get("UAT_AGGREGATE_EXPECTED_MATCHES")
-
-assert SCHEMA and RULESET_NAME and RULESET_VERSION, "Set RULES_ENGINE_SCHEMA, UAT_RULESET_NAME, and UAT_RULESET_VERSION."
-assert UAT_AGGREGATE_ROWS, "Set UAT_AGGREGATE_ROWS to sample records containing precomputed aggregate columns and record_id."
-assert UAT_AGGREGATE_EXPECTED_MATCHES, "Set UAT_AGGREGATE_EXPECTED_MATCHES as {record_id: expected_boolean}."
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-result_rows = service.evaluate_dataframe(
-    spark.createDataFrame(UAT_AGGREGATE_ROWS),
-    ruleset_name=RULESET_NAME,
-    version=RULESET_VERSION,
-).collect()
-results_by_id = {row["record_id"]: row.asDict(recursive=True) for row in result_rows}
-
-for record_id, expected_matched in UAT_AGGREGATE_EXPECTED_MATCHES.items():
-    actual_matched = results_by_id[record_id]["rules_engine_matched"]
-    print(f"{record_id}: expected={expected_matched}, actual={actual_matched}")
-    assert actual_matched == expected_matched
-
-print("PASS: Precomputed aggregate outcomes matched manual expectations.")
-print("Business review prompt: Confirm upstream aggregate calculations support these outcomes.")
-
-# COMMAND ----------
-print("UAT-014: Standard text/number transformations produce recognizable business outcomes")
+print("UAT-013: Standard text/number transformations produce recognizable business outcomes")
 print("-" * 80)
 print("Area: Custom functions")
 print("Priority: Medium")
@@ -661,93 +622,11 @@ print("PASS: Function-driven assignment outcomes matched expectations.")
 print("Business review prompt: Confirm function behavior matches source-data expectations.")
 
 # COMMAND ----------
-print("UAT-015: Setup notebook can be rerun safely before publishing")
+print("UAT-014: Retirement workflow removes a version from runtime eligibility")
 print("-" * 80)
 print("Area: Operational workflow")
 print("Priority: High")
 print("Owner Role: UAT Tester")
-print("Expected Result: Notebook succeeds, refreshes package metadata, and creates no duplicate rows.")
-print("")
-
-from rules_engine import RulesEngineService
-
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-assert SCHEMA, "Set RULES_ENGINE_SCHEMA before running UAT tests."
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-
-service.create_tables(mode="ignore")
-before = spark.table(service.table_names.function_registry).where("active_flag = true").count()
-service.save_standard_function_registry()
-after = spark.table(service.table_names.function_registry).where("active_flag = true").count()
-
-duplicates = spark.sql(f"""
-    SELECT function_name, COUNT(*) AS row_count
-    FROM {service.table_names.function_registry}
-    GROUP BY function_name
-    HAVING COUNT(*) > 1
-""").collect()
-
-assert after >= before
-assert len(duplicates) == 0, f"Expected no duplicate function registry rows, found {duplicates}."
-
-print("PASS: Setup rerun completed without duplicate standard function metadata.")
-print("Business review prompt: Confirm setup rerun behavior is acceptable for operators.")
-
-# COMMAND ----------
-print("UAT-016: Publish notebook can be rerun safely for same candidate and handles duplicate publish clearly")
-print("-" * 80)
-print("Area: Operational workflow")
-print("Priority: High")
-print("Owner Role: UAT Tester")
-print("Expected Result: Notebook fails or stops with a clear duplicate version message and does not overwrite the original published row.")
-print("")
-
-from rules_engine import RulesEngineService
-
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-RULESET_NAME = globals().get("UAT_RULESET_NAME")
-RULESET_VERSION = globals().get("UAT_RULESET_VERSION")
-
-assert SCHEMA, "Set RULES_ENGINE_SCHEMA before running UAT tests."
-assert RULESET_NAME, "Set UAT_RULESET_NAME before running UAT tests."
-assert RULESET_VERSION, "Set UAT_RULESET_VERSION before running UAT tests."
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-rows = spark.table(service.table_names.ruleset_versions).where(
-    f"ruleset_name = '{RULESET_NAME}' AND version = '{RULESET_VERSION}'"
-).collect()
-assert len(rows) == 1, (
-    f"Expected exactly one UAT metadata row for {RULESET_NAME} version {RULESET_VERSION}, "
-    f"found {len(rows)}."
-)
-row = rows[0]
-loaded = service.load_published(RULESET_NAME, version=RULESET_VERSION)
-
-from rules_engine.exceptions import RepositoryError
-
-original_published_by = row["published_by"]
-try:
-    service.publish(loaded, published_by="uat-duplicate-attempt")
-    duplicate_failed = False
-except RepositoryError:
-    duplicate_failed = True
-
-rerun_rows = spark.table(service.table_names.ruleset_versions).where(
-    f"ruleset_name = '{RULESET_NAME}' AND version = '{RULESET_VERSION}'"
-).collect()
-assert duplicate_failed, "Expected duplicate publish rerun to fail clearly."
-assert len(rerun_rows) == 1
-assert rerun_rows[0]["published_by"] == original_published_by
-
-print("PASS: Duplicate publish was rejected and original row was preserved.")
-print("Business review prompt: Confirm duplicate publish behavior is clear enough for UAT operators.")
-
-# COMMAND ----------
-print("UAT-017: Retirement workflow removes a version from runtime eligibility")
-print("-" * 80)
-print("Area: Operational workflow")
-print("Priority: High")
-print("Owner Role: Release Manager")
 print("Expected Result: The version status changes to retired and cannot be loaded through published-only load calls.")
 print("")
 
@@ -778,8 +657,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -803,11 +680,11 @@ print("PASS: Retirement workflow removed test version from published eligibility
 print("Business review prompt: Confirm retirement behavior meets release-management expectations.")
 
 # COMMAND ----------
-print("UAT-018: Release evidence is sufficient for audit review")
+print("UAT-015: Release evidence is sufficient for audit review")
 print("-" * 80)
 print("Area: Operational workflow")
 print("Priority: Medium")
-print("Owner Role: Release Manager")
+print("Owner Role: Business Owner")
 print("Expected Result: Release evidence is complete enough to support approval and later audit.")
 print("")
 
@@ -843,7 +720,7 @@ print("PASS: Release evidence fields are populated for audit review.")
 print("Business review prompt: Confirm notebook run links and approvals are stored with release evidence.")
 
 # COMMAND ----------
-print("UAT-019: Output DataFrame schema is usable by downstream jobs")
+print("UAT-016: Output DataFrame schema is usable by downstream jobs")
 print("-" * 80)
 print("Area: Downstream readiness")
 print("Priority: High")
@@ -904,7 +781,7 @@ print("PASS: Runtime output schema contains expected downstream columns.")
 print("Business review prompt: Confirm downstream consumers can use these output columns.")
 
 # COMMAND ----------
-print("UAT-020: Assignment struct can be consumed by downstream Spark consumers")
+print("UAT-017: Assignment struct can be consumed by downstream Spark consumers")
 print("-" * 80)
 print("Area: Downstream readiness")
 print("Priority: High")
@@ -947,7 +824,7 @@ print("PASS: Assignment structs converted into dictionaries for downstream use."
 print("Business review prompt: Confirm assignment structure is acceptable to consumers.")
 
 # COMMAND ----------
-print("UAT-021: Runtime error handling is acceptable for business operations")
+print("UAT-018: Runtime error handling is acceptable for business operations")
 print("-" * 80)
 print("Area: Exception handling")
 print("Priority: Medium")
@@ -980,28 +857,7 @@ print("PASS: Runtime error column is available for operational review.")
 print("Business review prompt: Confirm whether fail_on_error=True or False is appropriate for production.")
 
 # COMMAND ----------
-print("UAT-022: Notebook instructions are clear enough for a new operator")
-print("-" * 80)
-print("Area: Documentation")
-print("Priority: Medium")
-print("Owner Role: UAT Tester")
-print("Expected Result: Tester can complete the process using notebook instructions and parameters without engineering intervention.")
-print("")
-
-UAT_OPERATOR_CONFIRMED = globals().get("UAT_OPERATOR_CONFIRMED")
-UAT_OPERATOR_NOTES = globals().get("UAT_OPERATOR_NOTES", "")
-
-print(f"Operator confirmed: {UAT_OPERATOR_CONFIRMED}")
-print(f"Operator notes: {UAT_OPERATOR_NOTES}")
-
-assert UAT_OPERATOR_CONFIRMED is True, (
-    "Set UAT_OPERATOR_CONFIRMED = True after an operator completes setup/publish without engineering intervention."
-)
-
-print("PASS: Operator confirmed notebook instructions are clear enough.")
-
-# COMMAND ----------
-print("UAT-023: Business owner approves the published candidate version")
+print("UAT-019: Business owner approves the published candidate version")
 print("-" * 80)
 print("Area: Sign-off")
 print("Priority: Critical")
@@ -1028,7 +884,6 @@ assert len(rows) == 1, (
     f"found {len(rows)}."
 )
 row = rows[0]
-loaded = service.load_published(RULESET_NAME, version=RULESET_VERSION)
 
 UAT_BUSINESS_APPROVAL_STATUS = globals().get("UAT_BUSINESS_APPROVAL_STATUS")
 UAT_BUSINESS_APPROVAL_COMMENTS = globals().get("UAT_BUSINESS_APPROVAL_COMMENTS")
@@ -1042,47 +897,3 @@ assert UAT_BUSINESS_APPROVAL_STATUS in {"approve", "defer", "reject"}, (
 assert UAT_BUSINESS_APPROVAL_COMMENTS, "Set UAT_BUSINESS_APPROVAL_COMMENTS with business owner rationale."
 
 print("PASS: Business owner decision was recorded for the UAT candidate.")
-
-# COMMAND ----------
-print("UAT-024: Release manager confirms deployment readiness")
-print("-" * 80)
-print("Area: Sign-off")
-print("Priority: Critical")
-print("Owner Role: Release Manager")
-print("Expected Result: Release manager signs off or records conditions for release.")
-print("")
-
-from rules_engine import RulesEngineService
-
-SCHEMA = globals().get("RULES_ENGINE_SCHEMA")
-RULESET_NAME = globals().get("UAT_RULESET_NAME")
-RULESET_VERSION = globals().get("UAT_RULESET_VERSION")
-
-assert SCHEMA, "Set RULES_ENGINE_SCHEMA before running UAT tests."
-assert RULESET_NAME, "Set UAT_RULESET_NAME before running UAT tests."
-assert RULESET_VERSION, "Set UAT_RULESET_VERSION before running UAT tests."
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-rows = spark.table(service.table_names.ruleset_versions).where(
-    f"ruleset_name = '{RULESET_NAME}' AND version = '{RULESET_VERSION}'"
-).collect()
-assert len(rows) == 1, (
-    f"Expected exactly one UAT metadata row for {RULESET_NAME} version {RULESET_VERSION}, "
-    f"found {len(rows)}."
-)
-row = rows[0]
-loaded = service.load_published(RULESET_NAME, version=RULESET_VERSION)
-
-UAT_RELEASE_MANAGER_DECISION = globals().get("UAT_RELEASE_MANAGER_DECISION")
-UAT_RELEASE_MANAGER_COMMENTS = globals().get("UAT_RELEASE_MANAGER_COMMENTS")
-
-print(f"Release manager decision: {UAT_RELEASE_MANAGER_DECISION}")
-print(f"Release manager comments: {UAT_RELEASE_MANAGER_COMMENTS}")
-
-assert row["status"] == "published"
-assert UAT_RELEASE_MANAGER_DECISION in {"ready", "not_ready", "conditional"}, (
-    "Set UAT_RELEASE_MANAGER_DECISION to ready, not_ready, or conditional."
-)
-assert UAT_RELEASE_MANAGER_COMMENTS, "Set UAT_RELEASE_MANAGER_COMMENTS with release rationale."
-
-print("PASS: Release manager decision was recorded for deployment readiness.")

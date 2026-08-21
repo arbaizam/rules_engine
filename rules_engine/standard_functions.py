@@ -3,7 +3,7 @@ Reusable custom functions for common ruleset authoring needs.
 
 The functions are plain Python callables and can be registered into a
 ``FunctionRegistry`` for runtime use. They intentionally return ``None`` for
-``None`` inputs unless the function is explicitly about defaulting.
+``None`` inputs unless their documented transformation produces another value.
 """
 
 from __future__ import annotations
@@ -119,13 +119,6 @@ def contains_any(value: Any, candidates: list[Any] | tuple[Any, ...]) -> bool | 
         return None
     text = str(value)
     return any(str(candidate) in text for candidate in candidates)
-
-
-def default_if_null(value: Any, default: Any) -> Any:
-    """
-    Return ``default`` when value is ``None``.
-    """
-    return default if value is None else value
 
 
 def null_if(value: Any, compare_to: Any) -> Any | None:
@@ -365,16 +358,6 @@ STANDARD_FUNCTION_SPECS = (
         version=STANDARD_FUNCTION_VERSION,
     ),
     CustomFunctionSpec(
-        function_name="default_if_null",
-        implementation_reference="rules_engine.standard_functions.default_if_null",
-        arg_names=("value", "default"),
-        allowed_in_condition_flag=True,
-        allowed_in_assignment_flag=True,
-        return_type_hint="any",
-        description="Replace null values with a default.",
-        version=STANDARD_FUNCTION_VERSION,
-    ),
-    CustomFunctionSpec(
         function_name="null_if",
         implementation_reference="rules_engine.standard_functions.null_if",
         arg_names=("value", "compare_to"),
@@ -493,10 +476,6 @@ STANDARD_FUNCTION_IMPLEMENTATIONS = {
     "contains_any": lambda **kwargs: contains_any(
         kwargs["value"],
         kwargs["candidates"],
-    ),
-    "default_if_null": lambda **kwargs: default_if_null(
-        kwargs["value"],
-        kwargs["default"],
     ),
     "null_if": lambda **kwargs: null_if(kwargs["value"], kwargs["compare_to"]),
     "to_number": lambda **kwargs: to_number(kwargs["value"]),

@@ -19,8 +19,6 @@ rules:
         literal: ISWAP
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -28,8 +26,6 @@ rules:
         literal: ASWAPS
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10110'
 - rule_id: cap_002
@@ -46,8 +42,6 @@ rules:
         literal: INV-P
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10111'
 - rule_id: cap_003
@@ -64,8 +58,6 @@ rules:
         literal: INV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: InstrumentType
       operator: eq
@@ -73,8 +65,6 @@ rules:
         literal: Fed Funds Sold Overnight
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10112'
 - rule_id: cap_004
@@ -91,8 +81,6 @@ rules:
         literal: INV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: contains
@@ -100,8 +88,6 @@ rules:
         literal: STFA
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: not_like
@@ -109,8 +95,6 @@ rules:
         literal: INV-P%
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10113'
 - rule_id: cap_005
@@ -127,8 +111,6 @@ rules:
         literal: INV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -136,8 +118,6 @@ rules:
         literal: LTFA
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10120'
 - rule_id: cap_006
@@ -154,8 +134,6 @@ rules:
         literal: INV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -163,8 +141,6 @@ rules:
         literal: LSVA
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10130'
 - rule_id: cap_007
@@ -181,8 +157,6 @@ rules:
         literal: INV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -190,8 +164,6 @@ rules:
         literal: ASWAP_BONDS
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10140'
 - rule_id: cap_008
@@ -208,8 +180,6 @@ rules:
         literal: INV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -217,8 +187,6 @@ rules:
         literal: MUNI
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10175'
 - rule_id: cap_009
@@ -235,8 +203,6 @@ rules:
         literal: INV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -244,8 +210,6 @@ rules:
         literal: ARM
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10190'
 - rule_id: cap_010
@@ -262,8 +226,6 @@ rules:
         literal: INV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: in
@@ -274,8 +236,6 @@ rules:
         - VARDUS
         value_type: list
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10191'
 - rule_id: cap_011
@@ -292,8 +252,6 @@ rules:
         literal: INV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -301,8 +259,6 @@ rules:
         literal: MBS
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10192'
 - rule_id: cap_012
@@ -319,8 +275,6 @@ rules:
         literal: INV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: in
@@ -330,8 +284,6 @@ rules:
         - DUS
         value_type: list
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10193'
 - rule_id: cap_013
@@ -348,8 +300,6 @@ rules:
         literal: LOC
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10205'
 - rule_id: cap_014
@@ -366,8 +316,6 @@ rules:
         literal: ADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -375,8 +323,6 @@ rules:
         literal: FIXADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: eq
@@ -384,8 +330,6 @@ rules:
         literal: '0'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10210'
 - rule_id: cap_015
@@ -402,8 +346,6 @@ rules:
         literal: ADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -411,8 +353,6 @@ rules:
         literal: FIXADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: eq
@@ -420,8 +360,6 @@ rules:
         literal: '1'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10215'
 - rule_id: cap_016
@@ -438,8 +376,6 @@ rules:
         literal: ADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -447,8 +383,6 @@ rules:
         literal: ADJADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10220'
 - rule_id: cap_017
@@ -465,8 +399,6 @@ rules:
         literal: ADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -474,8 +406,6 @@ rules:
         literal: AMORTADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10230'
 - rule_id: cap_018
@@ -492,8 +422,6 @@ rules:
         literal: ADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -501,8 +429,6 @@ rules:
         literal: FPADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10240'
 - rule_id: cap_019
@@ -519,8 +445,6 @@ rules:
         literal: ADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -528,8 +452,6 @@ rules:
         literal: APADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10250'
 - rule_id: cap_020
@@ -546,8 +468,6 @@ rules:
         literal: ADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -555,8 +475,6 @@ rules:
         literal: FBADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10260'
 - rule_id: cap_021
@@ -573,8 +491,6 @@ rules:
         literal: ADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -582,8 +498,6 @@ rules:
         literal: CONVADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10270'
 - rule_id: cap_022
@@ -600,8 +514,6 @@ rules:
         literal: ISWAP
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -609,8 +521,6 @@ rules:
         literal: PUTSWAP
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10280'
 - rule_id: cap_023
@@ -627,8 +537,6 @@ rules:
         literal: ADV
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -636,8 +544,6 @@ rules:
         literal: CONVADVF
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10290'
 - rule_id: cap_024
@@ -654,8 +560,6 @@ rules:
         literal: ISWAP
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: in
@@ -665,8 +569,6 @@ rules:
         - TNS_ADVDERIV
         value_type: list
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10299'
 - rule_id: cap_025
@@ -683,8 +585,6 @@ rules:
         literal: MPFLN
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10310'
 - rule_id: cap_026
@@ -701,8 +601,6 @@ rules:
         literal: MPFDC
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10340'
 - rule_id: cap_027
@@ -719,8 +617,6 @@ rules:
         literal: MD
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: in
@@ -730,8 +626,6 @@ rules:
         - MEM_OND
         value_type: list
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: ne
@@ -739,8 +633,6 @@ rules:
         literal: '1'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20105'
 - rule_id: cap_028
@@ -757,8 +649,6 @@ rules:
         literal: ISWAP
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -766,8 +656,6 @@ rules:
         literal: LSWAPS
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: ne
@@ -775,8 +663,6 @@ rules:
         literal: '1'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20110'
 - rule_id: cap_029
@@ -794,8 +680,6 @@ rules:
           literal: BOND
           value_type: string
         tolerance_abs: '0'
-        null_input_mode: propagate
-        null_result_mode: 'null'
       - left:
           field: BK_PositionID
         operator: starts_with
@@ -803,8 +687,6 @@ rules:
           literal: DN
           value_type: string
         tolerance_abs: '0'
-        null_input_mode: propagate
-        null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: contains
@@ -812,8 +694,6 @@ rules:
         literal: _LSWAP_BONDS
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: ne
@@ -821,8 +701,6 @@ rules:
         literal: '1'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20120'
 - rule_id: cap_030
@@ -839,8 +717,6 @@ rules:
         literal: BOND
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -848,8 +724,6 @@ rules:
         literal: LCALBND
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: ne
@@ -857,8 +731,6 @@ rules:
         literal: '1'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20130'
 - rule_id: cap_031
@@ -876,8 +748,6 @@ rules:
           literal: BOND
           value_type: string
         tolerance_abs: '0'
-        null_input_mode: propagate
-        null_result_mode: 'null'
       - left:
           field: BK_PositionID
         operator: starts_with
@@ -885,8 +755,6 @@ rules:
           literal: DN
           value_type: string
         tolerance_abs: '0'
-        null_input_mode: propagate
-        null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -894,8 +762,6 @@ rules:
         literal: FIXBND&MTN
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: ne
@@ -903,8 +769,6 @@ rules:
         literal: '1'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20140'
 - rule_id: cap_032
@@ -922,8 +786,6 @@ rules:
           literal: BOND
           value_type: string
         tolerance_abs: '0'
-        null_input_mode: propagate
-        null_result_mode: 'null'
       - left:
           field: BK_PositionID
         operator: starts_with
@@ -931,8 +793,6 @@ rules:
           literal: DN
           value_type: string
         tolerance_abs: '0'
-        null_input_mode: propagate
-        null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -940,8 +800,6 @@ rules:
         literal: NSVL
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: ne
@@ -949,8 +807,6 @@ rules:
         literal: '1'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20150'
 - rule_id: cap_033
@@ -967,8 +823,6 @@ rules:
         literal: MD
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -976,8 +830,6 @@ rules:
         literal: CD_REPO
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: ne
@@ -985,8 +837,6 @@ rules:
         literal: '1'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20155'
 - rule_id: cap_034
@@ -1003,8 +853,6 @@ rules:
         literal: DN
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -1012,8 +860,6 @@ rules:
         literal: DN&ZB
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: ne
@@ -1021,8 +867,6 @@ rules:
         literal: '1'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20160'
 - rule_id: cap_035
@@ -1039,8 +883,6 @@ rules:
         literal: MACRO
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20410'
 - rule_id: cap_036
@@ -1057,8 +899,6 @@ rules:
         literal: ISWAP
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -1066,8 +906,6 @@ rules:
         literal: LSWAP
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: eq
@@ -1075,8 +913,6 @@ rules:
         literal: '1'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20420'
 - rule_id: cap_037
@@ -1094,8 +930,6 @@ rules:
           literal: BOND
           value_type: string
         tolerance_abs: '0'
-        null_input_mode: propagate
-        null_result_mode: 'null'
       - left:
           field: BK_PositionID
         operator: starts_with
@@ -1103,8 +937,6 @@ rules:
           literal: DN
           value_type: string
         tolerance_abs: '0'
-        null_input_mode: propagate
-        null_result_mode: 'null'
     - left:
         field: IsTNS
       operator: eq
@@ -1112,8 +944,6 @@ rules:
         literal: '1'
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20430'
 - rule_id: cap_038
@@ -1130,8 +960,6 @@ rules:
         literal: CAP
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: BK_AccountID
       operator: eq
@@ -1139,7 +967,5 @@ rules:
         literal: CAP
         value_type: string
       tolerance_abs: '0'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20910'

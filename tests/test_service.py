@@ -63,8 +63,6 @@ rules:
         - left: {field: account}
           operator: eq
           right: {literal: A}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -106,7 +104,7 @@ def test_service_from_schema_uses_standard_table_names():
 def test_service_from_schema_accepts_custom_table_names():
     """
     What: Builds a service from schema while overriding metadata table names.
-    Why: Deployments may need project-specific table names without manual repository wiring.
+    Why: Callers may need environment-specific names without manual repository wiring.
     Fails when: from_schema ignores custom table-name overrides.
     """
     service = RulesEngineService.from_schema(
@@ -175,7 +173,7 @@ def test_service_saves_supplied_function_registry_rows():
 def test_service_can_preserve_standard_function_registry_when_requested():
     """
     What: Allows callers to preserve existing standard registry rows explicitly.
-    Why: Package upgrades upsert by default, but controlled deployments may pin metadata.
+    Why: Package upgrades upsert by default, but callers may preserve pinned metadata.
     Fails when: The update_existing option is not passed through.
     """
     repository = RecordingRepository()
@@ -247,8 +245,6 @@ rules:
         - left: {field: BK_AccountID}
           operator: eq
           right: {literal: DN}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       leaf_key: "15656"
 """
@@ -290,19 +286,13 @@ rules:
         - left: {field: account}
           operator: eq
           right: {literal: A}
-          null_input_mode: propagate
-          null_result_mode: "null"
         - any:
             - left: {field: amount}
               operator: gt
               right: {literal: 100}
-              null_input_mode: propagate
-              null_result_mode: "null"
             - left: {field: status}
               operator: eq
               right: {literal: OPEN}
-              null_input_mode: propagate
-              null_result_mode: "null"
     assign:
       bucket: matched
 """

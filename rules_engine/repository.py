@@ -362,8 +362,8 @@ class SparkDeltaRulesetRepository:
         """
         Save function registry metadata rows by function_name.
 
-        Existing rows are updated by default. Set ``update_existing=False`` for
-        deployment setup flows that should register only missing functions.
+        Existing rows are updated by default. Set ``update_existing=False``
+        when only missing functions should be registered.
         """
         logger.info(
             "Saving function registry rows: table=%s row_count=%s update_existing=%s",

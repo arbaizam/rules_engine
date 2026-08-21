@@ -1,2 +1,1 @@
-"""Adjacent tools for rules engine development and migration."""
-
+"""Development and verification tools for the rules engine."""

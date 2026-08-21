@@ -8,7 +8,7 @@
 # MAGIC Runtime environments register the actual Python callable separately.
 # MAGIC
 # MAGIC Use custom functions when a rule needs logic that is too specific for the
-# MAGIC built-in field, literal, and comparison operands.
+# MAGIC built-in field, assigned, literal, and comparison operands.
 
 # COMMAND ----------
 
@@ -18,13 +18,10 @@ import rules_engine
 from rules_engine import (  # noqa: E402
     CustomFunctionSpec,
     FunctionRegistry,
-    RulesEngineService,
     RulesetValidator,
     SparkRulesEngineRuntime,
-    SparkRulesetCompatibilityValidator,
     YamlRulesetCompiler,
     register_standard_functions,
-    standard_function_rows,
 )
 
 print(f"rules_engine version: {rules_engine.__version__}")
@@ -160,8 +157,6 @@ rules:
                 balance: { field: balance }
           operator: ge
           right: { literal: 100, value_type: number }
-          null_input_mode: propagate
-          null_result_mode: "null"
         - left:
             custom_function:
               name: date_add_months
@@ -170,8 +165,6 @@ rules:
                 months: 1
           operator: ge
           right: { literal: "2024-02-29", value_type: date }
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       review_bucket:
         custom_function:

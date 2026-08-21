@@ -82,9 +82,9 @@ print(f"Repository test root: {REPO_ROOT}")
 print(f"Ruleset path fixture: {RULESET_YAML_PATH}")
 
 # COMMAND ----------
-print("ST-001: Setup notebook creates the target schema before table creation")
+print("ST-001: Test harness creates the target schema before table creation")
 print("-" * 80)
-print("Area: Deployment setup")
+print("Area: Metadata storage")
 print("Priority: Critical")
 print("Owner Role: Engineering")
 print("Expected Result: The schema exists and the notebook proceeds to table creation without manual pre-work.")
@@ -105,7 +105,7 @@ print(f"PASS: Schema exists: {SCHEMA}")
 # COMMAND ----------
 print("ST-002: Rules engine metadata tables are created with standard names")
 print("-" * 80)
-print("Area: Deployment setup")
+print("Area: Metadata storage")
 print("Priority: Critical")
 print("Owner Role: Engineering")
 print("Expected Result: ruleset_versions and function_registry exist in the target schema. Rerunning the cell does not fail.")
@@ -124,7 +124,7 @@ print(f"PASS: Metadata tables exist: {service.table_names}")
 # COMMAND ----------
 print("ST-003: Custom metadata table names are honored by the service")
 print("-" * 80)
-print("Area: Deployment setup")
+print("Area: Metadata storage")
 print("Priority: High")
 print("Owner Role: Engineering")
 print("Expected Result: The custom tables are created and service.table_names reports the custom names for later publish/load calls.")
@@ -151,7 +151,7 @@ print("PASS: Custom metadata table names are honored.")
 # COMMAND ----------
 print("ST-004: Metadata table DDL preserves NOT NULL columns")
 print("-" * 80)
-print("Area: Deployment setup")
+print("Area: Metadata storage")
 print("Priority: Critical")
 print("Owner Role: Engineering")
 print("Expected Result: Required columns such as ruleset_id, ruleset_name, version, status, effective_start_date, effective_end_date, payload_json, content_hash, rule_count, function_name, implementation_reference, and active_flag are marked NOT NULL where expected.")
@@ -183,7 +183,7 @@ for column in ["ruleset_id", "ruleset_name", "version", "status", "effective_sta
     expected = rf"\b{column}\b\s+string(?:\s+collate\s+\S+)?\s+not\s+null\b"
     assert re.search(expected, ruleset_normalized_sql), (
         f"Expected ruleset_versions column {column} to be declared NOT NULL in table DDL. "
-        "If SHOW CREATE TABLE shows the column without NOT NULL, recreate or migrate the table "
+        "If SHOW CREATE TABLE shows the column without NOT NULL, recreate the table "
         "with the current rules_engine table DDL."
     )
 
@@ -191,7 +191,7 @@ for column in ["rule_count", "condition_count", "assignment_count", "custom_func
     expected = rf"\b{column}\b\s+int\s+not\s+null\b"
     assert re.search(expected, ruleset_normalized_sql), (
         f"Expected ruleset_versions column {column} to be declared NOT NULL in table DDL. "
-        "If SHOW CREATE TABLE shows the column without NOT NULL, recreate or migrate the table "
+        "If SHOW CREATE TABLE shows the column without NOT NULL, recreate the table "
         "with the current rules_engine table DDL."
     )
 
@@ -203,7 +203,7 @@ for column in ["function_name", "implementation_reference", "arg_contract_payloa
         expected = rf"\b{column}\b\s+{expected_type}\s+not\s+null\b"
     assert re.search(expected, function_normalized_sql), (
         f"Expected function_registry column {column} to be declared NOT NULL in table DDL. "
-        "If SHOW CREATE TABLE shows the column without NOT NULL, recreate or migrate the table "
+        "If SHOW CREATE TABLE shows the column without NOT NULL, recreate the table "
         "with the current rules_engine table DDL."
     )
 
@@ -212,10 +212,10 @@ print("PASS: Required metadata columns are declared NOT NULL in table DDL.")
 # COMMAND ----------
 print("ST-005: Overwrite mode is restricted to disposable environments")
 print("-" * 80)
-print("Area: Deployment setup")
+print("Area: Metadata storage")
 print("Priority: High")
 print("Owner Role: Engineering")
-print("Expected Result: Overwrite recreates tables only in disposable schemas. Production setup uses mode='ignore' or 'error'.")
+print("Expected Result: Overwrite recreates tables only when a disposable schema is explicitly approved.")
 print("")
 from rules_engine import RulesEngineService
 
@@ -423,8 +423,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -443,53 +441,7 @@ assert ruleset.rules[0].assignments[0].target_field == "bucket"
 print("PASS: YAML text compiled into the expected canonical model shape.")
 
 # COMMAND ----------
-print("ST-013: Unsupported legacy aliases are rejected clearly")
-print("-" * 80)
-print("Area: YAML compilation")
-print("Priority: High")
-print("Owner Role: Engineering")
-print("Expected Result: Compilation fails with a clear message identifying the unsupported key and canonical replacement.")
-print("")
-from rules_engine import RulesEngineService
-from rules_engine.exceptions import CompilationError
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-
-invalid_yaml = """
-ruleset_id: st013_ruleset
-ruleset_name: ST013 Ruleset
-version: "1"
-status: published
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: r1
-    rule_name: Alias Rule
-    rule_order: 1
-    when:
-      all:
-        - left:
-            field: account
-          operator: eq
-          right:
-            value: A
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: A
-"""
-
-try:
-    service.compile_yaml_text(invalid_yaml)
-except CompilationError as exc:
-    assert "Unsupported operand key: value" in str(exc), str(exc)
-else:
-    raise AssertionError("Expected unsupported operand alias to fail compilation.")
-
-print("PASS: Unsupported legacy operand alias was rejected clearly.")
-
-# COMMAND ----------
-print("ST-014: Required top-level ruleset metadata is enforced")
+print("ST-013: Required top-level ruleset metadata is enforced")
 print("-" * 80)
 print("Area: YAML compilation")
 print("Priority: Critical")
@@ -519,7 +471,7 @@ else:
 print("PASS: Missing required top-level ruleset metadata was rejected.")
 
 # COMMAND ----------
-print("ST-015: Condition group logical operator shape is enforced")
+print("ST-014: Condition group logical operator shape is enforced")
 print("-" * 80)
 print("Area: YAML compilation")
 print("Priority: High")
@@ -532,8 +484,8 @@ from rules_engine.exceptions import CompilationError
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 invalid_yaml = """
-ruleset_id: st015_ruleset
-ruleset_name: ST015 Ruleset
+ruleset_id: st014_ruleset
+ruleset_name: ST014 Ruleset
 version: "1"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -549,8 +501,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
       any:
         - condition_id: c2
           left:
@@ -558,8 +508,6 @@ rules:
           operator: eq
           right:
             literal: OPEN
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -575,7 +523,7 @@ else:
 print("PASS: Invalid condition group logical operator shape was rejected.")
 
 # COMMAND ----------
-print("ST-016: Valid simple row-level rule passes validation")
+print("ST-015: Valid simple row-level rule passes validation")
 print("-" * 80)
 print("Area: Semantic validation")
 print("Priority: Critical")
@@ -588,8 +536,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 valid_yaml = """
-ruleset_id: st_016_ruleset
-ruleset_name: ST-016 Ruleset
+ruleset_id: st_015_ruleset
+ruleset_name: ST-015 Ruleset
 version: "1"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -605,8 +553,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -621,7 +567,7 @@ assert ruleset.rules[0].root_group.conditions[0].condition_id == "c1"
 print("PASS: Valid simple row-level rule passed validation.")
 
 # COMMAND ----------
-print("ST-017: Owner and owner_department are required before publish")
+print("ST-016: Owner and owner_department are required before publish")
 print("-" * 80)
 print("Area: Semantic validation")
 print("Priority: Critical")
@@ -634,8 +580,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 invalid_yaml = """
-ruleset_id: st_017_ruleset
-ruleset_name: ST-017 Ruleset
+ruleset_id: st_016_ruleset
+ruleset_name: ST-016 Ruleset
 version: "1"
 rules:
   - rule_id: r1
@@ -649,8 +595,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -669,12 +613,63 @@ print(validation.to_text())
 print("PASS: Missing owner and owner_department were rejected.")
 
 # COMMAND ----------
-print("ST-018: Duplicate condition_id values are rejected")
+print("ST-017: Duplicate condition_id values are rejected")
 print("-" * 80)
 print("Area: Semantic validation")
 print("Priority: High")
 print("Owner Role: Engineering")
 print("Expected Result: Validation returns a duplicate condition ID error.")
+print("")
+
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+
+invalid_yaml = """
+ruleset_id: st_017_ruleset
+ruleset_name: ST-017 Ruleset
+version: "1"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: r1
+    rule_name: Rule 1
+    rule_order: 1
+    when:
+      all:
+        - condition_id: c1
+          left:
+            field: account
+          operator: eq
+          right:
+            literal: A
+        - condition_id: c1
+          left:
+            field: status
+          operator: eq
+          right:
+            literal: OPEN
+    assign:
+      bucket: A
+"""
+
+ruleset = service.compile_yaml_text(invalid_yaml)
+validation = service.validator.validate(ruleset)
+check_names = {issue.check_name for issue in validation.issues}
+
+assert validation.has_errors(), "Expected duplicate condition_id validation to fail."
+assert "CONDITION_ID_DUPLICATE" in check_names, validation.to_text()
+
+print(validation.to_text())
+print("PASS: Duplicate condition_id values were rejected.")
+
+# COMMAND ----------
+print("ST-018: Duplicate condition_group_id values are rejected")
+print("-" * 80)
+print("Area: Semantic validation")
+print("Priority: High")
+print("Owner Role: Engineering")
+print("Expected Result: Validation returns a duplicate condition group ID error.")
 print("")
 
 from rules_engine import RulesEngineService
@@ -692,61 +687,6 @@ rules:
     rule_name: Rule 1
     rule_order: 1
     when:
-      all:
-        - condition_id: c1
-          left:
-            field: account
-          operator: eq
-          right:
-            literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
-        - condition_id: c1
-          left:
-            field: status
-          operator: eq
-          right:
-            literal: OPEN
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: A
-"""
-
-ruleset = service.compile_yaml_text(invalid_yaml)
-validation = service.validator.validate(ruleset)
-check_names = {issue.check_name for issue in validation.issues}
-
-assert validation.has_errors(), "Expected duplicate condition_id validation to fail."
-assert "CONDITION_ID_DUPLICATE" in check_names, validation.to_text()
-
-print(validation.to_text())
-print("PASS: Duplicate condition_id values were rejected.")
-
-# COMMAND ----------
-print("ST-019: Duplicate condition_group_id values are rejected")
-print("-" * 80)
-print("Area: Semantic validation")
-print("Priority: High")
-print("Owner Role: Engineering")
-print("Expected Result: Validation returns a duplicate condition group ID error.")
-print("")
-
-from rules_engine import RulesEngineService
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-
-invalid_yaml = """
-ruleset_id: st_019_ruleset
-ruleset_name: ST-019 Ruleset
-version: "1"
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: r1
-    rule_name: Rule 1
-    rule_order: 1
-    when:
       condition_group_id: duplicate_group
       all:
         - condition_id: c1
@@ -755,8 +695,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
         - condition_group_id: duplicate_group
           any:
             - condition_id: c2
@@ -765,8 +703,6 @@ rules:
               operator: eq
               right:
                 literal: OPEN
-              null_input_mode: propagate
-              null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -782,122 +718,7 @@ print(validation.to_text())
 print("PASS: Duplicate condition_group_id values were rejected.")
 
 # COMMAND ----------
-print("ST-020: Aggregate operands are rejected")
-print("-" * 80)
-print("Area: YAML compilation")
-print("Priority: Critical")
-print("Owner Role: Engineering")
-print("Expected Result: Compilation tells authors to precompute aggregate fields upstream.")
-print("")
-
-from rules_engine import RulesEngineService
-from rules_engine.exceptions import CompilationError
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-
-invalid_yaml = """
-ruleset_id: st_020_ruleset
-ruleset_name: ST-020 Ruleset
-version: "1"
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: r1
-    rule_name: Rule 1
-    rule_order: 1
-    when:
-      all:
-        - condition_id: c1
-          left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: group
-              null_input_mode: ignore
-              null_result_mode: "null"
-          operator: gt
-          right:
-            literal: 100
-          null_input_mode: propagate
-          null_result_mode: "null"
-        - condition_id: c2
-          left:
-            aggregate:
-              function: sum
-              field: amount
-              scope: dataset
-              by:
-                - account
-              null_input_mode: ignore
-              null_result_mode: "null"
-          operator: gt
-          right:
-            literal: 100
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: A
-"""
-
-try:
-    service.compile_yaml_text(invalid_yaml)
-    aggregate_rejected = False
-except CompilationError as exc:
-    aggregate_rejected = True
-    assert "Unsupported operand key: aggregate" in str(exc), str(exc)
-
-assert aggregate_rejected, "Expected aggregate operand compilation to fail."
-
-print("PASS: Aggregate operands were rejected at compile time.")
-
-# COMMAND ----------
-print("ST-021: Precomputed aggregate facts compile as fields")
-print("-" * 80)
-print("Area: YAML compilation")
-print("Priority: High")
-print("Owner Role: Engineering")
-print("Expected Result: The field operand compiles and evaluates like any other row-level field.")
-print("")
-
-from rules_engine import RulesEngineService
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-
-valid_yaml = """
-ruleset_id: st_021_ruleset
-ruleset_name: ST-021 Ruleset
-version: "1"
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: r1
-    rule_name: Rule 1
-    rule_order: 1
-    when:
-      all:
-        - condition_id: c1
-          left:
-            field: account_amount_sum
-          operator: gt
-          right:
-            literal: 100
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: A
-"""
-
-ruleset = service.compile_yaml_text(valid_yaml)
-validation = service.validator.validate(ruleset)
-
-assert not validation.has_errors(), validation.to_text()
-assert ruleset.rules[0].root_group.conditions[0].left.field_name == "account_amount_sum"
-
-print(validation.to_text())
-print("PASS: Precomputed aggregate field compiled and validated.")
-
-# COMMAND ----------
-print("ST-022: Custom-function argument contracts are enforced")
+print("ST-019: Custom-function argument contracts are enforced")
 print("-" * 80)
 print("Area: Semantic validation")
 print("Priority: High")
@@ -920,8 +741,8 @@ service.registry.register(
 )
 
 invalid_yaml = """
-ruleset_id: st_022_ruleset
-ruleset_name: ST-022 Ruleset
+ruleset_id: st_019_ruleset
+ruleset_name: ST-019 Ruleset
 version: "1"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -941,8 +762,6 @@ rules:
           operator: gt
           right:
             literal: 100
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -958,7 +777,7 @@ print(validation.to_text())
 print("PASS: Custom-function argument contract mismatch was rejected.")
 
 # COMMAND ----------
-print("ST-023: Operator arity and literal collection requirements are enforced")
+print("ST-020: Operator arity and literal collection requirements are enforced")
 print("-" * 80)
 print("Area: Semantic validation")
 print("Priority: High")
@@ -971,8 +790,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 invalid_yaml = """
-ruleset_id: st_023_ruleset
-ruleset_name: ST-023 Ruleset
+ruleset_id: st_020_ruleset
+ruleset_name: ST-020 Ruleset
 version: "1"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -988,22 +807,16 @@ rules:
           operator: is_null
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
         - condition_id: c2
           left:
             field: account
           operator: eq
-          null_input_mode: propagate
-          null_result_mode: "null"
         - condition_id: c3
           left:
             field: account
           operator: in
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
         - condition_id: c4
           left:
             field: amount
@@ -1011,8 +824,6 @@ rules:
           right:
             literal:
               - 100
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -1033,21 +844,22 @@ print(validation.to_text())
 print("PASS: Operator arity and literal collection requirements were enforced.")
 
 # COMMAND ----------
-print("ST-024: Null handling modes require default values when configured")
+print("ST-021: Operand null defaults cannot themselves be null")
 print("-" * 80)
-print("Area: Semantic validation")
+print("Area: Compilation")
 print("Priority: Medium")
 print("Owner Role: Engineering")
-print("Expected Result: Validation returns a default-value requirement error.")
+print("Expected Result: Compilation rejects a null default_if_null value.")
 print("")
 
 from rules_engine import RulesEngineService
+from rules_engine.exceptions import CompilationError
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 invalid_yaml = """
-ruleset_id: st_024_ruleset
-ruleset_name: ST-024 Ruleset
+ruleset_id: st_021_ruleset
+ruleset_name: ST-021 Ruleset
 version: "1"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -1060,27 +872,26 @@ rules:
         - condition_id: c1
           left:
             field: account
+            default_if_null: null
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: default
     assign:
       bucket: A
 """
 
-ruleset = service.compile_yaml_text(invalid_yaml)
-validation = service.validator.validate(ruleset)
-check_names = {issue.check_name for issue in validation.issues}
+try:
+    service.compile_yaml_text(invalid_yaml)
+    default_rejected = False
+except CompilationError as exc:
+    default_rejected = True
+    assert "default_if_null cannot itself be null" in str(exc), str(exc)
 
-assert validation.has_errors(), "Expected null default validation to fail."
-assert "NULL_DEFAULT_REQUIRED" in check_names, validation.to_text()
-
-print(validation.to_text())
-print("PASS: null_result_mode=default without null_default_value was rejected.")
+assert default_rejected, "Expected a null default_if_null value to fail compilation."
+print("PASS: A null default_if_null value was rejected.")
 
 # COMMAND ----------
-print("ST-025: Spark validator accepts supported rulesets")
+print("ST-022: Spark validator accepts supported rulesets")
 print("-" * 80)
 print("Area: Spark compatibility")
 print("Priority: Critical")
@@ -1093,8 +904,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 valid_yaml = """
-ruleset_id: st_025_ruleset
-ruleset_name: ST-025 Ruleset
+ruleset_id: st_022_ruleset
+ruleset_name: ST-022 Ruleset
 version: "1"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -1110,8 +921,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -1127,7 +936,7 @@ assert not any(issue.check_name.startswith("SPARK_") for issue in validation.iss
 print("PASS: Supported ruleset passed semantic and Spark compatibility validation.")
 
 # COMMAND ----------
-print("ST-026: Spark validator follows the supported row-level contract")
+print("ST-023: Spark validator follows the supported row-level contract")
 print("-" * 80)
 print("Area: Spark compatibility")
 print("Priority: High")
@@ -1140,8 +949,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 
 valid_yaml = """
-ruleset_id: st_026_ruleset
-ruleset_name: ST-026 Ruleset
+ruleset_id: st_023_ruleset
+ruleset_name: ST-023 Ruleset
 version: "1"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -1153,20 +962,16 @@ rules:
       all:
         - condition_id: c1
           left:
-            field: account_amount_sum
+            field: amount
           operator: gt
           right:
             literal: 100
-          null_input_mode: propagate
-          null_result_mode: "null"
         - condition_id: c2
           left:
             field: status
           operator: eq
           right:
             literal: OPEN
-          null_input_mode: propagate
-          null_result_mode: "null"
         - condition_id: c3
           left:
             custom_function:
@@ -1177,8 +982,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -1195,7 +998,7 @@ print(validation.to_text())
 print("PASS: Supported row-level ruleset passed Spark validation.")
 
 # COMMAND ----------
-print("ST-027: Publish YAML path compiles, normalizes, validates, and writes metadata")
+print("ST-024: Publish YAML path compiles, normalizes, validates, and writes metadata")
 print("-" * 80)
 print("Area: Publishing")
 print("Priority: Critical")
@@ -1210,8 +1013,8 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
 yaml_text = f"""
-ruleset_id: st_027_{stamp}
-ruleset_name: ST-027 Ruleset
+ruleset_id: st_024_{stamp}
+ruleset_name: ST-024 Ruleset
 version: "{stamp}"
 status: published
 owner: Rules Team
@@ -1227,8 +1030,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -1261,7 +1062,7 @@ assert row["effective_end_date"] == "2999-12-31"
 print("PASS: Publish YAML path wrote one complete metadata row.")
 
 # COMMAND ----------
-print("ST-028: Direct publish of a compiled ruleset works")
+print("ST-025: Direct publish of a compiled ruleset works")
 print("-" * 80)
 print("Area: Publishing")
 print("Priority: Critical")
@@ -1277,8 +1078,8 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
 yaml_text = f"""
-ruleset_id: st_028_{stamp}
-ruleset_name: ST-028 Ruleset
+ruleset_id: st_025_{stamp}
+ruleset_name: ST-025 Ruleset
 version: "{stamp}"
 status: published
 owner: Rules Team
@@ -1294,13 +1095,11 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
 
-compiled = service.compile_yaml_text(yaml_text.replace(f'st_028_{stamp}', f'st_028_direct_{stamp}'))
+compiled = service.compile_yaml_text(yaml_text.replace(f'st_025_{stamp}', f'st_025_direct_{stamp}'))
 compiled = replace(compiled, version=f"{stamp}_direct")
 service.publish(compiled, published_by="system-test", effective_start_date="2026-05-01")
 
@@ -1319,7 +1118,7 @@ assert rows[0]["effective_start_date"] == "2026-05-01"
 print("PASS: Direct publish of a compiled ruleset persisted and loaded successfully.")
 
 # COMMAND ----------
-print("ST-029: Publish rejects non-published lifecycle status")
+print("ST-026: Publish rejects non-published lifecycle status")
 print("-" * 80)
 print("Area: Publishing")
 print("Priority: Critical")
@@ -1335,8 +1134,8 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
 yaml_text = f"""
-ruleset_id: st_029_{stamp}
-ruleset_name: ST-029 Ruleset
+ruleset_id: st_026_{stamp}
+ruleset_name: ST-026 Ruleset
 version: "{stamp}"
 status: retired
 owner: Rules Team
@@ -1352,8 +1151,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -1377,7 +1174,7 @@ assert len(rows) == 0, f"Expected no persisted rows, found {len(rows)}."
 print("PASS: Publish rejected non-published lifecycle status before persistence.")
 
 # COMMAND ----------
-print("ST-030: Duplicate ruleset_name and version cannot be published twice")
+print("ST-027: Duplicate ruleset_name and version cannot be published twice")
 print("-" * 80)
 print("Area: Publishing")
 print("Priority: Critical")
@@ -1386,6 +1183,177 @@ print("Expected Result: Second publish fails and does not overwrite the original
 print("")
 
 from datetime import datetime, timezone
+from rules_engine import RulesEngineService
+from rules_engine.exceptions import RepositoryError
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+
+yaml_text = f"""
+ruleset_id: st_027_{stamp}
+ruleset_name: ST-027 Ruleset
+version: "{stamp}"
+status: published
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: r1
+    rule_name: Rule 1
+    rule_order: 1
+    when:
+      all:
+        - left:
+            field: account
+          operator: eq
+          right:
+            literal: A
+    assign:
+      bucket: A
+"""
+
+first_ruleset = service.publish_yaml_text(yaml_text, published_by="first-publish")
+
+try:
+    service.publish_yaml_text(yaml_text, published_by="second-publish")
+    duplicate_failed = False
+except RepositoryError:
+    duplicate_failed = True
+
+assert duplicate_failed, "Expected duplicate ruleset_name/version publish to fail."
+
+rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_name = '{first_ruleset.ruleset_name}' AND version = '{first_ruleset.version}'"
+).collect()
+assert len(rows) == 1, f"Expected one persisted row after duplicate attempt, found {len(rows)}."
+assert rows[0]["published_by"] == "first-publish"
+
+print("PASS: Duplicate ruleset_name/version publish failed without overwriting the original row.")
+
+# COMMAND ----------
+print("ST-028: Multiple published versions for the same ruleset_name are allowed")
+print("-" * 80)
+print("Area: Publishing")
+print("Priority: High")
+print("Owner Role: Engineering")
+print("Expected Result: Both rows have status published. Neither publish requires retiring the other version.")
+print("")
+
+from datetime import datetime, timezone
+from rules_engine import RulesEngineService
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+ruleset_name = f"ST-028 Ruleset {stamp}"
+
+yaml_v1 = f"""
+ruleset_id: st_028_v1_{stamp}
+ruleset_name: {ruleset_name}
+version: "1"
+status: published
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: r1
+    rule_name: Rule 1
+    rule_order: 1
+    when:
+      all:
+        - left:
+            field: account
+          operator: eq
+          right:
+            literal: A
+    assign:
+      bucket: A
+"""
+
+yaml_v2 = yaml_v1.replace(f"st_028_v1_{stamp}", f"st_028_v2_{stamp}").replace('version: "1"', 'version: "2"')
+
+ruleset_v1 = service.publish_yaml_text(yaml_v1, published_by="system-test")
+ruleset_v2 = service.publish_yaml_text(yaml_v2, published_by="system-test")
+
+rows = spark.table(service.table_names.ruleset_versions).where(
+    f"ruleset_name = '{ruleset_name}' AND status = 'published'"
+).collect()
+versions = {row["version"] for row in rows}
+
+assert len(rows) == 2, f"Expected two published rows, found {len(rows)}."
+assert {ruleset_v1.version, ruleset_v2.version} <= versions
+assert all(row["effective_end_date"] == "2999-12-31" for row in rows)
+
+print("PASS: Multiple published versions for the same ruleset_name coexist.")
+
+# COMMAND ----------
+print("ST-029: Loading by name without version is rejected when ambiguous")
+print("-" * 80)
+print("Area: Publishing")
+print("Priority: High")
+print("Owner Role: Engineering")
+print("Expected Result: Repository raises an error asking the caller to specify version.")
+print("")
+
+from datetime import datetime, timezone
+from rules_engine import RulesEngineService
+from rules_engine.exceptions import RepositoryError
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+ruleset_name = f"ST-029 Ruleset {stamp}"
+
+yaml_v1 = f"""
+ruleset_id: st_029_v1_{stamp}
+ruleset_name: {ruleset_name}
+version: "1"
+status: published
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: r1
+    rule_name: Rule 1
+    rule_order: 1
+    when:
+      all:
+        - left:
+            field: account
+          operator: eq
+          right:
+            literal: A
+    assign:
+      bucket: A
+"""
+
+yaml_v2 = yaml_v1.replace(f"st_029_v1_{stamp}", f"st_029_v2_{stamp}").replace('version: "1"', 'version: "2"')
+
+service.publish_yaml_text(yaml_v1, published_by="system-test")
+service.publish_yaml_text(yaml_v2, published_by="system-test")
+
+try:
+    service.load_published(ruleset_name)
+    ambiguous_load_failed = False
+except RepositoryError as exc:
+    ambiguous_load_failed = True
+    assert "specify version" in str(exc), str(exc)
+
+assert ambiguous_load_failed, "Expected load_published without version to fail when multiple versions exist."
+
+loaded_v1 = service.load_published(ruleset_name, version="1")
+loaded_v2 = service.load_published(ruleset_name, version="2")
+assert loaded_v1.version == "1"
+assert loaded_v2.version == "2"
+
+print("PASS: Ambiguous load by name failed and explicit versions loaded.")
+
+# COMMAND ----------
+print("ST-030: Loading by name and version requires one immutable metadata row")
+print("-" * 80)
+print("Area: Publishing")
+print("Priority: Critical")
+print("Owner Role: Engineering")
+print("Expected Result: A unique row loads and evaluates; duplicate rows for the same immutable version fail loudly.")
+print("")
+
+from datetime import datetime, timezone
+from pyspark.sql import functions as F
 from rules_engine import RulesEngineService
 from rules_engine.exceptions import RepositoryError
 
@@ -1410,185 +1378,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: A
-"""
-
-first_ruleset = service.publish_yaml_text(yaml_text, published_by="first-publish")
-
-try:
-    service.publish_yaml_text(yaml_text, published_by="second-publish")
-    duplicate_failed = False
-except RepositoryError:
-    duplicate_failed = True
-
-assert duplicate_failed, "Expected duplicate ruleset_name/version publish to fail."
-
-rows = spark.table(service.table_names.ruleset_versions).where(
-    f"ruleset_name = '{first_ruleset.ruleset_name}' AND version = '{first_ruleset.version}'"
-).collect()
-assert len(rows) == 1, f"Expected one persisted row after duplicate attempt, found {len(rows)}."
-assert rows[0]["published_by"] == "first-publish"
-
-print("PASS: Duplicate ruleset_name/version publish failed without overwriting the original row.")
-
-# COMMAND ----------
-print("ST-031: Multiple published versions for the same ruleset_name are allowed")
-print("-" * 80)
-print("Area: Publishing")
-print("Priority: High")
-print("Owner Role: Engineering")
-print("Expected Result: Both rows have status published. Neither publish requires retiring the other version.")
-print("")
-
-from datetime import datetime, timezone
-from rules_engine import RulesEngineService
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-ruleset_name = f"ST-031 Ruleset {stamp}"
-
-yaml_v1 = f"""
-ruleset_id: st_031_v1_{stamp}
-ruleset_name: {ruleset_name}
-version: "1"
-status: published
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: r1
-    rule_name: Rule 1
-    rule_order: 1
-    when:
-      all:
-        - left:
-            field: account
-          operator: eq
-          right:
-            literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: A
-"""
-
-yaml_v2 = yaml_v1.replace(f"st_031_v1_{stamp}", f"st_031_v2_{stamp}").replace('version: "1"', 'version: "2"')
-
-ruleset_v1 = service.publish_yaml_text(yaml_v1, published_by="system-test")
-ruleset_v2 = service.publish_yaml_text(yaml_v2, published_by="system-test")
-
-rows = spark.table(service.table_names.ruleset_versions).where(
-    f"ruleset_name = '{ruleset_name}' AND status = 'published'"
-).collect()
-versions = {row["version"] for row in rows}
-
-assert len(rows) == 2, f"Expected two published rows, found {len(rows)}."
-assert {ruleset_v1.version, ruleset_v2.version} <= versions
-assert all(row["effective_end_date"] == "2999-12-31" for row in rows)
-
-print("PASS: Multiple published versions for the same ruleset_name coexist.")
-
-# COMMAND ----------
-print("ST-032: Loading by name without version is rejected when ambiguous")
-print("-" * 80)
-print("Area: Publishing")
-print("Priority: High")
-print("Owner Role: Engineering")
-print("Expected Result: Repository raises an error asking the caller to specify version.")
-print("")
-
-from datetime import datetime, timezone
-from rules_engine import RulesEngineService
-from rules_engine.exceptions import RepositoryError
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-ruleset_name = f"ST-032 Ruleset {stamp}"
-
-yaml_v1 = f"""
-ruleset_id: st_032_v1_{stamp}
-ruleset_name: {ruleset_name}
-version: "1"
-status: published
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: r1
-    rule_name: Rule 1
-    rule_order: 1
-    when:
-      all:
-        - left:
-            field: account
-          operator: eq
-          right:
-            literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: A
-"""
-
-yaml_v2 = yaml_v1.replace(f"st_032_v1_{stamp}", f"st_032_v2_{stamp}").replace('version: "1"', 'version: "2"')
-
-service.publish_yaml_text(yaml_v1, published_by="system-test")
-service.publish_yaml_text(yaml_v2, published_by="system-test")
-
-try:
-    service.load_published(ruleset_name)
-    ambiguous_load_failed = False
-except RepositoryError as exc:
-    ambiguous_load_failed = True
-    assert "specify version" in str(exc), str(exc)
-
-assert ambiguous_load_failed, "Expected load_published without version to fail when multiple versions exist."
-
-loaded_v1 = service.load_published(ruleset_name, version="1")
-loaded_v2 = service.load_published(ruleset_name, version="2")
-assert loaded_v1.version == "1"
-assert loaded_v2.version == "2"
-
-print("PASS: Ambiguous load by name failed and explicit versions loaded.")
-
-# COMMAND ----------
-print("ST-033: Loading by name and version requires one immutable metadata row")
-print("-" * 80)
-print("Area: Publishing")
-print("Priority: Critical")
-print("Owner Role: Engineering")
-print("Expected Result: A unique row loads and evaluates; duplicate rows for the same immutable version fail loudly.")
-print("")
-
-from datetime import datetime, timezone
-from pyspark.sql import functions as F
-from rules_engine import RulesEngineService
-from rules_engine.exceptions import RepositoryError
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-
-yaml_text = f"""
-ruleset_id: st_033_{stamp}
-ruleset_name: ST-033 Ruleset
-version: "{stamp}"
-status: published
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: r1
-    rule_name: Rule 1
-    rule_order: 1
-    when:
-      all:
-        - left:
-            field: account
-          operator: eq
-          right:
-            literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -1630,7 +1419,7 @@ else:
 print("PASS: Unique loading worked and duplicate immutable rows failed loudly.")
 
 # COMMAND ----------
-print("ST-034: Retirement makes a version unavailable to load_published")
+print("ST-031: Retirement makes a version unavailable to load_published")
 print("-" * 80)
 print("Area: Lifecycle")
 print("Priority: Critical")
@@ -1646,8 +1435,8 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
 yaml_text = f"""
-ruleset_id: st_034_{stamp}
-ruleset_name: ST-034 Ruleset
+ruleset_id: st_031_{stamp}
+ruleset_name: ST-031 Ruleset
 version: "{stamp}"
 status: published
 owner: Rules Team
@@ -1663,8 +1452,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -1690,7 +1477,7 @@ assert retired_load_failed, "Expected retired version to be unavailable to load_
 print("PASS: Retired version was removed from load_published eligibility.")
 
 # COMMAND ----------
-print("ST-035: Retirement stamps retired_by and retired_at")
+print("ST-032: Retirement stamps retired_by and retired_at")
 print("-" * 80)
 print("Area: Lifecycle")
 print("Priority: High")
@@ -1705,8 +1492,8 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
 yaml_text = f"""
-ruleset_id: st_035_{stamp}
-ruleset_name: ST-035 Ruleset
+ruleset_id: st_032_{stamp}
+ruleset_name: ST-032 Ruleset
 version: "{stamp}"
 status: published
 owner: Rules Team
@@ -1722,8 +1509,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -1743,7 +1528,7 @@ assert row["effective_end_date"] != "2999-12-31"
 print("PASS: Retirement metadata was stamped.")
 
 # COMMAND ----------
-print("ST-036: Retiring a missing ruleset version fails safely")
+print("ST-033: Retiring a missing ruleset version fails safely")
 print("-" * 80)
 print("Area: Lifecycle")
 print("Priority: High")
@@ -1776,7 +1561,7 @@ assert after_count == before_count, (
 print("PASS: Missing version retirement failed without changing table row count.")
 
 # COMMAND ----------
-print("ST-037: Retiring an already retired version does not silently succeed")
+print("ST-034: Retiring an already retired version does not silently succeed")
 print("-" * 80)
 print("Area: Lifecycle")
 print("Priority: High")
@@ -1793,8 +1578,8 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
 yaml_text = f"""
-ruleset_id: st_037_{stamp}
-ruleset_name: ST-037 Ruleset
+ruleset_id: st_034_{stamp}
+ruleset_name: ST-034 Ruleset
 version: "{stamp}"
 status: published
 owner: Rules Team
@@ -1810,8 +1595,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -1895,12 +1678,12 @@ assert second_row["effective_end_date"] == original_effective_end_date, (
 print("PASS: Second retirement failed and original retirement metadata was preserved.")
 
 # COMMAND ----------
-print("ST-038: Spark runtime evaluates simple row-level rules correctly")
+print("ST-035: Spark runtime evaluates simple row-level rules correctly")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: Matched flags, matched rule IDs, assignments, first-match trace, and errors match expected outcomes.")
+print("Expected Result: Matched flags, matched rule IDs, assignments, matched-rule traces, and errors match expected outcomes.")
 print("")
 
 from datetime import datetime, timezone
@@ -1910,8 +1693,8 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
 yaml_text = f"""
-ruleset_id: st_038_{stamp}
-ruleset_name: ST-038 Runtime Ruleset
+ruleset_id: st_035_{stamp}
+ruleset_name: ST-035 Runtime Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -1926,8 +1709,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -1944,21 +1725,21 @@ rows = {row["account"]: row.asDict(recursive=True) for row in result.collect()}
 assert rows["A"]["rules_engine_matched"] is True
 assert rows["A"]["rules_engine_matched_rule_ids"] == ["r1"]
 assert rows["A"]["rules_engine_assign"] == {"bucket": "A"}
-assert rows["A"]["rules_engine_first_matched_rule_trace"]["rule_id"] == "r1"
-assert rows["A"]["rules_engine_first_matched_rule_trace"]["rule_name"] == "Account A"
-assert rows["A"]["rules_engine_first_matched_rule_trace"]["explanation"] == "account == 'A'"
-assert rows["A"]["rules_engine_first_matched_rule_trace"]["conditions"][0]["columns"] == ["account"]
+assert rows["A"]["rules_engine_matched_rules"][0]["rule_id"] == "r1"
+assert rows["A"]["rules_engine_matched_rules"][0]["rule_name"] == "Account A"
+assert rows["A"]["rules_engine_matched_rules"][0]["explanation"] == "account == 'A'"
+assert rows["A"]["rules_engine_matched_rules"][0]["conditions"][0]["columns"] == ["account"]
 assert rows["A"]["rules_engine_error"] is None
 assert rows["B"]["rules_engine_matched"] is False
 assert rows["B"]["rules_engine_matched_rule_ids"] == []
 assert rows["B"]["rules_engine_assign"] is None
-assert rows["B"]["rules_engine_first_matched_rule_trace"] is None
+assert rows["B"]["rules_engine_matched_rules"][0] is None
 assert rows["B"]["rules_engine_error"] is None
 display(result)
-print("PASS: Runtime evaluation completed for ST-038.")
+print("PASS: Runtime evaluation completed for ST-035.")
 
 # COMMAND ----------
-print("ST-039: Spark runtime honors rule_order and stop_on_match")
+print("ST-036: Spark runtime honors rule_order and stop_on_match")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
@@ -1973,8 +1754,8 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
 yaml_text = f"""
-ruleset_id: st_039_{stamp}
-ruleset_name: ST-039 Runtime Ruleset
+ruleset_id: st_036_{stamp}
+ruleset_name: ST-036 Runtime Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -1991,8 +1772,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: first
   - rule_id: second_match
@@ -2006,8 +1785,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: second
 """
@@ -2024,15 +1801,15 @@ rows = {row["account"]: row.asDict(recursive=True) for row in result.collect()}
 assert rows["A"]["rules_engine_matched"] is True
 assert rows["A"]["rules_engine_matched_rule_ids"] == ["first_match"]
 assert rows["A"]["rules_engine_assign"] == {"bucket": "first"}
-assert rows["A"]["rules_engine_first_matched_rule_trace"]["rule_id"] == "first_match"
+assert rows["A"]["rules_engine_matched_rules"][0]["rule_id"] == "first_match"
 assert rows["B"]["rules_engine_matched"] is False
 assert rows["B"]["rules_engine_matched_rule_ids"] == []
 assert rows["B"]["rules_engine_assign"] is None
 display(result)
-print("PASS: Runtime evaluation completed for ST-039.")
+print("PASS: Runtime evaluation completed for ST-036.")
 
 # COMMAND ----------
-print("ST-040: Spark runtime applies null_input_mode and null_result_mode correctly")
+print("ST-037: Spark runtime applies operand defaults and error_on_null correctly")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
@@ -2044,67 +1821,62 @@ from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.registry import FunctionRegistry
 from rules_engine.spark_runtime import SparkRulesEngineRuntime
 
-class ST040Repository:
+class ST037Repository:
     def load_published(self, ruleset_name, version=None):
         raise NotImplementedError
 
-runtime = SparkRulesEngineRuntime(ST040Repository(), FunctionRegistry())
+runtime = SparkRulesEngineRuntime(ST037Repository(), FunctionRegistry())
 compiler = YamlRulesetCompiler()
 
 ruleset = compiler.compile_text("""
-ruleset_id: st_040_ruleset
-ruleset_name: ST-040 Runtime Ruleset
+ruleset_id: st_037_ruleset
+ruleset_name: ST-037 Runtime Ruleset
 version: "1"
 status: published
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
-  - rule_id: propagate_null
-    rule_name: Propagate Null Produces No Match
+  - rule_id: ordinary_null
+    rule_name: Ordinary Null Produces No Match
     rule_order: 1
     when:
       all:
-        - condition_id: c_propagate
+        - condition_id: c_ordinary_null
           left:
             field: account
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
-      bucket: propagate
-  - rule_id: default_true
-    rule_name: Default True Converts Null Result To Match
+      bucket: ordinary
+  - rule_id: string_default
+    rule_name: String Default Replaces Null Before Comparison
     rule_order: 2
     when:
       all:
-        - condition_id: c_default_true
+        - condition_id: c_string_default
           left:
             field: account
+            default_if_null: A
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: default
-          null_default_value: true
     assign:
-      default_bucket: default_true
-  - rule_id: zero_mode
-    rule_name: Zero Mode Replaces Null Numeric Inputs
+      string_bucket: string_default
+  - rule_id: numeric_default
+    rule_name: Numeric Default Replaces Null Before Comparison
     rule_order: 3
     when:
       all:
-        - condition_id: c_zero
+        - condition_id: c_numeric_default
           left:
             field: amount
+            default_if_null: 0
           operator: eq
           right:
             literal: 0
-          null_input_mode: zero
-          null_result_mode: "null"
     assign:
-      zero_bucket: zero_match
+      numeric_bucket: numeric_default
 """)
 
 output = runtime.evaluate_dataframe(
@@ -2114,17 +1886,24 @@ output = runtime.evaluate_dataframe(
 )
 row = output.collect()[0].asDict(recursive=True)
 assert row["rules_engine_matched"] is True
-assert row["rules_engine_matched_rule_ids"] == ["default_true", "zero_mode"], row["rules_engine_matched_rule_ids"]
+assert row["rules_engine_matched_rule_ids"] == ["string_default", "numeric_default"], row["rules_engine_matched_rule_ids"]
 assert row["rules_engine_assign"] == {
     "bucket": None,
-    "default_bucket": "default_true",
-    "zero_bucket": "zero_match",
+    "string_bucket": "string_default",
+    "numeric_bucket": "numeric_default",
 }
-assert row["rules_engine_first_matched_rule_trace"]["rule_id"] == "default_true"
+assert [trace["rule_id"] for trace in row["rules_engine_matched_rules"]] == [
+    "string_default",
+    "numeric_default",
+]
+assert all(
+    trace["conditions"][0]["left"]["default_applied"]
+    for trace in row["rules_engine_matched_rules"]
+)
 
 error_ruleset = compiler.compile_text("""
-ruleset_id: st_040_error_ruleset
-ruleset_name: ST-040 Error Ruleset
+ruleset_id: st_037_error_ruleset
+ruleset_name: ST-037 Error Ruleset
 version: "1"
 status: published
 owner: Rules Team
@@ -2141,8 +1920,7 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: error
+          error_on_null: true
     assign:
       bucket: should_error
 """)
@@ -2154,86 +1932,11 @@ try:
     error_failed = False
 except Exception as exc:
     error_failed = True
-    assert "null_result_mode=error" in str(exc), str(exc)
-assert error_failed, "Expected null_result_mode=error to raise on null comparison result."
-print("PASS: Spark runtime null semantics matched documented propagate/default/zero/error behavior.")
+    assert "error_on_null=true" in str(exc), str(exc)
+assert error_failed, "Expected error_on_null=true to raise for a null operand."
+print("PASS: Spark runtime applied default no-match, typed fallbacks, and explicit null errors.")
 # COMMAND ----------
-print("ST-041: Spark runtime evaluates precomputed aggregate fields correctly")
-print("-" * 80)
-print("Area: Runtime Spark")
-print("Priority: High")
-print("Owner Role: Engineering")
-print("Expected Result: Precomputed aggregate comparisons and assignments match manually calculated expected values.")
-print("")
-
-from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.registry import FunctionRegistry
-from rules_engine.spark_runtime import SparkRulesEngineRuntime
-
-class ST041Repository:
-    def load_published(self, ruleset_name, version=None):
-        raise NotImplementedError
-
-runtime = SparkRulesEngineRuntime(ST041Repository(), FunctionRegistry())
-ruleset = YamlRulesetCompiler().compile_text("""
-ruleset_id: st_041_ruleset
-ruleset_name: ST-041 Precomputed Aggregate Ruleset
-version: "1"
-status: published
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: dataset_total
-    rule_name: Dataset Total Equals 35
-    rule_order: 1
-    when:
-      all:
-        - condition_id: c_dataset
-          left:
-            field: dataset_amount_sum
-          operator: eq
-          right:
-            literal: 35
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      dataset_total_check: pass
-  - rule_id: group_total
-    rule_name: Group Total Greater Than 15
-    rule_order: 2
-    when:
-      all:
-        - condition_id: c_group
-          left:
-            field: account_amount_sum
-          operator: gt
-          right:
-            literal: 15
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      group_total_check: pass
-""")
-input_rows = [
-    {"record_id": "r1", "account": "A", "amount": 10, "dataset_amount_sum": 35, "account_amount_sum": 30},
-    {"record_id": "r2", "account": "A", "amount": 20, "dataset_amount_sum": 35, "account_amount_sum": 30},
-    {"record_id": "r3", "account": "B", "amount": 5, "dataset_amount_sum": 35, "account_amount_sum": 5},
-]
-manual_dataset_total = sum(row["amount"] for row in input_rows)
-manual_group_totals = {}
-for item in input_rows:
-    manual_group_totals[item["account"]] = manual_group_totals.get(item["account"], 0) + item["amount"]
-output = runtime.evaluate_dataframe(spark.createDataFrame(input_rows), ruleset)
-actual_by_id = {row["record_id"]: row.asDict(recursive=True) for row in output.collect()}
-assert manual_dataset_total == 35
-assert manual_group_totals == {"A": 30, "B": 5}
-assert actual_by_id["r1"]["rules_engine_matched_rule_ids"] == ["dataset_total", "group_total"]
-assert actual_by_id["r2"]["rules_engine_matched_rule_ids"] == ["dataset_total", "group_total"]
-assert actual_by_id["r3"]["rules_engine_matched_rule_ids"] == ["dataset_total"]
-assert actual_by_id["r3"]["rules_engine_assign"] == {"dataset_total_check": "pass", "group_total_check": None}
-print("PASS: Precomputed dataset and group aggregate fields matched manual calculations.")
-# COMMAND ----------
-print("ST-042: Spark runtime evaluates a published ruleset against a DataFrame")
+print("ST-038: Spark runtime evaluates a published ruleset against a DataFrame")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
@@ -2247,8 +1950,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_042_{stamp}
-ruleset_name: ST-042 Runtime Ruleset
+ruleset_id: st_038_{stamp}
+ruleset_name: ST-038 Runtime Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -2264,8 +1967,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -2299,7 +2000,7 @@ assert rows["r2"]["rules_engine_error"] is None
 display(result)
 print("PASS: Spark runtime output columns and values matched expected results.")
 # COMMAND ----------
-print("ST-043: Spark runtime fail_on_error behavior is enforced")
+print("ST-039: Spark runtime fail_on_error behavior is enforced")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
@@ -2313,8 +2014,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_043_{stamp}
-ruleset_name: ST-043 Runtime Ruleset
+ruleset_id: st_039_{stamp}
+ruleset_name: ST-039 Runtime Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -2330,8 +2031,7 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: error
+          error_on_null: true
     assign:
       bucket: A
 """
@@ -2347,18 +2047,18 @@ try:
     fail_on_error_raised = False
 except Exception as exc:
     fail_on_error_raised = True
-    assert "null_result_mode=error" in str(exc), str(exc)
+    assert "error_on_null=true" in str(exc), str(exc)
 assert fail_on_error_raised, "Expected fail_on_error=True to raise for row-level runtime errors."
 result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version, fail_on_error=False)
 rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
 assert rows["r1"]["rules_engine_error"] is not None
-assert "null_result_mode=error" in rows["r1"]["rules_engine_error"]
+assert "error_on_null=true" in rows["r1"]["rules_engine_error"]
 assert rows["r2"]["rules_engine_error"] is None
 assert rows["r2"]["rules_engine_matched"] is True
 display(result)
 print("PASS: fail_on_error=True raised and fail_on_error=False recorded row-level errors.")
 # COMMAND ----------
-print("ST-044: Spark runtime supports standard custom functions used in rules")
+print("ST-040: Spark runtime supports standard custom functions used in rules")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
@@ -2373,8 +2073,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_044_{stamp}
-ruleset_name: ST-044 Runtime Ruleset
+ruleset_id: st_040_{stamp}
+ruleset_name: ST-040 Runtime Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -2394,8 +2094,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: upper_a
 """
@@ -2411,66 +2109,65 @@ assert rows["r2"]["rules_engine_assign"] is None
 display(result)
 print("PASS: Standard upper() function transformed input and produced expected outputs.")
 # COMMAND ----------
-print("ST-045: Spark runtime emits native assignment and first-match trace structs")
+print("ST-041: Spark runtime emits native assignment and matched-rule trace structs")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Medium")
 print("Owner Role: Engineering")
-print("Expected Result: Matched flags, assignments, and first-match trace are Spark-native structs.")
+print("Expected Result: Matched flags, assignments, and matched-rule traces are Spark-native structs.")
 print("")
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.registry import FunctionRegistry
 from rules_engine.spark_runtime import SparkRulesEngineRuntime
 
-class ST045Repository:
+class ST041Repository:
     def load_published(self, ruleset_name, version=None):
         raise NotImplementedError
 
 ruleset = YamlRulesetCompiler().compile_text("""
-ruleset_id: st_045_ruleset
-ruleset_name: ST-045 Runtime Ruleset
+ruleset_id: st_041_ruleset
+ruleset_name: ST-041 Runtime Ruleset
 version: "1"
 status: published
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
-  - rule_id: dataset_total
-    rule_name: Dataset Total Equals 30
+  - rule_id: account_a
+    rule_name: Account A
     rule_order: 1
     when:
       all:
-        - condition_id: c_dataset
+        - condition_id: c_account
           left:
-            field: dataset_amount_sum
+            field: account
           operator: eq
           right:
-            literal: 30
-          null_input_mode: propagate
-          null_result_mode: "null"
+            literal: A
     assign:
-      bucket: dataset_match
+      bucket: matched
 """)
 input_rows = [
-    {"row_id": 1, "amount": 10, "dataset_amount_sum": 30},
-    {"row_id": 2, "amount": 20, "dataset_amount_sum": 30},
+    {"row_id": 1, "account": "A"},
+    {"row_id": 2, "account": "B"},
 ]
 registry = FunctionRegistry()
-spark_result = SparkRulesEngineRuntime(ST045Repository(), registry).evaluate_dataframe(
+spark_result = SparkRulesEngineRuntime(ST041Repository(), registry).evaluate_dataframe(
     spark.createDataFrame(input_rows),
     ruleset,
     fail_on_error=True,
     full_audit=True,
 )
 spark_rows = [row.asDict(recursive=True) for row in spark_result.orderBy("row_id").collect()]
-assert [row["rules_engine_matched"] for row in spark_rows] == [True, True]
-assert [row["rules_engine_matched_rule_ids"] for row in spark_rows] == [["dataset_total"], ["dataset_total"]]
-assert [row["rules_engine_assign"] for row in spark_rows] == [{"bucket": "dataset_match"}, {"bucket": "dataset_match"}]
-assert [row["rules_engine_first_matched_rule_trace"]["rule_id"] for row in spark_rows] == ["dataset_total", "dataset_total"]
+assert [row["rules_engine_matched"] for row in spark_rows] == [True, False]
+assert [row["rules_engine_matched_rule_ids"] for row in spark_rows] == [["account_a"], []]
+assert [row["rules_engine_assign"] for row in spark_rows] == [{"bucket": "matched"}, None]
+assert spark_rows[0]["rules_engine_matched_rules"][0]["rule_id"] == "account_a"
+assert spark_rows[1]["rules_engine_matched_rules"] == []
 display(spark_result)
-print("PASS: Spark runtime emitted native assignment and first-match trace structs.")
+print("PASS: Spark runtime emitted native assignment and matched-rule trace structs.")
 # COMMAND ----------
-print("ST-046: Payload JSON excludes mutable lifecycle fields and reconstructs ruleset content")
+print("ST-042: Payload JSON excludes mutable lifecycle fields and reconstructs ruleset content")
 print("-" * 80)
 print("Area: Auditability")
 print("Priority: Critical")
@@ -2486,8 +2183,8 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
 yaml_text = f"""
-ruleset_id: st_046_{stamp}
-ruleset_name: ST-046 Audit Ruleset
+ruleset_id: st_042_{stamp}
+ruleset_name: ST-042 Audit Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -2502,8 +2199,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -2517,10 +2212,10 @@ assert hashlib.sha256(row["payload_json"].encode("utf-8")).hexdigest() == row["c
 assert row["rule_count"] >= 1
 assert row["effective_start_date"]
 assert row["effective_end_date"]
-print("PASS: Audit metadata checks completed for ST-046.")
+print("PASS: Audit metadata checks completed for ST-042.")
 
 # COMMAND ----------
-print("ST-047: Content hash is deterministic and reproducible")
+print("ST-043: Content hash is deterministic and reproducible")
 print("-" * 80)
 print("Area: Auditability")
 print("Priority: High")
@@ -2536,8 +2231,8 @@ service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
 yaml_text = f"""
-ruleset_id: st_047_{stamp}
-ruleset_name: ST-047 Audit Ruleset
+ruleset_id: st_043_{stamp}
+ruleset_name: ST-043 Audit Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -2552,8 +2247,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -2567,10 +2260,10 @@ assert hashlib.sha256(row["payload_json"].encode("utf-8")).hexdigest() == row["c
 assert row["rule_count"] >= 1
 assert row["effective_start_date"]
 assert row["effective_end_date"]
-print("PASS: Audit metadata checks completed for ST-047.")
+print("PASS: Audit metadata checks completed for ST-043.")
 
 # COMMAND ----------
-print("ST-048: Summary count columns match the published ruleset content")
+print("ST-044: Summary count columns match the published ruleset content")
 print("-" * 80)
 print("Area: Auditability")
 print("Priority: Medium")
@@ -2584,27 +2277,25 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_048_{stamp}
-ruleset_name: ST-048 Audit Ruleset
+ruleset_id: st_044_{stamp}
+ruleset_name: ST-044 Audit Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
   - rule_id: r1
-    rule_name: Precomputed Aggregate Rule
+    rule_name: Numeric Field Rule
     rule_order: 1
     when:
       all:
         - condition_id: c1
           left:
-            field: dataset_amount_sum
+            field: amount
           operator: gt
           right:
             literal: 100
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
-      precomputed_bucket: large
+      amount_bucket: large
   - rule_id: r2
     rule_name: Standard Function Rule
     rule_order: 2
@@ -2620,8 +2311,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       function_bucket: upper_a
 """
@@ -2636,104 +2325,12 @@ assert row["assignment_count"] == expected_assignment_count
 assert row["custom_function_count"] == 1
 print("PASS: Persisted summary count columns matched compiled ruleset content.")
 # COMMAND ----------
-print("ST-049: Publish notebook re-instantiates service against existing setup tables")
-print("-" * 80)
-print("Area: Pipeline notebooks")
-print("Priority: Critical")
-print("Owner Role: Engineering")
-print("Expected Result: Notebook 2 compiles, validates, publishes, and verifies the ruleset without recreating setup objects.")
-print("")
-from datetime import datetime, timezone
-from dataclasses import replace
-from rules_engine import RulesEngineService
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-
-assert spark.catalog.tableExists(service.table_names.ruleset_versions), f"Missing {service.table_names.ruleset_versions}"
-assert spark.catalog.tableExists(service.table_names.function_registry), f"Missing {service.table_names.function_registry}"
-assert RULESET_YAML_PATH, "Set RULESET_YAML_PATH before running the publish notebook verification test."
-
-ruleset = service.compile_yaml_path(RULESET_YAML_PATH)
-ruleset = replace(ruleset, version=f"ST049_{stamp}")
-validation = service.validator.validate(ruleset)
-assert not validation.has_errors(), validation.to_text()
-
-service.publish(ruleset, published_by="system-test")
-loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-rows = spark.table(service.table_names.ruleset_versions).where(
-    f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}'"
-).collect()
-
-assert loaded.ruleset_id == ruleset.ruleset_id
-assert len(rows) == 1, f"Expected exactly one published row, found {len(rows)}."
-assert rows[0]["status"] == "published"
-
-print(f"PASS: Re-instantiated service published and loaded {ruleset.ruleset_name} version {ruleset.version}.")
-
-# COMMAND ----------
-print("ST-050: Notebook verification checks are present after setup and publish")
-print("-" * 80)
-print("Area: Pipeline notebooks")
-print("Priority: High")
-print("Owner Role: Engineering")
-print("Expected Result: Both notebooks fail fast when expected deployment or publish verification conditions are not met.")
-print("")
-from datetime import datetime, timezone
-from rules_engine import RulesEngineService
-
-service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
-stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-assert spark.catalog.tableExists(service.table_names.ruleset_versions), f"Missing {service.table_names.ruleset_versions}"
-assert spark.catalog.tableExists(service.table_names.function_registry), f"Missing {service.table_names.function_registry}"
-required_functions = {"upper", "lower", "substring"}
-function_rows = spark.table(service.table_names.function_registry).where("active_flag = true").select("function_name").collect()
-active_function_names = {row["function_name"] for row in function_rows}
-missing_functions = required_functions - active_function_names
-assert not missing_functions, f"Missing expected active standard functions: {sorted(missing_functions)}"
-yaml_text = f"""
-ruleset_id: st_050_{stamp}
-ruleset_name: ST-050 Verification Ruleset
-version: "{stamp}"
-status: published
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: r1
-    rule_name: Verification Rule
-    rule_order: 1
-    when:
-      all:
-        - condition_id: c1
-          left:
-            field: account
-          operator: eq
-          right:
-            literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: A
-"""
-ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
-loaded = service.load_published(ruleset.ruleset_name, version=ruleset.version)
-published_rows = spark.table(service.table_names.ruleset_versions).where(f"ruleset_name = '{ruleset.ruleset_name}' AND version = '{ruleset.version}' AND status = 'published'").collect()
-assert loaded.ruleset_id == ruleset.ruleset_id
-assert len(published_rows) == 1, f"Expected exactly one published verification row, found {len(published_rows)}."
-assert published_rows[0]["content_hash"]
-assert published_rows[0]["payload_json"]
-assert published_rows[0]["rule_count"] == 1
-assert published_rows[0]["condition_count"] == 1
-assert published_rows[0]["assignment_count"] == 1
-print("PASS: Setup and publish verification checks fail fast and prove metadata is usable.")
-
-# COMMAND ----------
-print("ST-051: Spark runtime emits condition-level traceability values")
+print("ST-045: Spark runtime emits condition-level traceability values")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
 print("Owner Role: Engineering")
-print("Expected Result: Full audit exposes source columns, evaluated operand values, comparison results, and a readable first-match trace.")
+print("Expected Result: Full audit exposes source columns, evaluated operand values, comparison results, and readable matched-rule traces.")
 print("")
 
 from datetime import datetime, timezone
@@ -2743,8 +2340,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_051_{stamp}
-ruleset_name: ST-051 Traceability Ruleset
+ruleset_id: st_045_{stamp}
+ruleset_name: ST-045 Traceability Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -2754,14 +2351,12 @@ rules:
     rule_order: 1
     when:
       all:
-        - condition_id: c_group_sum
+        - condition_id: c_amount
           left:
-            field: account_amount_sum
+            field: amount
           operator: gt
           right:
             literal: 15
-          null_input_mode: propagate
-          null_result_mode: "null"
         - condition_id: c_upper
           left:
             custom_function:
@@ -2772,25 +2367,21 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
         - condition_id: c_status
           left:
             field: status
           operator: eq
           right:
             literal: open
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: traced
 """
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
 df = spark.createDataFrame(
     [
-        {"record_id": "r1", "account": "a", "amount": 10, "account_amount_sum": 30, "status": "open"},
-        {"record_id": "r2", "account": "a", "amount": 20, "account_amount_sum": 30, "status": "closed"},
-        {"record_id": "r3", "account": "b", "amount": 5, "account_amount_sum": 5, "status": "open"},
+        {"record_id": "r1", "account": "a", "amount": 30, "status": "open"},
+        {"record_id": "r2", "account": "a", "amount": 20, "status": "closed"},
+        {"record_id": "r3", "account": "b", "amount": 5, "status": "open"},
     ]
 )
 result = service.evaluate_dataframe(
@@ -2802,7 +2393,7 @@ result = service.evaluate_dataframe(
 rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
 
 matched_row = rows["r1"]
-match_trace = matched_row["rules_engine_first_matched_rule_trace"]
+match_trace = matched_row["rules_engine_matched_rules"][0]
 conditions = match_trace["conditions"]
 
 assert matched_row["rules_engine_matched"] is True
@@ -2811,23 +2402,23 @@ assert matched_row["rules_engine_assign"] == {"bucket": "traced"}
 assert match_trace["rule_id"] == "trace_rule"
 assert match_trace["rule_name"] == "Traceability Rule"
 assert match_trace["explanation"] == (
-    "account_amount_sum > 15 AND "
+    "amount > 15 AND "
     "upper(value=account) == 'A' AND "
     "status == 'open'"
 )
 assert match_trace["assignments_applied"] == ["bucket"]
 
-precomputed_condition = conditions[0]
-assert precomputed_condition["columns"] == ["account_amount_sum"]
-assert precomputed_condition["operator"] == "gt"
-assert precomputed_condition["comparison_result"] is True
-assert precomputed_condition["passed"] is True
-assert precomputed_condition["left"]["kind"] == "field"
-assert precomputed_condition["left"]["column"] == "account_amount_sum"
-assert precomputed_condition["left"]["source_columns"] == ["account_amount_sum"]
-assert precomputed_condition["left"]["value"] == "30"
-assert precomputed_condition["right"]["kind"] == "literal"
-assert precomputed_condition["right"]["value"] == "15"
+numeric_condition = conditions[0]
+assert numeric_condition["columns"] == ["amount"]
+assert numeric_condition["operator"] == "gt"
+assert numeric_condition["comparison_result"] is True
+assert numeric_condition["passed"] is True
+assert numeric_condition["left"]["kind"] == "field"
+assert numeric_condition["left"]["column"] == "amount"
+assert numeric_condition["left"]["source_columns"] == ["amount"]
+assert numeric_condition["left"]["value"] == "30"
+assert numeric_condition["right"]["kind"] == "literal"
+assert numeric_condition["right"]["value"] == "15"
 
 function_condition = conditions[1]
 assert function_condition["columns"] == ["account"]
@@ -2853,15 +2444,15 @@ assert field_condition["comparison_result"] is True
 assert field_condition["passed"] is True
 
 assert rows["r2"]["rules_engine_matched"] is False
-assert rows["r2"]["rules_engine_first_matched_rule_trace"] is None
+assert rows["r2"]["rules_engine_matched_rules"][0] is None
 assert rows["r3"]["rules_engine_matched"] is False
-assert rows["r3"]["rules_engine_first_matched_rule_trace"] is None
+assert rows["r3"]["rules_engine_matched_rules"][0] is None
 
 display(result)
 print("PASS: Spark runtime traceability payloads included useful evaluated condition details.")
 
 # COMMAND ----------
-print("ST-052: Service describes published rules in human-readable form")
+print("ST-046: Service describes published rules in human-readable form")
 print("-" * 80)
 print("Area: Auditability")
 print("Priority: High")
@@ -2876,8 +2467,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_052_{stamp}
-ruleset_name: ST-052 Human Readable Ruleset
+ruleset_id: st_046_{stamp}
+ruleset_name: ST-046 Human Readable Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -2893,8 +2484,6 @@ rules:
           operator: eq
           right:
             literal: DN
-          null_input_mode: propagate
-          null_result_mode: "null"
         - any:
             - condition_id: c_amount
               left:
@@ -2902,31 +2491,25 @@ rules:
               operator: gt
               right:
                 literal: 100
-              null_input_mode: propagate
-              null_result_mode: "null"
             - condition_id: c_status
               left:
                 field: status
               operator: eq
               right:
                 literal: REVIEW
-              null_input_mode: propagate
-              null_result_mode: "null"
     assign:
       leaf_key: "15656"
-  - rule_id: precomputed_review
-    rule_name: Precomputed Review
+  - rule_id: review_route
+    rule_name: Review Route
     rule_order: 2
     when:
       all:
-        - condition_id: c_sum
+        - condition_id: c_amount
           left:
-            field: account_amount_sum
+            field: amount
           operator: gt
           right:
             literal: 100
-          null_input_mode: propagate
-          null_result_mode: "null"
         - condition_id: c_upper_status
           left:
             custom_function:
@@ -2937,8 +2520,6 @@ rules:
           operator: eq
           right:
             literal: REVIEW
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       route: REVIEW
 """
@@ -2957,10 +2538,10 @@ expected_rows = [
         "match_payload": "leaf_key = '15656'",
     },
     {
-        "rule_id": "precomputed_review",
-        "rule_name": "Precomputed Review",
+        "rule_id": "review_route",
+        "rule_name": "Review Route",
         "rule_logic": (
-            "account_amount_sum > 100 AND "
+            "amount > 100 AND "
             "upper(value=status) == 'REVIEW'"
         ),
         "match_payload": "route = 'REVIEW'",
@@ -2972,7 +2553,7 @@ display(spark.createDataFrame(described_rows))
 print("PASS: Service-level human-readable rule descriptions matched expected audit rows.")
 
 # COMMAND ----------
-print("ST-053: Spark runtime preserves legacy output columns")
+print("ST-047: Spark runtime emits the documented output columns")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
@@ -2981,21 +2562,19 @@ print("Expected Result: Compact output columns remain present and populated with
 print("")
 
 from datetime import datetime, timezone
-import json
-
 from rules_engine import RulesEngineService
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_053_{stamp}
-ruleset_name: ST-053 Legacy Output Columns Ruleset
+ruleset_id: st_047_{stamp}
+ruleset_name: ST-047 Output Columns Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
 rules:
-  - rule_id: legacy_rule
-    rule_name: Legacy Output Rule
+  - rule_id: output_rule
+    rule_name: Output Rule
     rule_order: 1
     when:
       all:
@@ -3005,10 +2584,8 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
-      bucket: legacy_a
+      bucket: account_a
 """
 ruleset = service.publish_yaml_text(yaml_text, published_by="system-test")
 df = spark.createDataFrame(
@@ -3020,7 +2597,7 @@ df = spark.createDataFrame(
 result = service.evaluate_dataframe(df, ruleset_name=ruleset.ruleset_name, version=ruleset.version)
 rows = {row["record_id"]: row.asDict(recursive=True) for row in result.collect()}
 
-previous_input_columns = {"record_id", "account", "amount"}
+input_columns = {"record_id", "account", "amount"}
 required_output_columns = {
     "rules_engine_error",
     "rules_engine_matched",
@@ -3029,7 +2606,7 @@ required_output_columns = {
     "rules_engine_ruleset",
     "rules_engine_engine_version",
 }
-missing_columns = (previous_input_columns | required_output_columns) - set(result.columns)
+missing_columns = (input_columns | required_output_columns) - set(result.columns)
 assert not missing_columns, f"Missing required columns: {sorted(missing_columns)}"
 
 matched = rows["r1"]
@@ -3039,8 +2616,8 @@ assert matched["record_id"] == "r1"
 assert matched["account"] == "A"
 assert matched["amount"] == 10
 assert matched["rules_engine_matched"] is True
-assert matched["rules_engine_matched_rule_ids"] == ["legacy_rule"]
-assert matched["rules_engine_assign"] == {"bucket": "legacy_a"}
+assert matched["rules_engine_matched_rule_ids"] == ["output_rule"]
+assert matched["rules_engine_assign"] == {"bucket": "account_a"}
 assert matched["rules_engine_error"] is None
 
 assert unmatched["record_id"] == "r2"
@@ -3055,7 +2632,7 @@ display(result)
 print("PASS: Spark runtime input columns and native output columns remain present and usable.")
 
 # COMMAND ----------
-print("ST-054: Spark runtime emits mapping literal assignments as nested structs")
+print("ST-048: Spark runtime emits mapping literal assignments as nested structs")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
@@ -3070,8 +2647,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_054_{stamp}
-ruleset_name: ST-054 Struct Assignment Ruleset
+ruleset_id: st_048_{stamp}
+ruleset_name: ST-048 Struct Assignment Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3087,8 +2664,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       leaf_key:
         literal: "10110"
@@ -3126,7 +2701,7 @@ display(result)
 print("PASS: Spark runtime preserved mapping literal assignments as nested structs.")
 
 # COMMAND ----------
-print("ST-055: Spark runtime match-trace explanations use service-style boolean logic")
+print("ST-049: Spark runtime match-trace explanations use service-style boolean logic")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
@@ -3141,8 +2716,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_055_{stamp}
-ruleset_name: ST-055 Match Trace Explanation Ruleset
+ruleset_id: st_049_{stamp}
+ruleset_name: ST-049 Match Trace Explanation Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3158,8 +2733,6 @@ rules:
           operator: eq
           right:
             literal: asset
-          null_input_mode: propagate
-          null_result_mode: "null"
         - any:
             - condition_id: c_market_value
               left:
@@ -3167,16 +2740,12 @@ rules:
               operator: eq
               right:
                 literal: true
-              null_input_mode: propagate
-              null_result_mode: "null"
             - condition_id: c_book_value
               left:
                 field: book_value
               operator: eq
               right:
                 literal: true
-              null_input_mode: propagate
-              null_result_mode: "null"
     assign:
       bucket: explained
 """
@@ -3201,11 +2770,11 @@ row = result.collect()[0].asDict(recursive=True)
 service_logic = service.describe_rules(ruleset_name=ruleset.ruleset_name, version=ruleset.version)[0]["rule_logic"]
 
 assert row["rules_engine_matched"] is True
-assert row["rules_engine_first_matched_rule_trace"]["explanation"] == service_logic
-assert row["rules_engine_first_matched_rule_trace"]["explanation"] == (
+assert row["rules_engine_matched_rules"][0]["explanation"] == service_logic
+assert row["rules_engine_matched_rules"][0]["explanation"] == (
     "record_type == 'asset' AND (market_value == true OR book_value == true)"
 )
-conditions = row["rules_engine_first_matched_rule_trace"]["conditions"]
+conditions = row["rules_engine_matched_rules"][0]["conditions"]
 assert conditions[0]["left"]["value"] == "asset"
 assert conditions[1]["left"]["value"] == "True"
 assert conditions[2]["left"]["value"] == "True"
@@ -3214,7 +2783,7 @@ display(result)
 print("PASS: Spark runtime match-trace explanations matched service-style boolean logic.")
 
 # COMMAND ----------
-print("ST-056: Spark runtime ignores inactive rule assignment schemas")
+print("ST-050: Spark runtime ignores inactive rule assignment schemas")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
@@ -3229,8 +2798,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_056_{stamp}
-ruleset_name: ST-056 Active Assignment Schema Ruleset
+ruleset_id: st_050_{stamp}
+ruleset_name: ST-050 Active Assignment Schema Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3246,8 +2815,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       non_modeled:
         literal:
@@ -3265,8 +2832,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       non_modeled: retired string shape
       inactive_only: retired only
@@ -3300,7 +2865,7 @@ display(result)
 print("PASS: Spark runtime ignored inactive rule assignment schemas.")
 
 # COMMAND ----------
-print("ST-057: Spark runtime merges continued multi-match assignments")
+print("ST-051: Spark runtime merges continued multi-match assignments")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
@@ -3315,8 +2880,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_057_{stamp}
-ruleset_name: ST-057 Continued Match Ruleset
+ruleset_id: st_051_{stamp}
+ruleset_name: ST-051 Continued Match Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3333,8 +2898,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: first
       review_result: manual
@@ -3350,8 +2913,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: second
       review_status: follow_up
@@ -3375,9 +2936,9 @@ assign = row["rules_engine_assign"]
 assert assign["bucket"] == "second"
 assert assign["review_status"] == "follow_up"
 assert assign["review_result"] == "approved"
-assert row["rules_engine_first_matched_rule_trace"]["rule_id"] == "first_match"
-assert row["rules_engine_first_matched_rule_trace"]["rule_name"] == "First Match"
-assert row["rules_engine_first_matched_rule_trace"]["explanation"] == "account == 'A'"
+assert row["rules_engine_matched_rules"][0]["rule_id"] == "first_match"
+assert row["rules_engine_matched_rules"][0]["rule_name"] == "First Match"
+assert row["rules_engine_matched_rules"][0]["explanation"] == "account == 'A'"
 assert row["rules_engine_error"] is None
 
 incompatible_yaml = yaml_text.replace(
@@ -3397,7 +2958,7 @@ display(result)
 print("PASS: Compatible assignments merged and incompatible assignments were rejected.")
 
 # COMMAND ----------
-print("ST-058: Spark runtime serializes only required source fields")
+print("ST-052: Spark runtime serializes only required source fields")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
@@ -3410,8 +2971,8 @@ from rules_engine import RulesEngineService, required_source_columns
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 ruleset = service.compile_yaml_text(
     """
-ruleset_id: st_058_required_columns
-ruleset_name: ST-058 Required Source Columns
+ruleset_id: st_052_required_columns
+ruleset_name: ST-052 Required Source Columns
 version: "1"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3427,16 +2988,12 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
         - active_flag: false
           left:
             field: inactive_source
           operator: eq
           right:
             literal: ignored
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       copied_value:
         field: source_value
@@ -3455,19 +3012,19 @@ row = result.collect()[0].asDict(recursive=True)
 assert row["unused_payload"] == "not serialized"
 assert row["rules_engine_matched"] is True
 assert row["rules_engine_assign"] == {"copied_value": "assigned"}
-assert row["rules_engine_first_matched_rule_trace"]["conditions"][0]["left"]["value"] == "A"
+assert row["rules_engine_matched_rules"][0]["conditions"][0]["left"]["value"] == "A"
 assert row["rules_engine_error"] is None
 
 display(result)
 print("PASS: Spark runtime serialized only required source fields.")
 
 # COMMAND ----------
-print("ST-059: Match-only evaluation preserves trace and errors")
+print("ST-053: Match-only evaluation preserves trace and errors")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
 print("Owner Role: Engineering")
-print("Expected Result: Losing rules avoid trace output without hiding later-condition errors, while the first match retains full traceability.")
+print("Expected Result: Losing rules stay out of matched_rules without hiding errors, while each match retains full traceability.")
 print("")
 
 from rules_engine import RulesEngineService
@@ -3475,8 +3032,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 ruleset = service.compile_yaml_text(
     """
-ruleset_id: st_059_match_only
-ruleset_name: ST-059 Match-Only Evaluation
+ruleset_id: st_053_match_only
+ruleset_name: ST-053 Match-Only Evaluation
 version: "1"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3493,16 +3050,13 @@ rules:
           operator: eq
           right:
             literal: B
-          null_input_mode: propagate
-          null_result_mode: "null"
         - condition_id: losing_error_check
           left:
             field: status
           operator: eq
           right:
             literal: open
-          null_input_mode: propagate
-          null_result_mode: error
+          error_on_null: true
     assign:
       bucket: losing
   - rule_id: matching_rule
@@ -3517,8 +3071,6 @@ rules:
           operator: eq
           right:
             literal: A
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: matched
 """
@@ -3546,20 +3098,20 @@ normal = rows["normal"]
 assert normal["rules_engine_matched"] is True
 assert normal["rules_engine_matched_rule_ids"] == ["matching_rule"]
 assert normal["rules_engine_assign"] == {"bucket": "matched"}
-assert normal["rules_engine_first_matched_rule_trace"]["rule_id"] == "matching_rule"
-assert len(normal["rules_engine_first_matched_rule_trace"]["conditions"]) == 1
-assert normal["rules_engine_first_matched_rule_trace"]["conditions"][0]["left"]["column"] == "account"
+assert normal["rules_engine_matched_rules"][0]["rule_id"] == "matching_rule"
+assert len(normal["rules_engine_matched_rules"][0]["conditions"]) == 1
+assert normal["rules_engine_matched_rules"][0]["conditions"][0]["left"]["column"] == "account"
 assert normal["rules_engine_error"] is None
 
 error = rows["error"]
 assert error["rules_engine_matched"] is False
-assert "null_result_mode=error" in error["rules_engine_error"]
+assert "error_on_null=true" in error["rules_engine_error"]
 
 display(result)
-print("PASS: Match-only evaluation preserved first-match trace and losing-rule errors.")
+print("PASS: Full audit preserved matched-rule traces and losing-rule errors.")
 
 # COMMAND ----------
-print("ST-060: Financial and temporal types cross the real worker boundary exactly")
+print("ST-054: Financial and temporal types cross the real worker boundary exactly")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: Critical")
@@ -3577,8 +3129,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_060_{stamp}
-ruleset_name: ST-060 Financial Types Ruleset
+ruleset_id: st_054_{stamp}
+ruleset_name: ST-054 Financial Types Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3591,8 +3143,6 @@ rules:
         - left: {{ field: status }}
           operator: eq
           right: {{ literal: OPEN }}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       existing_rate: 0.0425
       parsed_balance:
@@ -3658,7 +3208,7 @@ assert isinstance(assignment_schema["flags"].dataType, T.StructType)
 print("PASS: Financial and temporal assignments retained exact worker-boundary values and types.")
 
 # COMMAND ----------
-print("ST-061: Fail-fast evaluation is lazy and builds one Python UDF")
+print("ST-055: Fail-fast evaluation is lazy and builds one Python UDF")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
@@ -3672,28 +3222,28 @@ import rules_engine.spark_runtime as spark_runtime_module
 from rules_engine import CustomFunctionSpec, RulesEngineService
 
 
-def st061_validate_value(value):
+def st055_validate_value(value):
     if value == "bad":
-        raise ValueError("ST-061 bad value")
+        raise ValueError("ST-055 bad value")
     return value == "good"
 
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 service.registry.register(
     CustomFunctionSpec(
-        function_name="st061_validate_value",
-        implementation_reference="system_tests.st061_validate_value",
+        function_name="st055_validate_value",
+        implementation_reference="system_tests.st055_validate_value",
         arg_names=("value",),
         allowed_in_condition_flag=True,
         allowed_in_assignment_flag=False,
         return_type_hint="boolean",
     ),
-    st061_validate_value,
+    st055_validate_value,
 )
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_061_{stamp}
-ruleset_name: ST-061 Lazy Fail Fast Ruleset
+ruleset_id: st_055_{stamp}
+ruleset_name: ST-055 Lazy Fail Fast Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3705,13 +3255,11 @@ rules:
       all:
         - left:
             custom_function:
-              name: st061_validate_value
+              name: st055_validate_value
               args:
                 value: {{ field: value }}
           operator: eq
           right: {{ literal: true }}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: good
 """
@@ -3720,12 +3268,12 @@ udf_factory_calls = []
 original_udf = spark_runtime_module.F.udf
 
 
-def st061_tracked_udf(*args, **kwargs):
+def st055_tracked_udf(*args, **kwargs):
     udf_factory_calls.append((args, kwargs))
     return original_udf(*args, **kwargs)
 
 
-spark_runtime_module.F.udf = st061_tracked_udf
+spark_runtime_module.F.udf = st055_tracked_udf
 try:
     clean_output = service.evaluate_dataframe(
         spark.createDataFrame([{"value": "good"}]),
@@ -3747,13 +3295,13 @@ bad_output = service.evaluate_dataframe(
 try:
     bad_output.collect()
 except Exception as exc:
-    assert "ST-061 bad value" in str(exc), str(exc)
+    assert "ST-055 bad value" in str(exc), str(exc)
 else:
     raise AssertionError("Expected the materializing action to fail for a bad row.")
 print("PASS: Fail-fast construction stayed lazy, built one UDF, and surfaced worker errors on action.")
 
 # COMMAND ----------
-print("ST-062: Custom implementations are preflighted for worker serialization")
+print("ST-056: Custom implementations are preflighted for worker serialization")
 print("-" * 80)
 print("Area: Runtime Spark")
 print("Priority: High")
@@ -3767,28 +3315,28 @@ from rules_engine import CustomFunctionSpec, FunctionRegistry, SparkRulesEngineR
 from rules_engine.exceptions import ValidationFailedError
 
 
-class ST062Repository:
+class ST056Repository:
     def load_published(self, ruleset_name, version=None):
-        raise NotImplementedError("ST-062 passes the ruleset directly.")
+        raise NotImplementedError("ST-056 passes the ruleset directly.")
 
 
-def st062_identity(value):
+def st056_identity(value):
     return value
 
 
-class ST062Unserializable:
+class ST056Unserializable:
     def __call__(self, **kwargs):
         return kwargs["value"]
 
     def __getstate__(self):
-        raise TypeError("ST-062 callable cannot be pickled")
+        raise TypeError("ST-056 callable cannot be pickled")
 
 
-def st062_ruleset(function_name, stamp):
+def st056_ruleset(function_name, stamp):
     return YamlRulesetCompiler().compile_text(
         f"""
-ruleset_id: st_062_{function_name}_{stamp}
-ruleset_name: ST-062 {function_name}
+ruleset_id: st_056_{function_name}_{stamp}
+ruleset_name: ST-056 {function_name}
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3805,8 +3353,6 @@ rules:
                 value: {{ field: value }}
           operator: eq
           right: {{ literal: A }}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -3817,39 +3363,39 @@ stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 good_registry = FunctionRegistry()
 good_registry.register(
     CustomFunctionSpec(
-        function_name="st062_identity",
-        implementation_reference="system_tests.st062_identity",
+        function_name="st056_identity",
+        implementation_reference="system_tests.st056_identity",
         arg_names=("value",),
         allowed_in_condition_flag=True,
         allowed_in_assignment_flag=False,
         return_type_hint="string",
     ),
-    st062_identity,
+    st056_identity,
 )
-good_runtime = SparkRulesEngineRuntime(ST062Repository(), good_registry)
+good_runtime = SparkRulesEngineRuntime(ST056Repository(), good_registry)
 good_row = good_runtime.evaluate_dataframe(
     spark.createDataFrame([{"value": "A"}]),
-    st062_ruleset("st062_identity", stamp),
+    st056_ruleset("st056_identity", stamp),
 ).collect()[0]
 assert good_row["rules_engine_matched"] is True
 
 bad_registry = FunctionRegistry()
 bad_registry.register(
     CustomFunctionSpec(
-        function_name="st062_unserializable",
-        implementation_reference="system_tests.st062_unserializable",
+        function_name="st056_unserializable",
+        implementation_reference="system_tests.st056_unserializable",
         arg_names=("value",),
         allowed_in_condition_flag=True,
         allowed_in_assignment_flag=False,
         return_type_hint="string",
     ),
-    ST062Unserializable(),
+    ST056Unserializable(),
 )
-bad_runtime = SparkRulesEngineRuntime(ST062Repository(), bad_registry)
+bad_runtime = SparkRulesEngineRuntime(ST056Repository(), bad_registry)
 try:
     bad_runtime.evaluate_dataframe(
         spark.createDataFrame([{"value": "A"}]),
-        st062_ruleset("st062_unserializable", stamp),
+        st056_ruleset("st056_unserializable", stamp),
     )
 except ValidationFailedError as exc:
     assert "Spark-worker-serializable" in str(exc), str(exc)
@@ -3858,7 +3404,7 @@ else:
 print("PASS: Worker serialization preflight accepted and rejected the expected callables.")
 
 # COMMAND ----------
-print("ST-063: Standard date functions support loan-tape calendar semantics")
+print("ST-057: Standard date functions support loan-tape calendar semantics")
 print("-" * 80)
 print("Area: Standard functions")
 print("Priority: Critical")
@@ -3875,8 +3421,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_063_{stamp}
-ruleset_name: ST-063 Date Functions Ruleset
+ruleset_id: st_057_{stamp}
+ruleset_name: ST-057 Date Functions Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3894,8 +3440,6 @@ rules:
                 months: 1
           operator: ge
           right: {{ literal: "2024-02-29", value_type: date }}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       review_date:
         custom_function:
@@ -3949,7 +3493,7 @@ assert authored == {
 print("PASS: Date functions preserved month-end, leap-year, type, and audit semantics.")
 
 # COMMAND ----------
-print("ST-064: Embedded expected cases are a hard publication gate")
+print("ST-058: Embedded expected cases are a hard publication gate")
 print("-" * 80)
 print("Area: Publishing")
 print("Priority: Critical")
@@ -3965,8 +3509,8 @@ from rules_engine.exceptions import ValidationFailedError
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 passing_yaml = f"""
-ruleset_id: st_064_pass_{stamp}
-ruleset_name: ST-064 Passing Expected Cases
+ruleset_id: st_058_pass_{stamp}
+ruleset_name: ST-058 Passing Expected Cases
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -3979,8 +3523,6 @@ rules:
         - left: {{ field: fico }}
           operator: ge
           right: {{ literal: 720 }}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: prime
 expect:
@@ -3997,8 +3539,8 @@ assert test_result.passed, test_result.to_text()
 service.publish(passing_ruleset, published_by="system-test")
 
 failing_yaml = f"""
-ruleset_id: st_064_fail_{stamp}
-ruleset_name: ST-064 Failing Expected Cases
+ruleset_id: st_058_fail_{stamp}
+ruleset_name: ST-058 Failing Expected Cases
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -4011,8 +3553,6 @@ rules:
         - left: {{ field: fico }}
           operator: ge
           right: {{ literal: 720 }}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: prime
 expect:
@@ -4035,7 +3575,7 @@ assert failed_rows == 0
 print("PASS: Expected cases passed and blocked publication at the correct boundaries.")
 
 # COMMAND ----------
-print("ST-065: Compact and full-audit outputs retain immutable execution identity")
+print("ST-059: Compact and full-audit outputs retain immutable execution identity")
 print("-" * 80)
 print("Area: Auditability")
 print("Priority: Critical")
@@ -4050,8 +3590,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_065_{stamp}
-ruleset_name: ST-065 Audit Contract Ruleset
+ruleset_id: st_059_{stamp}
+ruleset_name: ST-059 Audit Contract Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -4064,8 +3604,6 @@ rules:
         - left: {{ field: account }}
           operator: eq
           right: {{ literal: A }}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: A
 """
@@ -4089,7 +3627,6 @@ assert full.columns == [
     "rules_engine_matched_rule_ids",
     "rules_engine_assign",
     "rules_engine_matched_rules",
-    "rules_engine_first_matched_rule_trace",
     "rules_engine_assignment_results",
     "rules_engine_ruleset",
     "rules_engine_engine_version",
@@ -4100,9 +3637,9 @@ identity_columns = {
 }
 assert identity_columns <= set(compact.columns)
 assert identity_columns <= set(full.columns)
-assert "rules_engine_first_matched_rule_trace" not in compact.columns
+assert "rules_engine_matched_rules" not in compact.columns
 assert "rules_engine_assignment_results" not in compact.columns
-assert "rules_engine_first_matched_rule_trace" in full.columns
+assert "rules_engine_matched_rules" in full.columns
 assert "rules_engine_assignment_results" in full.columns
 compact_row = compact.collect()[0]
 assert compact_row["rules_engine_ruleset"]["id"] == ruleset.ruleset_id
@@ -4112,7 +3649,7 @@ assert compact_row["rules_engine_engine_version"]
 print("PASS: Default and full-audit outputs retained identity and emitted documented detail.")
 
 # COMMAND ----------
-print("ST-066: Semantic diffs compare immutable published versions")
+print("ST-060: Semantic diffs compare immutable published versions")
 print("-" * 80)
 print("Area: Change control")
 print("Priority: High")
@@ -4126,9 +3663,9 @@ from rules_engine import RulesEngineService
 
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-ruleset_name = f"ST-066 Semantic Diff {stamp}"
+ruleset_name = f"ST-060 Semantic Diff {stamp}"
 baseline_yaml = f"""
-ruleset_id: st_066_{stamp}
+ruleset_id: st_060_{stamp}
 ruleset_name: {ruleset_name}
 version: "{stamp}.1"
 owner: Rules Team
@@ -4143,8 +3680,6 @@ rules:
           left: {{ field: fico }}
           operator: ge
           right: {{ literal: 720 }}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: prime
 """
@@ -4167,7 +3702,7 @@ print(rendered_diff)
 print("PASS: Published-version diff exposed the expected semantic changes.")
 
 # COMMAND ----------
-print("ST-067: Coverage reports dead, broad, and closest rules")
+print("ST-061: Coverage reports dead, broad, and closest rules")
 print("-" * 80)
 print("Area: Change control")
 print("Priority: High")
@@ -4182,8 +3717,8 @@ from rules_engine import RulesEngineService
 service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 yaml_text = f"""
-ruleset_id: st_067_{stamp}
-ruleset_name: ST-067 Coverage Ruleset
+ruleset_id: st_061_{stamp}
+ruleset_name: ST-061 Coverage Ruleset
 version: "{stamp}"
 owner: Rules Team
 owner_department: ALM Engineering
@@ -4197,8 +3732,6 @@ rules:
           left: {{ field: fico }}
           operator: ge
           right: {{ literal: 720 }}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       bucket: prime
   - rule_id: near
@@ -4210,8 +3743,6 @@ rules:
           left: {{ field: fico }}
           operator: ge
           right: {{ literal: 680 }}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       review: true
   - rule_id: impossible
@@ -4223,8 +3754,6 @@ rules:
           left: {{ field: fico }}
           operator: gt
           right: {{ literal: 900 }}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       invalid: true
 """
@@ -4247,6 +3776,118 @@ assert no_match["loan_id"] == "L3"
 assert no_match["rules_engine_coverage_closest_rule_id"] == "prime"
 assert no_match["rules_engine_coverage_failed_condition_ids"] == ["prime_fico"]
 print("PASS: Coverage identified dead, broad, and closest-rule behavior.")
+
+# COMMAND ----------
+print("ST-062: Later rules consume explicit prior assignment results")
+print("-" * 80)
+print("Area: Runtime Spark")
+print("Priority: Critical")
+print("Owner Role: Engineering")
+print("Expected Result: Assigned operands see lower-order commits, preserve original fields, and expose producer provenance.")
+print("")
+
+from datetime import datetime, timezone
+
+from rules_engine import RulesEngineService, required_source_columns
+
+service = RulesEngineService.from_schema(spark=spark, schema=SCHEMA)
+stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+yaml_text = f"""
+ruleset_id: st_062_{stamp}
+ruleset_name: ST-062 Assigned Chain
+version: "{stamp}"
+owner: Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: producer
+    rule_name: Producer
+    rule_order: 1
+    when:
+      all:
+        - left: {{ field: eligible }}
+          operator: eq
+          right: {{ literal: true }}
+    assign:
+      - assignment_id: produce_bucket
+        target_field: bucket
+        value: {{ literal: A }}
+      - assignment_id: produce_score
+        target_field: score
+        value: {{ literal: 10 }}
+  - rule_id: consumer
+    rule_name: Consumer
+    rule_order: 2
+    when:
+      all:
+        - condition_id: assigned_bucket_is_a
+          left: {{ assigned: bucket }}
+          operator: eq
+          right: {{ literal: A }}
+        - condition_id: original_bucket_unchanged
+          left: {{ field: bucket }}
+          operator: eq
+          right: {{ literal: ORIGINAL }}
+    assign:
+      - assignment_id: replace_score
+        target_field: score
+        value: {{ literal: 20 }}
+      - assignment_id: copy_prior_score
+        target_field: copied_score
+        value: {{ assigned: score }}
+  - rule_id: missing_commit_fallback
+    rule_name: Missing Commit Fallback
+    rule_order: 3
+    when:
+      all:
+        - condition_id: bucket_was_not_committed
+          left:
+            assigned: bucket
+            default_if_null: MISSING
+          operator: eq
+          right: {{ literal: MISSING }}
+    assign:
+      used_fallback: true
+"""
+ruleset = service.compile_yaml_text(yaml_text)
+validation = service.validator.validate(
+    ruleset,
+    spark.createDataFrame(
+        [("chain", True, "ORIGINAL"), ("fallback", False, "ORIGINAL")],
+        ["row_id", "eligible", "bucket"],
+    ).schema,
+)
+assert validation.passed, validation.to_text()
+assert required_source_columns(ruleset) == ("eligible", "bucket")
+
+evaluated = service.evaluate_dataframe(
+    spark.createDataFrame(
+        [("chain", True, "ORIGINAL"), ("fallback", False, "ORIGINAL")],
+        ["row_id", "eligible", "bucket"],
+    ),
+    ruleset=ruleset,
+    full_audit=True,
+    fail_on_error=False,
+)
+rows = {
+    row["row_id"]: row.asDict(recursive=True)
+    for row in evaluated.collect()
+}
+chain = rows["chain"]
+fallback = rows["fallback"]
+assert chain["rules_engine_error"] is None
+assert chain["rules_engine_matched_rule_ids"] == ["producer", "consumer"]
+assert chain["rules_engine_assign"]["bucket"] == "A"
+assert chain["rules_engine_assign"]["score"] == 20
+assert chain["rules_engine_assign"]["copied_score"] == 10
+consumer_left = chain["rules_engine_matched_rules"][1]["conditions"][0]["left"]
+assert consumer_left["kind"] == "assigned"
+assert consumer_left["target_field"] == "bucket"
+assert consumer_left["produced_by_rule_id"] == "producer"
+assert consumer_left["produced_by_assignment_id"] == "produce_bucket"
+assert fallback["rules_engine_error"] is None
+assert fallback["rules_engine_matched_rule_ids"] == ["missing_commit_fallback"]
+assert fallback["rules_engine_assign"]["used_fallback"] is True
+print("PASS: Ordered assignment chaining, atomic snapshots, null fallback, and provenance are correct.")
 
 # COMMAND ----------
 print("Run automated unit test suite")

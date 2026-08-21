@@ -37,12 +37,14 @@ def test_yaml_export_round_trips_compiled_ruleset():
                         "all": [
                             {
                                 "condition_id": "c1",
-                                "left": {"field": "account"},
+                                "left": {
+                                    "field": "account",
+                                    "default_if_null": "UNKNOWN",
+                                },
                                 "operator": "eq",
                                 "right": {"literal": "A", "value_type": "string"},
                                 "tolerance_abs": "0",
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
+                                "error_on_null": True,
                                 "active_flag": True,
                             },
                             {
@@ -54,8 +56,6 @@ def test_yaml_export_round_trips_compiled_ruleset():
                                         "operator": "gt",
                                         "right": {"literal": 100, "value_type": "number"},
                                         "tolerance_abs": "0",
-                                        "null_input_mode": "propagate",
-                                        "null_result_mode": "null",
                                     }
                                 ],
                             },
@@ -151,18 +151,64 @@ def test_yaml_export_text_is_stable_after_recompilation():
         "operator",
         "right",
         "tolerance_abs",
-        "null_input_mode",
-        "null_result_mode",
         "active_flag",
     ]
 
 
-def test_yaml_export_uses_canonical_keys():
-    """
-    What: Verifies YAML export emits canonical authoring keys only.
-    Why: Exported YAML must not reintroduce legacy aliases or internal dataclass names.
-    Fails when: Export uses value/assignments aliases or omits canonical group IDs.
-    """
+def test_yaml_export_round_trips_assigned_operands():
+    """The explicit prior-assignment reference remains canonical YAML."""
+    compiler = YamlRulesetCompiler()
+    ruleset = compiler.compile_payload(
+        {
+            "ruleset_id": "chain",
+            "ruleset_name": "Chain",
+            "version": "1",
+            "rules": [
+                {
+                    "rule_id": "producer",
+                    "rule_name": "Producer",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "eligible"},
+                                "operator": "eq",
+                                "right": {"literal": True},
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "A"},
+                },
+                {
+                    "rule_id": "consumer",
+                    "rule_name": "Consumer",
+                    "rule_order": 2,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {
+                                    "assigned": "bucket",
+                                    "default_if_null": "MISSING",
+                                },
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                            }
+                        ]
+                    },
+                    "assign": {"copy": {"assigned": "bucket"}},
+                },
+            ],
+        }
+    )
+
+    exported = YamlRulesetExporter().export_text(ruleset)
+
+    assert compiler.compile_text(exported) == ruleset
+    assert "assigned: bucket" in exported
+
+
+def test_yaml_export_emits_the_exact_rule_contract():
+    """Exported mappings contain the complete declared authoring shape."""
     ruleset = YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "rs1",
@@ -180,8 +226,6 @@ def test_yaml_export_uses_canonical_keys():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -195,8 +239,23 @@ def test_yaml_export_uses_canonical_keys():
     condition = payload["rules"][0]["when"]["all"][0]
     assignment = payload["rules"][0]["assign"][0]
 
-    assert "value" not in condition["right"]
-    assert "assignments" not in payload["rules"][0]
-    assert condition["right"]["literal"] == "A"
-    assert assignment["value"]["literal"] == "A"
+    assert set(payload["rules"][0]) == {
+        "rule_id",
+        "rule_name",
+        "rule_order",
+        "active_flag",
+        "stop_on_match",
+        "when",
+        "assign",
+    }
+    assert set(condition) == {
+        "condition_id",
+        "left",
+        "operator",
+        "right",
+        "tolerance_abs",
+        "active_flag",
+    }
+    assert condition["right"] == {"literal": "A"}
+    assert assignment["value"] == {"literal": "A"}
     assert payload["rules"][0]["when"]["condition_group_id"] == "cg:r1:root"

@@ -265,13 +265,12 @@ def test_semantic_diff_highlights_order_logic_and_assignment_changes():
     assert "bucket = 'super-prime'" in result.to_text()
 
 
-def test_semantic_diff_detects_null_behavior_and_identity_changes():
+def test_semantic_diff_detects_operand_default_and_identity_changes():
     baseline_payload = _payload()
     candidate_payload = _payload(version="2")
     candidate_condition = candidate_payload["rules"][0]["when"]["all"][0]
     candidate_condition["condition_id"] = "fico-prime-v2"
-    candidate_condition["null_result_mode"] = "default"
-    candidate_condition["null_default_value"] = True
+    candidate_condition["left"]["default_if_null"] = 720
     baseline = YamlRulesetCompiler().compile_payload(baseline_payload)
     candidate = YamlRulesetCompiler().compile_payload(candidate_payload)
 
@@ -287,16 +286,15 @@ def test_semantic_diff_detects_null_behavior_and_identity_changes():
     assert result.candidate_content_hash == DeltaRowSerializer().content_hash(
         candidate
     )
-    assert "null_result_mode" in result.to_text()
-    assert "default" in result.to_text()
+    assert "default_if_null" in result.to_text()
 
 
 def test_semantic_diff_renders_only_changed_condition_leaves():
     baseline_payload = _payload()
     candidate_payload = _payload(version="2")
-    candidate_payload["rules"][0]["when"]["all"][0][
-        "null_input_mode"
-    ] = "zero"
+    candidate_payload["rules"][0]["when"]["all"][0]["left"][
+        "default_if_null"
+    ] = 0
     baseline = YamlRulesetCompiler().compile_payload(baseline_payload)
     candidate = YamlRulesetCompiler().compile_payload(candidate_payload)
 
@@ -309,10 +307,10 @@ def test_semantic_diff_renders_only_changed_condition_leaves():
     ]
 
     assert [change.field for change in condition_changes] == [
-        "condition[fico-prime].null_input_mode"
+        "condition[fico-prime].left.default_if_null"
     ]
     assert (
-        "condition[fico-prime].null_input_mode: 'propagate' -> 'zero'"
+        "condition[fico-prime].left.default_if_null: None ->"
         in result.to_text()
     )
 
@@ -369,10 +367,9 @@ def test_full_audit_controls_detailed_schema_and_payload():
         "matched_rule_ids",
         "assign",
     )
-    assert "first_matched_rule_trace" not in payloads[False]
     assert "assignment_results" not in payloads[False]
     assert "matched_rules" not in payloads[False]
-    assert "first_matched_rule_trace" in payloads[True]
+    assert payloads[True]["matched_rules"][0]["conditions"]
     assert "assignment_results" in payloads[True]
     assert "matched_rules" in payloads[True]
 

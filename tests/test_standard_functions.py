@@ -160,8 +160,6 @@ def test_standard_functions_can_be_registered_for_runtime_field_args():
                                 },
                                 "operator": "eq",
                                 "right": {"literal": "BCD"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -227,8 +225,6 @@ def test_standard_date_functions_work_in_conditions_and_typed_assignments():
                                 },
                                 "operator": "ge",
                                 "right": {"literal": date(2024, 2, 29)},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -288,7 +284,7 @@ def test_standard_date_functions_work_in_conditions_and_typed_assignments():
     assert assignment_schema["review_date"].dataType == T.DateType()
     assert assignment_schema["age_days"].dataType == T.LongType()
     assert output["matched"] is True
-    assert output["first_matched_rule_trace"]["explanation"] == (
+    assert output["matched_rules"][0]["explanation"] == (
         "date_add_months(value=funded_date, months=1) >= 2024-02-29"
     )
     assert output["assign"] == {

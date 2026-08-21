@@ -19,8 +19,6 @@ rules:
       operator: eq
       right:
         literal: INV
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_group_id: domain_leaf_key_001_g2
       any:
       - condition_id: domain_leaf_key_001_c2
@@ -29,24 +27,18 @@ rules:
         operator: starts_with
         right:
           literal: INV-P
-        null_input_mode: propagate
-        null_result_mode: 'null'
       - condition_id: domain_leaf_key_001_c3
         left:
           field: Account
         operator: eq
         right:
           literal: STFA-IBDDA
-        null_input_mode: propagate
-        null_result_mode: 'null'
       - condition_id: domain_leaf_key_001_c4
         left:
           field: CustID
         operator: starts_with
         right:
           literal: INV-FSO
-        null_input_mode: propagate
-        null_result_mode: 'null'
   assign:
     leaf_key: Cash and Money-Market Assets
 - rule_id: domain_leaf_key_002
@@ -64,8 +56,6 @@ rules:
         literal:
         - ADV
         - LOC
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: FHLB Advances - standalone value
 - rule_id: domain_leaf_key_003
@@ -81,8 +71,6 @@ rules:
       operator: eq
       right:
         literal: INV
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_003_c2
       left:
         field: Account
@@ -93,24 +81,18 @@ rules:
         - LTFA
         - NSVA
         - MUNI
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_003_c3
       left:
         field: InstrumentType
       operator: not_like
       right:
         literal: MBS%
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_003_c4
       left:
         field: InstrumentType
       operator: not_like
       right:
         literal: CMO%
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: Non-Mortgage Investment Securities
 - rule_id: domain_leaf_key_004
@@ -128,8 +110,6 @@ rules:
         literal:
         - MPFPOOL
         - MPFDC
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: Whole-loan Mortgages
 - rule_id: domain_leaf_key_005
@@ -145,8 +125,6 @@ rules:
       operator: eq
       right:
         literal: INV
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_group_id: domain_leaf_key_005_g2
       any:
       - condition_id: domain_leaf_key_005_c2
@@ -155,16 +133,12 @@ rules:
         operator: starts_with
         right:
           literal: MBS
-        null_input_mode: propagate
-        null_result_mode: 'null'
       - condition_id: domain_leaf_key_005_c3
         left:
           field: InstrumentType
         operator: starts_with
         right:
           literal: CMO
-        null_input_mode: propagate
-        null_result_mode: 'null'
   assign:
     leaf_key: Mortgage Securities - standalone value
 - rule_id: domain_leaf_key_006
@@ -180,16 +154,12 @@ rules:
       operator: eq
       right:
         literal: GL
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_006_c2
       left:
         field: LedgerAccountType
       operator: eq
       right:
         literal: Asset
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: Other Assets
 - rule_id: domain_leaf_key_007
@@ -205,8 +175,6 @@ rules:
       operator: eq
       right:
         literal: MD
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_group_id: domain_leaf_key_007_g2
       all:
       - condition_id: domain_leaf_key_007_c2
@@ -215,16 +183,12 @@ rules:
         operator: eq
         right:
           literal: GL
-        null_input_mode: propagate
-        null_result_mode: 'null'
       - condition_id: domain_leaf_key_007_c3
         left:
           field: CustID
         operator: eq
         right:
           literal: OtherDeposits-MRAA
-        null_input_mode: propagate
-        null_result_mode: 'null'
   assign:
     leaf_key: Deposits and Borrowings
 - rule_id: domain_leaf_key_008
@@ -242,16 +206,12 @@ rules:
         literal:
         - DN
         - CO
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_008_c2
       left:
         field: IsTNS
       operator: eq
       right:
         literal: false
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: COs and Discount Notes
 - rule_id: domain_leaf_key_009
@@ -267,24 +227,18 @@ rules:
       operator: eq
       right:
         literal: GL
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_009_c2
       left:
         field: CustID
       operator: ne
       right:
         literal: MandatorilyRedeemableCapitalStock
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_009_c3
       left:
         field: LedgerAccountType
       operator: eq
       right:
         literal: Liability
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: Other Liabilities
 - rule_id: domain_leaf_key_010
@@ -300,16 +254,12 @@ rules:
       operator: eq
       right:
         literal: DRV
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_010_c2
       left:
         field: LedgerAccountType
       operator: eq
       right:
         literal: Asset
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: Asset Swaps
 - rule_id: domain_leaf_key_011
@@ -325,24 +275,18 @@ rules:
       operator: eq
       right:
         literal: DRV
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_011_c2
       left:
         field: IsTNS
       operator: eq
       right:
         literal: false
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_011_c3
       left:
         field: LedgerAccountType
       operator: eq
       right:
         literal: Liability
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: Liability Swaps
 - rule_id: domain_leaf_key_012
@@ -361,16 +305,12 @@ rules:
         - DRV
         - DN
         - CO
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_012_c2
       left:
         field: IsTNS
       operator: eq
       right:
         literal: true
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: Other Swaps
 - rule_id: domain_leaf_key_013
@@ -386,16 +326,12 @@ rules:
       operator: eq
       right:
         literal: DRV
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: domain_leaf_key_013_c2
       left:
         field: LedgerAccountType
       operator: eq
       right:
         literal: OffBalanceSheet
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: Interest-Rate Caps / Floors / Options
 - rule_id: domain_leaf_key_014
@@ -411,7 +347,5 @@ rules:
       operator: eq
       right:
         literal: true
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: Other

@@ -12,6 +12,7 @@ from pyspark.sql import types as T
 
 from rules_engine.enums import ComparisonOperator, ObjectType
 from rules_engine.models import (
+    AssignedOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -80,20 +81,6 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
             self._populate_schema_result(ruleset, self._coerce_schema(schema), result)
         return result
 
-    def validate_schema(
-        self,
-        ruleset: Ruleset,
-        schema: T.StructType | Any,
-    ) -> ValidationResult:
-        """Validate only Spark runtime/schema compatibility.
-
-        This separate entry point lets the runtime preserve its historical
-        assumption that publish-time metadata validation has already happened.
-        """
-        result = ValidationResult()
-        self._populate_schema_result(ruleset, self._coerce_schema(schema), result)
-        return result
-
     def assignment_schema(
         self,
         ruleset: Ruleset,
@@ -129,9 +116,25 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
     ) -> None:
         """Add all Spark field-reference and assignment-type issues."""
         self._validate_field_references(ruleset, schema, result)
-        self._validate_membership_condition_types(ruleset, schema, result)
-        self._validate_temporal_condition_types(ruleset, schema, result)
-        self._resolve_assignment_types(ruleset, schema, result)
+        assigned_types = self._resolve_assignment_types(ruleset, schema, result)
+        self._validate_operand_defaults(
+            ruleset,
+            schema,
+            result,
+            assigned_types,
+        )
+        self._validate_membership_condition_types(
+            ruleset,
+            schema,
+            result,
+            assigned_types,
+        )
+        self._validate_temporal_condition_types(
+            ruleset,
+            schema,
+            result,
+            assigned_types,
+        )
 
     def _active_rules(self, ruleset: Ruleset) -> list[Rule]:
         """Return active rules in evaluation order."""
@@ -171,7 +174,12 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                 for argument in operand.args.values():
                     if isinstance(
                         argument,
-                        (FieldOperand, LiteralOperand, CustomFunctionOperand),
+                        (
+                            AssignedOperand,
+                            FieldOperand,
+                            LiteralOperand,
+                            CustomFunctionOperand,
+                        ),
                     ):
                         validate_operand(
                             argument,
@@ -216,6 +224,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
     ) -> dict[str, T.DataType]:
         """Resolve target types without coercing conflicts to strings."""
         source_fields = {field.name: field.dataType for field in schema.fields}
+        assigned_types = self._inferred_assigned_types(ruleset, source_fields)
         assignments_by_target: dict[str, list[tuple[Rule, Assignment]]] = defaultdict(list)
         for rule in self._active_rules(ruleset):
             for assignment in rule.assignments:
@@ -229,7 +238,11 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
             inferred_items: list[tuple[Rule, Assignment, T.DataType]] = []
             unresolved_items: list[tuple[Rule, Assignment]] = []
             for rule, assignment in rule_assignments:
-                inferred = self._operand_type(assignment.value, source_fields)
+                inferred = self._operand_type(
+                    assignment.value,
+                    source_fields,
+                    assigned_types,
+                )
                 if inferred is None:
                     unresolved_items.append((rule, assignment))
                 else:
@@ -303,11 +316,146 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                 resolved[target_field] = common_type
         return resolved
 
+    def _inferred_assigned_types(
+        self,
+        ruleset: Ruleset,
+        source_fields: dict[str, T.DataType],
+    ) -> dict[str, T.DataType]:
+        """Infer target types in rule order for downstream assigned operands."""
+        target_fields = {
+            assignment.target_field
+            for rule in self._active_rules(ruleset)
+            for assignment in rule.assignments
+        }
+        available = {
+            target: data_type
+            for target, data_type in source_fields.items()
+            if target in target_fields and not isinstance(data_type, T.NullType)
+        }
+        for rule in self._active_rules(ruleset):
+            pending: dict[str, T.DataType] = {}
+            for assignment in rule.assignments:
+                inferred = self._operand_type(
+                    assignment.value,
+                    source_fields,
+                    available,
+                )
+                if inferred is None:
+                    continue
+                current = pending.get(
+                    assignment.target_field,
+                    available.get(assignment.target_field),
+                )
+                if current is None:
+                    pending[assignment.target_field] = inferred
+                    continue
+                merged = self._common_type(current, inferred)
+                if merged is not None:
+                    pending[assignment.target_field] = merged
+            available.update(pending)
+        return available
+
+    def _validate_operand_defaults(
+        self,
+        ruleset: Ruleset,
+        schema: T.StructType,
+        result: ValidationResult,
+        assigned_types: dict[str, T.DataType] | None = None,
+    ) -> None:
+        """Require each literal null fallback to fit its operand's Spark type."""
+        source_fields = {field.name: field.dataType for field in schema.fields}
+
+        def validate_operand(
+            operand: Operand | None,
+            *,
+            object_type: ObjectType,
+            object_id: str,
+        ) -> None:
+            if operand is None:
+                return
+            default = operand.default_if_null
+            if default is not None:
+                default_type = self._base_operand_type(default, source_fields)
+                if default.value_type and default_type is None:
+                    self._add(
+                        result,
+                        "SPARK_DEFAULT_IF_NULL_VALUE_TYPE_UNSUPPORTED",
+                        f"Unsupported default_if_null value_type "
+                        f"{default.value_type!r}.",
+                        object_type,
+                        object_id,
+                    )
+                operand_type = self._base_operand_type(
+                    operand,
+                    source_fields,
+                    assigned_types,
+                )
+                if (
+                    operand_type is not None
+                    and default_type is not None
+                    and not self._default_is_compatible(default, operand_type)
+                ):
+                    self._add(
+                        result,
+                        "SPARK_DEFAULT_IF_NULL_TYPE_INCOMPATIBLE",
+                        f"default_if_null type {default_type.simpleString()} is "
+                        f"incompatible with operand type "
+                        f"{operand_type.simpleString()}.",
+                        object_type,
+                        object_id,
+                        details={
+                            "default_type": default_type.simpleString(),
+                            "operand_type": operand_type.simpleString(),
+                        },
+                    )
+            if isinstance(operand, CustomFunctionOperand):
+                for argument in operand.args.values():
+                    if isinstance(
+                        argument,
+                        (
+                            AssignedOperand,
+                            FieldOperand,
+                            LiteralOperand,
+                            CustomFunctionOperand,
+                        ),
+                    ):
+                        validate_operand(
+                            argument,
+                            object_type=object_type,
+                            object_id=object_id,
+                        )
+
+        def validate_group(group: ConditionGroup) -> None:
+            for condition in group.conditions:
+                if condition.active_flag:
+                    validate_operand(
+                        condition.left,
+                        object_type=ObjectType.CONDITION,
+                        object_id=condition.condition_id,
+                    )
+                    validate_operand(
+                        condition.right,
+                        object_type=ObjectType.CONDITION,
+                        object_id=condition.condition_id,
+                    )
+            for child in group.groups:
+                validate_group(child)
+
+        for rule in self._active_rules(ruleset):
+            validate_group(rule.root_group)
+            for assignment in rule.assignments:
+                validate_operand(
+                    assignment.value,
+                    object_type=ObjectType.ASSIGNMENT,
+                    object_id=assignment.assignment_id,
+                )
+
     def _validate_membership_condition_types(
         self,
         ruleset: Ruleset,
         schema: T.StructType,
         result: ValidationResult,
+        assigned_types: dict[str, T.DataType] | None = None,
     ) -> None:
         """Require statically knowable IN operands to be collection-valued."""
         source_fields = {field.name: field.dataType for field in schema.fields}
@@ -318,7 +466,11 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                 ComparisonOperator.NOT_IN,
             }:
                 return
-            right_type = self._operand_type(condition.right, source_fields)
+            right_type = self._operand_type(
+                condition.right,
+                source_fields,
+                assigned_types,
+            )
             if right_type is None or isinstance(right_type, T.ArrayType):
                 return
             self._add(
@@ -350,6 +502,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         ruleset: Ruleset,
         schema: T.StructType,
         result: ValidationResult,
+        assigned_types: dict[str, T.DataType] | None = None,
     ) -> None:
         """Reject knowable temporal comparisons that Spark workers cannot align."""
         source_fields = {field.name: field.dataType for field in schema.fields}
@@ -360,8 +513,16 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                 or condition.operator not in _TEMPORAL_COMPARISON_OPERATORS
             ):
                 return
-            left_type = self._operand_type(condition.left, source_fields)
-            right_type = self._operand_type(condition.right, source_fields)
+            left_type = self._operand_type(
+                condition.left,
+                source_fields,
+                assigned_types,
+            )
+            right_type = self._operand_type(
+                condition.right,
+                source_fields,
+                assigned_types,
+            )
             if isinstance(right_type, T.ArrayType):
                 right_type = right_type.elementType
             if left_type is None:
@@ -469,6 +630,18 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                         assignment.assignment_id,
                     )
                 continue
+            if isinstance(operand, AssignedOperand):
+                if not target_type_known:
+                    self._add(
+                        result,
+                        "SPARK_ASSIGNMENT_TYPE_UNRESOLVED",
+                        f"Spark type could not be inferred from assigned value "
+                        f"{operand.target_field!r} for new target field "
+                        f"{assignment.target_field!r}.",
+                        ObjectType.ASSIGNMENT,
+                        assignment.assignment_id,
+                    )
+                continue
             if (
                 isinstance(operand, LiteralOperand)
                 and operand.value_type
@@ -567,11 +740,51 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         self,
         operand: Operand | None,
         source_fields: dict[str, T.DataType],
+        assigned_types: dict[str, T.DataType] | None = None,
     ) -> T.DataType | None:
         """Infer an operand Spark type when metadata and schema make it knowable."""
+        base_type = self._base_operand_type(
+            operand,
+            source_fields,
+            assigned_types,
+        )
+        if base_type is not None:
+            return base_type
+        if operand is None or operand.default_if_null is None:
+            return None
+        if isinstance(operand, FieldOperand):
+            source_type = source_fields.get(operand.field_name)
+            return (
+                self._base_operand_type(operand.default_if_null, source_fields)
+                if isinstance(source_type, T.NullType)
+                else None
+            )
+        if isinstance(operand, AssignedOperand):
+            return self._base_operand_type(
+                operand.default_if_null,
+                source_fields,
+                assigned_types,
+            )
+        if isinstance(operand, LiteralOperand) and operand.value is None:
+            return self._base_operand_type(
+                operand.default_if_null,
+                source_fields,
+                assigned_types,
+            )
+        return None
+
+    def _base_operand_type(
+        self,
+        operand: Operand | None,
+        source_fields: dict[str, T.DataType],
+        assigned_types: dict[str, T.DataType] | None = None,
+    ) -> T.DataType | None:
+        """Infer an operand's type without considering its null fallback."""
         if isinstance(operand, FieldOperand):
             data_type = source_fields.get(operand.field_name)
             return None if isinstance(data_type, T.NullType) else data_type
+        if isinstance(operand, AssignedOperand):
+            return (assigned_types or {}).get(operand.target_field)
         if isinstance(operand, LiteralOperand):
             if isinstance(operand.value, (list, tuple, set)):
                 if operand.value_type:
@@ -591,6 +804,29 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
             hint = self._custom_return_type_hint(operand)
             return SPARK_TYPE_HINTS.get(hint.lower()) if hint else None
         return None
+
+    def _default_is_compatible(
+        self,
+        default: LiteralOperand,
+        operand_type: T.DataType,
+    ) -> bool:
+        """Return whether a literal fallback fits its operand's Spark type."""
+        literal_compatible = self._literal_assignment_is_compatible(
+            default,
+            operand_type,
+        )
+        if literal_compatible is not None:
+            return literal_compatible
+        default_type = self._base_operand_type(default, {})
+        if default_type is None:
+            return False
+        numeric_compatible = self._numeric_assignment_is_compatible(
+            default_type,
+            operand_type,
+        )
+        if numeric_compatible is not None:
+            return numeric_compatible
+        return default_type == operand_type
 
     def _custom_return_type_hint(
         self,

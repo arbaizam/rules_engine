@@ -16,6 +16,7 @@ from typing import Any
 import yaml
 
 from rules_engine.models import (
+    AssignedOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -151,7 +152,7 @@ class YamlRulesetExporter:
 
     def _export_condition(self, condition: Condition) -> dict[str, Any]:
         """
-        Export one condition with explicit tolerance and null behavior fields.
+        Export one condition with explicit tolerance and optional null errors.
         """
         payload: dict[str, Any] = {
             "condition_id": condition.condition_id,
@@ -161,10 +162,8 @@ class YamlRulesetExporter:
         if condition.right is not None:
             payload["right"] = self._export_operand(condition.right)
         payload["tolerance_abs"] = self._export_decimal(condition.tolerance_abs)
-        payload["null_input_mode"] = condition.null_input_mode.value
-        payload["null_result_mode"] = condition.null_result_mode.value
-        if condition.null_default_value is not None:
-            payload["null_default_value"] = self._export_value(condition.null_default_value)
+        if condition.error_on_null:
+            payload["error_on_null"] = True
         payload["active_flag"] = condition.active_flag
         return payload
 
@@ -183,14 +182,15 @@ class YamlRulesetExporter:
         Export an operand using the canonical operand key for its kind.
         """
         if isinstance(operand, FieldOperand):
-            return {"field": operand.field_name}
-        if isinstance(operand, LiteralOperand):
+            payload: dict[str, Any] = {"field": operand.field_name}
+        elif isinstance(operand, AssignedOperand):
+            payload = {"assigned": operand.target_field}
+        elif isinstance(operand, LiteralOperand):
             payload = {"literal": self._export_value(operand.value)}
             if operand.value_type is not None:
                 payload["value_type"] = operand.value_type
-            return payload
-        if isinstance(operand, CustomFunctionOperand):
-            return {
+        elif isinstance(operand, CustomFunctionOperand):
+            payload = {
                 "custom_function": {
                     "name": operand.function_name,
                     "args": {
@@ -199,7 +199,15 @@ class YamlRulesetExporter:
                     },
                 }
             }
-        raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+        else:
+            raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+        if operand.default_if_null is not None:
+            default = operand.default_if_null
+            if default.value_type is not None or isinstance(default.value, dict):
+                payload["default_if_null"] = self._export_operand(default)
+            else:
+                payload["default_if_null"] = self._export_value(default.value)
+        return payload
 
     def _export_decimal(self, value: Decimal) -> str:
         """
@@ -234,6 +242,9 @@ class YamlRulesetExporter:
         """
         Export custom-function args, preserving nested operand references.
         """
-        if isinstance(value, (FieldOperand, LiteralOperand, CustomFunctionOperand)):
+        if isinstance(
+            value,
+            (AssignedOperand, FieldOperand, LiteralOperand, CustomFunctionOperand),
+        ):
             return self._export_operand(value)
         return self._export_value(value)

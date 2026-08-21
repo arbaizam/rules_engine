@@ -18,7 +18,6 @@
 # MAGIC 8. Create Delta metadata tables.
 # MAGIC 9. Test, publish, load, evaluate, and retire a ruleset.
 # MAGIC 10. Inspect audit identity, semantic differences, and rule coverage.
-# MAGIC 11. Translate a reconciliation CSV spec into canonical YAML.
 # MAGIC
 # MAGIC This guide intentionally uses small examples. Production workflows should
 # MAGIC add environment-specific catalog names, permissions, logging, and approval
@@ -36,8 +35,6 @@
 # MAGIC
 # MAGIC - Imports the public package APIs used throughout the guide.
 # MAGIC - Imports the Spark/Delta repository classes used to persist metadata.
-# MAGIC - Imports the reconciliation translation utility, which is intentionally
-# MAGIC   outside the runtime package.
 # MAGIC - Imports standard-library helpers used only by this notebook.
 # MAGIC
 # MAGIC What this cell should prove:
@@ -50,10 +47,7 @@
 
 # COMMAND ----------
 
-import json
-from pathlib import Path
 import re
-from tempfile import TemporaryDirectory
 
 import rules_engine
 from rules_engine import (
@@ -66,10 +60,6 @@ from rules_engine import (
     YamlRulesetExporter,
 )
 from rules_engine.exceptions import RepositoryError
-from tools.recon_spec_translation.audit import write_audit
-from tools.recon_spec_translation.reader_csv import read_reconciliation_csv
-from tools.recon_spec_translation.translator import ReconciliationSpecTranslator
-from tools.recon_spec_translation.writer_yaml import write_yaml
 
 print(f"rules_engine version: {rules_engine.__version__}")
 print(f"rules_engine package: {rules_engine.__file__}")
@@ -82,17 +72,17 @@ print(f"rules_engine package: {rules_engine.__file__}")
 # MAGIC The authoring format is intentionally explicit:
 # MAGIC
 # MAGIC - canonical operator names only,
-# MAGIC - explicit null behavior,
+# MAGIC - null operands do not match unless an operand defines `default_if_null`,
+# MAGIC - `field` reads the original row while `assigned` explicitly reads a
+# MAGIC   value committed by a matched lower-order rule,
 # MAGIC - absolute tolerance only,
-# MAGIC - precomputed cross-row facts supplied as fields,
 # MAGIC - no expression DSL,
 # MAGIC - no aliases.
 # MAGIC
 # MAGIC This example contains:
 # MAGIC
 # MAGIC - a row-level condition,
-# MAGIC - a precomputed account-level amount total,
-# MAGIC - a precomputed open-row dataset amount total,
+# MAGIC - a numeric row-level threshold,
 # MAGIC - an assignment emitted when the rule matches.
 # MAGIC
 # MAGIC What this cell does:
@@ -102,14 +92,12 @@ print(f"rules_engine package: {rules_engine.__file__}")
 # MAGIC - Defines one rule evaluated by `rule_order = 1`.
 # MAGIC - Uses an `all` condition group, meaning every condition must pass.
 # MAGIC - Adds explicit condition IDs so metadata and diagnostics are readable.
-# MAGIC - Uses `null_result_mode: "null"` with quotes because unquoted YAML `null`
-# MAGIC   is parsed as Python `None`, not as the canonical string value.
+# MAGIC - Uses the default null behavior: an unresolved null makes its condition fail.
 # MAGIC
 # MAGIC The rule means:
 # MAGIC
 # MAGIC - `status` must equal `OPEN`.
-# MAGIC - `account_amount_sum` must be greater than `100`.
-# MAGIC - `open_amount_sum` must be greater than `100`.
+# MAGIC - `amount` must be greater than `50`.
 # MAGIC - when all conditions pass, assign `review_bucket = high_value_open`.
 # MAGIC
 # MAGIC What this cell does not do:
@@ -134,7 +122,7 @@ rules:
     rule_order: 1
     active_flag: true
     stop_on_match: false
-    description: Match open accounts whose account-level amount total is high.
+    description: Match open rows whose amount is high.
     when:
       all:
         - condition_id: c_status_open
@@ -142,32 +130,19 @@ rules:
           operator: eq
           right: { literal: OPEN, value_type: string }
           tolerance_abs: "0"
-          null_input_mode: propagate
-          null_result_mode: "null"
-        - condition_id: c_group_sum_gt_100
+        - condition_id: c_amount_gt_50
           left:
-            field: account_amount_sum
+            field: amount
           operator: gt
-          right: { literal: 100, value_type: number }
+          right: { literal: 50, value_type: number }
           tolerance_abs: "0"
-          null_input_mode: propagate
-          null_result_mode: "null"
-        - condition_id: c_open_dataset_sum_gt_100
-          left:
-            field: open_amount_sum
-          operator: gt
-          right: { literal: 100, value_type: number }
-          tolerance_abs: "0"
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       review_bucket: high_value_open
 expect:
   - name: open high-value account
     given:
       status: OPEN
-      account_amount_sum: 110
-      open_amount_sum: 120
+      amount: 60
     then:
       matched: true
       matched_rule_ids: [high_value_open_account]
@@ -175,8 +150,7 @@ expect:
   - name: closed account does not match
     given:
       status: CLOSED
-      account_amount_sum: 500
-      open_amount_sum: 120
+      amount: 500
     then:
       matched: false
       matched_rule_ids: []
@@ -267,18 +241,16 @@ print(exported_yaml)
 # MAGIC What this cell does:
 # MAGIC
 # MAGIC - Creates a tiny list of Python dictionaries as input rows.
-# MAGIC - Includes aggregate facts that an upstream Spark transform would usually
-# MAGIC   add before rule evaluation.
 # MAGIC - Reuses those rows later to build a Spark DataFrame.
 # MAGIC - Does not evaluate or persist anything yet.
 
 # COMMAND ----------
 
 input_rows = [
-    {"row_id": 1, "account": "A", "status": "OPEN", "amount": 60, "account_amount_sum": 110, "open_amount_sum": 120},
-    {"row_id": 2, "account": "A", "status": "OPEN", "amount": 50, "account_amount_sum": 110, "open_amount_sum": 120},
-    {"row_id": 3, "account": "B", "status": "OPEN", "amount": 10, "account_amount_sum": 10, "open_amount_sum": 120},
-    {"row_id": 4, "account": "C", "status": "CLOSED", "amount": 500, "account_amount_sum": 500, "open_amount_sum": 120},
+    {"row_id": 1, "account": "A", "status": "OPEN", "amount": 60},
+    {"row_id": 2, "account": "A", "status": "OPEN", "amount": 50},
+    {"row_id": 3, "account": "B", "status": "OPEN", "amount": 10},
+    {"row_id": 4, "account": "C", "status": "CLOSED", "amount": 500},
 ]
 
 input_rows
@@ -439,13 +411,12 @@ display(spark.table(table_names.ruleset_versions))
 # MAGIC Runtime execution details:
 # MAGIC
 # MAGIC - `load_published()` reads only `status = published` metadata.
-# MAGIC - Any aggregate facts must already be present as input columns.
 # MAGIC - A Python UDF evaluates final condition and assignment logic per row.
 # MAGIC - Building `result_df` is lazy and starts no hidden error-check action.
 # MAGIC - With `fail_on_error=True`, a row error raises from the UDF during the
 # MAGIC   materializing `display` action below.
 # MAGIC
-# MAGIC For this guide data, rows 1 and 2 should match. Rows 3 and 4 should not.
+# MAGIC For this guide data, row 1 should match. Rows 2 through 4 should not.
 # MAGIC This cell does not modify metadata or write result rows to Delta.
 
 # COMMAND ----------
@@ -473,13 +444,12 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_matched_rule_ids`
 # MAGIC - `rules_engine_assign`
 # MAGIC - `rules_engine_matched_rules`
-# MAGIC - `rules_engine_first_matched_rule_trace`
 # MAGIC - `rules_engine_assignment_results`
 # MAGIC - `rules_engine_ruleset`
 # MAGIC - `rules_engine_engine_version`
 # MAGIC
-# MAGIC The three detailed audit columns are present only because this example sets
-# MAGIC `full_audit=True`. Assignment output, trace detail, match summaries, and
+# MAGIC The two detailed audit columns are present only because this example sets
+# MAGIC `full_audit=True`. Assignment output, trace detail, matched rules, and
 # MAGIC per-assignment provenance are Spark-native structs and arrays.
 # MAGIC
 # MAGIC What this cell does:
@@ -495,9 +465,8 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_matched_rule_ids`: ordered list of matched rule IDs.
 # MAGIC - `rules_engine_assign`: struct containing assignments from matched rules,
 # MAGIC   or null when no rule matched.
-# MAGIC - `rules_engine_first_matched_rule_trace`: the detailed first-match trace, including
-# MAGIC   condition-level source columns, evaluated values, and pass/fail state.
-# MAGIC - `rules_engine_matched_rules`: ordered lightweight summaries of every match.
+# MAGIC - `rules_engine_matched_rules`: every matched rule in order, including its
+# MAGIC   explanation and condition-level source columns, values, and pass/fail state.
 # MAGIC - `rules_engine_assignment_results`: every proposed assignment plus its
 # MAGIC   authored expression, original value, changed/effective flags, and override
 # MAGIC   provenance.
@@ -512,17 +481,16 @@ display(result_df.orderBy("row_id"))
 
 rows = result_df.orderBy("row_id").collect()
 for row in rows:
-    first_match_trace = row["rules_engine_first_matched_rule_trace"]
+    matched_rule_explanations = [
+        trace["explanation"]
+        for trace in row["rules_engine_matched_rules"]
+    ]
     print(
         row["row_id"],
         row["rules_engine_matched"],
         row["rules_engine_matched_rule_ids"],
         row["rules_engine_assign"],
-        (
-            first_match_trace["explanation"]
-            if first_match_trace is not None
-            else None
-        ),
+        matched_rule_explanations,
         row["rules_engine_assignment_results"],
         row["rules_engine_error"],
     )
@@ -620,7 +588,7 @@ display(spark.table(table_names.function_registry))
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
-# MAGIC 1. Calls `repository.retire(ruleset_id, version, retired_by=...)`.
+# MAGIC 1. Calls `service.retire(ruleset_id, version, retired_by=...)`.
 # MAGIC 2. Updates the `ruleset_versions` row to `status = retired`.
 # MAGIC 3. Attempts to load the same ruleset through `load_published()`.
 # MAGIC 4. Expects `RepositoryError`, because retired metadata is not published.
@@ -632,10 +600,10 @@ display(spark.table(table_names.function_registry))
 
 # COMMAND ----------
 
-repository.retire("account_review_rules", "1", retired_by="developer_guide")
+service.retire("account_review_rules", "1", retired_by="developer_guide")
 
 try:
-    repository.load_published("Account Review Rules", version="1")
+    service.load_published("Account Review Rules", version="1")
 except RepositoryError as exc:
     print(f"Expected load failure after retire: {exc}")
 else:
@@ -646,118 +614,7 @@ display(spark.table(table_names.ruleset_versions))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 14. Reconciliation CSV Translation
-# MAGIC
-# MAGIC The reconciliation translator is outside runtime execution. It converts a
-# MAGIC flat source CSV spec into canonical YAML and writes an audit artifact.
-# MAGIC
-# MAGIC Source columns:
-# MAGIC
-# MAGIC - `MatchRuleName`
-# MAGIC - `GroupSequence`
-# MAGIC - `GroupJoinOperator`
-# MAGIC - `CriteriaSequence`
-# MAGIC - `FieldName`
-# MAGIC - `ValueOperator`
-# MAGIC - `Value`
-# MAGIC - `JoinType`
-# MAGIC
-# MAGIC `JoinType` and `GroupJoinOperator` are folded left-to-right.
-# MAGIC Translated rules default to `stop_on_match: true`, so the first matching
-# MAGIC rule by `rule_order` wins. Treat the translated YAML as a first-pass
-# MAGIC artifact for manual refinement before publish.
-# MAGIC
-# MAGIC What this cell does:
-# MAGIC
-# MAGIC - Creates a small CSV reconciliation spec in a temporary directory.
-# MAGIC - Reads source rows with `read_reconciliation_csv()`.
-# MAGIC - Translates source rows into canonical rules engine YAML payload.
-# MAGIC - Writes a translation audit JSON artifact.
-# MAGIC - Fails if any source pattern is unsupported or ambiguous.
-# MAGIC - Writes translated YAML.
-# MAGIC - Prints both YAML and audit output.
-# MAGIC
-# MAGIC Translator behavior:
-# MAGIC
-# MAGIC - Groups rows by `MatchRuleName`.
-# MAGIC - Orders criteria by `GroupSequence` and `CriteriaSequence`.
-# MAGIC - Maps supported source operators to canonical operators.
-# MAGIC - Emits `assign.translated_match_rule_name = MatchRuleName`.
-# MAGIC - Emits `stop_on_match: true` by default.
-# MAGIC
-# MAGIC The translator is not a runtime dependency. Its output should be reviewed
-# MAGIC and refined manually before publication.
-
-# COMMAND ----------
-
-csv_text = """MatchRuleName,GroupSequence,GroupJoinOperator,CriteriaSequence,FieldName,ValueOperator,Value,JoinType
-Rule A,1,,1,status,TextEquals,OPEN,And
-Rule A,1,,2,account,TextContains,A,
-Rule B,1,Or,1,status,TextEquals,CLOSED,
-Rule B,2,,1,amount,NumericGreaterThan,100,
-"""
-
-with TemporaryDirectory() as temp_dir:
-    temp_path = Path(temp_dir)
-    source_csv = temp_path / "source_spec.csv"
-    yaml_path = temp_path / "translated_rules.yaml"
-    audit_path = temp_path / "translation_audit.json"
-    source_csv.write_text(csv_text, encoding="utf-8")
-
-    source_rows = read_reconciliation_csv(source_csv)
-    translation = ReconciliationSpecTranslator(
-        assignment_target_field="translated_match_rule_name"
-    ).translate(
-        source_rows,
-        owner="Rules Team",
-        owner_department="ALM Engineering",
-    )
-
-    write_audit(translation.audit_records, audit_path)
-    if any(record.failures for record in translation.audit_records):
-        print(audit_path.read_text(encoding="utf-8"))
-        raise ValueError("Translation failed.")
-
-    write_yaml(translation.payload, yaml_path)
-    translated_yaml = yaml_path.read_text(encoding="utf-8")
-    translated_audit = json.loads(audit_path.read_text(encoding="utf-8"))
-
-print(translated_yaml)
-print(json.dumps(translated_audit, indent=2))
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 15. Compile Translated YAML
-# MAGIC
-# MAGIC Translation output should compile and validate like any other canonical
-# MAGIC ruleset.
-# MAGIC
-# MAGIC What this cell does:
-# MAGIC
-# MAGIC - Compiles the YAML produced by the translation utility.
-# MAGIC - Runs the standard semantic validator.
-# MAGIC - Raises if translated YAML violates the engine contract.
-# MAGIC
-# MAGIC This step proves that translation output is a valid authoring artifact.
-# MAGIC It does not publish the translated ruleset and does not execute it against
-# MAGIC business data.
-
-# COMMAND ----------
-
-translated_ruleset = compiler.compile_text(translated_yaml)
-translated_validation = RulesetValidator(FunctionRegistry()).validate(translated_ruleset)
-
-print(translated_validation.to_text())
-if translated_validation.has_errors():
-    raise ValueError(translated_validation.to_text())
-
-translated_ruleset
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 16. Production Checklist
+# MAGIC ## 14. Production Checklist
 # MAGIC
 # MAGIC Before production use:
 # MAGIC
@@ -765,21 +622,16 @@ translated_ruleset
 # MAGIC - run Spark tests on the target Databricks runtime,
 # MAGIC - run Databricks validation against a disposable schema,
 # MAGIC - validate representative production-like rulesets,
-# MAGIC - compare translated reconciliation output against known-good results,
 # MAGIC - review metadata table permissions and retention,
-# MAGIC - define package deployment and versioning controls,
 # MAGIC - use `fail_on_error=True`, or write and monitor a governed quarantine
 # MAGIC   when tape-cleaning operations require `fail_on_error=False`,
 # MAGIC - keep `include_error_traceback=False` outside controlled debugging,
 # MAGIC
 # MAGIC Recommended promotion path:
 # MAGIC
-# MAGIC 1. Translate source specs to YAML where helpful.
-# MAGIC 2. Manually refine YAML for semantics not captured in source specs.
-# MAGIC 3. Compile, validate, normalize, and export YAML.
-# MAGIC 4. Publish into non-production metadata tables.
-# MAGIC 5. Run small hand-verified DataFrame tests.
-# MAGIC 6. Compare against known-good legacy output where available.
-# MAGIC 7. Run representative volume/performance tests.
-# MAGIC 8. Decide packaging and release tagging.
-# MAGIC 9. Promote the exact package version and YAML artifact together.
+# MAGIC 1. Author and review canonical YAML.
+# MAGIC 2. Compile, validate, normalize, and export YAML.
+# MAGIC 3. Publish into non-production metadata tables.
+# MAGIC 4. Run small hand-verified DataFrame tests.
+# MAGIC 5. Run representative volume/performance tests.
+# MAGIC 6. Promote the exact package version and YAML artifact together.

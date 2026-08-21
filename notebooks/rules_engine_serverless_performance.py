@@ -25,20 +25,7 @@ import uuid
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
-from rules_engine import RulesEngineService
-from rules_engine.models import (
-    ConditionGroup,
-    CustomFunctionOperand,
-    FieldOperand,
-    LiteralOperand,
-    Operand,
-    Ruleset,
-)
-
-try:
-    from rules_engine import required_source_columns as _runtime_source_columns
-except (AttributeError, ImportError):
-    _runtime_source_columns = None
+from rules_engine import RulesEngineService, required_source_columns
 
 
 def _parameter(name: str, default: str = "") -> str:
@@ -76,39 +63,6 @@ def _literal_column(column_name: str):
     """Return a top-level Spark column whose name may contain dots."""
     escaped_name = column_name.replace("`", "``")
     return F.col(f"`{escaped_name}`")
-
-
-def _ruleset_dependencies(ruleset: Ruleset) -> tuple[str, ...]:
-    """Return active field dependencies across baseline and optimized versions."""
-    columns = []
-
-    def add_operand(operand: Operand | None) -> None:
-        if isinstance(operand, FieldOperand):
-            columns.append(operand.field_name)
-        elif isinstance(operand, CustomFunctionOperand):
-            for argument in operand.args.values():
-                if isinstance(
-                    argument,
-                    (FieldOperand, LiteralOperand, CustomFunctionOperand),
-                ):
-                    add_operand(argument)
-
-    def add_group(group: ConditionGroup) -> None:
-        for condition in group.conditions:
-            if condition.active_flag:
-                add_operand(condition.left)
-                add_operand(condition.right)
-        for nested_group in group.groups:
-            add_group(nested_group)
-
-    for rule in sorted(
-        (item for item in ruleset.rules if item.active_flag),
-        key=lambda item: item.rule_order,
-    ):
-        add_group(rule.root_group)
-        for assignment in rule.assignments:
-            add_operand(assignment.value)
-    return tuple(dict.fromkeys(columns))
 
 
 PERF_RULES_ENGINE_SCHEMA = _parameter("PERF_RULES_ENGINE_SCHEMA")
@@ -154,12 +108,8 @@ ruleset = service.load_published(
 source_schema = spark.table(PERF_SOURCE_TABLE).schema
 source_column_names = [field.name for field in source_schema.fields]
 source_column_set = set(source_column_names)
-dependency_columns = _ruleset_dependencies(ruleset)
-serialized_columns = (
-    _runtime_source_columns(ruleset)
-    if _runtime_source_columns is not None
-    else tuple(source_column_names)
-)
+dependency_columns = required_source_columns(ruleset)
+serialized_columns = dependency_columns
 missing_columns = [
     column_name
     for column_name in dependency_columns
@@ -186,7 +136,6 @@ print(f"Dependency column count: {len(dependency_columns)}")
 print(f"Dependency columns:      {dependency_columns}")
 print(f"Serialized column count: {len(serialized_columns)}")
 print(f"Serialized columns:      {serialized_columns}")
-print(f"Optimized projection:    {_runtime_source_columns is not None}")
 print(f"Where clause:            {PERF_WHERE_SQL or '<none>'}")
 print(f"Row limit:               {PERF_ROW_LIMIT or '<none>'}")
 print(f"Measured repetitions:    {PERF_REPETITIONS}")

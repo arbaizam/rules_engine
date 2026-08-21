@@ -24,8 +24,6 @@ from typing import Any
 from rules_engine.enums import (
     ComparisonOperator,
     LogicalOperator,
-    NullInputMode,
-    NullResultMode,
     ObjectType,
     OperandKind,
     RulesetStatus,
@@ -164,7 +162,17 @@ class FieldOperand:
     """
 
     field_name: str
+    default_if_null: LiteralOperand | None = None
     kind: OperandKind = field(default=OperandKind.FIELD, init=False)
+
+
+@dataclass(frozen=True)
+class AssignedOperand:
+    """Reference to the latest value committed by an earlier matched rule."""
+
+    target_field: str
+    default_if_null: LiteralOperand | None = None
+    kind: OperandKind = field(default=OperandKind.ASSIGNED, init=False)
 
 
 @dataclass(frozen=True)
@@ -175,6 +183,7 @@ class LiteralOperand:
 
     value: Any
     value_type: str | None = None
+    default_if_null: LiteralOperand | None = None
     kind: OperandKind = field(default=OperandKind.LITERAL, init=False)
 
 
@@ -194,10 +203,11 @@ class CustomFunctionOperand:
 
     function_name: str
     args: Mapping[str, Any] = field(default_factory=dict)
+    default_if_null: LiteralOperand | None = None
     kind: OperandKind = field(default=OperandKind.CUSTOM_FUNCTION, init=False)
 
 
-Operand = FieldOperand | LiteralOperand | CustomFunctionOperand
+Operand = AssignedOperand | FieldOperand | LiteralOperand | CustomFunctionOperand
 
 
 @dataclass(frozen=True)
@@ -211,9 +221,7 @@ class Condition:
     operator: ComparisonOperator
     right: Operand | None
     tolerance_abs: Decimal
-    null_input_mode: NullInputMode
-    null_result_mode: NullResultMode
-    null_default_value: Any | None = None
+    error_on_null: bool = False
     active_flag: bool = True
 
 
@@ -333,9 +341,6 @@ class ResolvedConditionTrace:
     active_flag: bool = True
     operator: str | None = None
     tolerance_abs: str | None = None
-    null_input_mode: str | None = None
-    null_result_mode: str | None = None
-    null_default_value: Any | None = None
     left: Mapping[str, Any] | None = None
     right: Mapping[str, Any] | None = None
     comparison_result: bool | None = None
@@ -348,6 +353,5 @@ class RuleExecutionTrace:
     rule_id: str
     condition_traces: tuple[ResolvedConditionTrace, ...]
     assignments_applied: tuple[str, ...]
-    matched: bool
     rule_name: str | None = None
     rule_order: int | None = None

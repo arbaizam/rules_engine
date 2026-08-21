@@ -11,9 +11,9 @@ from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
 from rules_engine.standard_functions import register_standard_functions
 
 
-def test_spark_validator_allows_condition_null_result_error_for_udf_row_path():
+def test_spark_validator_allows_error_on_null_for_udf_row_path():
     """
-    What: Allows condition-level null_result_mode=error for ordinary row UDF checks.
+    What: Allows condition-level error_on_null for ordinary row UDF checks.
     Why: Non-filter row conditions are evaluated inside the Spark Python row runtime.
     Fails when: Spark compatibility validation blocks a supported row-level ruleset.
     """
@@ -36,8 +36,7 @@ def test_spark_validator_allows_condition_null_result_error_for_udf_row_path():
                                 "left": {"field": "status"},
                                 "operator": "eq",
                                 "right": {"literal": "OPEN"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "error",
+                                "error_on_null": True,
                             }
                         ]
                     },
@@ -72,8 +71,6 @@ def _payload(assign, *, condition_field="status"):
                             "left": {"field": condition_field},
                             "operator": "eq",
                             "right": {"literal": "OPEN"},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
                         }
                     ]
                 },
@@ -85,6 +82,32 @@ def _payload(assign, *, condition_field="status"):
 
 def _checks(result):
     return {issue.check_name for issue in result.issues}
+
+
+def test_spark_validator_rejects_incompatible_operand_default():
+    """A numeric fallback cannot be applied to a Spark string operand."""
+    payload = _payload({"bucket": "A"})
+    payload["rules"][0]["when"]["all"][0]["left"]["default_if_null"] = 0
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+    schema = T.StructType([T.StructField("status", T.StringType(), True)])
+
+    result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
+
+    assert "SPARK_DEFAULT_IF_NULL_TYPE_INCOMPATIBLE" in _checks(result)
+
+
+def test_spark_validator_allows_numeric_operand_default():
+    """An integral zero fallback is compatible with a Spark double operand."""
+    payload = _payload({"bucket": "A"}, condition_field="amount")
+    condition = payload["rules"][0]["when"]["all"][0]
+    condition["left"]["default_if_null"] = 0
+    condition["right"] = {"literal": 10.0, "value_type": "double"}
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+    schema = T.StructType([T.StructField("amount", T.DoubleType(), True)])
+
+    result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
+
+    assert "SPARK_DEFAULT_IF_NULL_TYPE_INCOMPATIBLE" not in _checks(result)
 
 
 def test_spark_validator_rejects_missing_condition_field():
@@ -140,6 +163,30 @@ def test_spark_validator_rejects_incompatible_new_target_assignments():
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
 
     assert "SPARK_ASSIGNMENT_TYPE_CONFLICT" in _checks(result)
+
+
+def test_spark_validator_infers_new_target_type_from_prior_assignment():
+    """An assigned operand carries its producer's Spark type downstream."""
+    payload = _payload({"score": 10})
+    payload["rules"].append(
+        {
+            **payload["rules"][0],
+            "rule_id": "r2",
+            "rule_name": "Rule 2",
+            "rule_order": 2,
+            "assign": {"copied_score": {"assigned": "score"}},
+        }
+    )
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+    schema = T.StructType([T.StructField("status", T.StringType(), True)])
+    validator = SparkRulesetCompatibilityValidator()
+
+    result = validator.validate(ruleset, schema)
+    assignment_schema = validator.assignment_schema(ruleset, schema)
+
+    assert result.passed
+    assert isinstance(assignment_schema["score"].dataType, T.LongType)
+    assert isinstance(assignment_schema["copied_score"].dataType, T.LongType)
 
 
 def test_spark_validator_existing_target_supplies_null_literal_type():

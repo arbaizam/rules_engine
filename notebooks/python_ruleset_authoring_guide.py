@@ -29,8 +29,8 @@ from tempfile import gettempdir
 
 import rules_engine
 from rules_engine import FunctionRegistry, SparkRulesEngineRuntime, YamlRulesetExporter
-from rules_engine.enums import ComparisonOperator, LogicalOperator, NullInputMode, NullResultMode, RulesetStatus
-from rules_engine.models import Assignment, Condition, ConditionGroup, FieldOperand, LiteralOperand, Rule, Ruleset
+from rules_engine.enums import ComparisonOperator, LogicalOperator, RulesetStatus
+from rules_engine.models import AssignedOperand, Assignment, Condition, ConditionGroup, FieldOperand, LiteralOperand, Rule, Ruleset
 from rules_engine.validator import RulesetValidator
 
 print(f"rules_engine version: {rules_engine.__version__}")
@@ -46,8 +46,21 @@ print(f"rules_engine package: {rules_engine.__file__}")
 
 # COMMAND ----------
 
-def field(name: str) -> FieldOperand:
-    return FieldOperand(name)
+def field(
+    name: str,
+    *,
+    default_if_null: LiteralOperand | None = None,
+) -> FieldOperand:
+    return FieldOperand(name, default_if_null=default_if_null)
+
+
+def assigned(
+    target_field: str,
+    *,
+    default_if_null: LiteralOperand | None = None,
+) -> AssignedOperand:
+    """Read a value committed by a matched rule with a lower rule_order."""
+    return AssignedOperand(target_field, default_if_null=default_if_null)
 
 
 def literal(value, value_type: str = "string") -> LiteralOperand:
@@ -61,8 +74,7 @@ def row_condition(
     right=None,
     *,
     tolerance_abs: str = "0",
-    null_input_mode: NullInputMode = NullInputMode.PROPAGATE,
-    null_result_mode: NullResultMode = NullResultMode.NULL,
+    error_on_null: bool = False,
 ) -> Condition:
     return Condition(
         condition_id=condition_id,
@@ -70,8 +82,7 @@ def row_condition(
         operator=operator,
         right=right,
         tolerance_abs=Decimal(tolerance_abs),
-        null_input_mode=null_input_mode,
-        null_result_mode=null_result_mode,
+        error_on_null=error_on_null,
     )
 
 
@@ -92,6 +103,11 @@ def assign_literal(assignment_id: str, target_field: str, value, value_type: str
 # MAGIC - Rule 1 matches open accounts with amount greater than or equal to 100.
 # MAGIC - Rule 2 matches closed accounts.
 # MAGIC - `stop_on_match=True` means the first matching rule wins.
+# MAGIC
+# MAGIC A binary comparison with a remaining null operand does not match. The amount
+# MAGIC operand below uses `default_if_null=0`, so substitution happens before the
+# MAGIC comparison. Use `error_on_null=True` on `row_condition` instead when a
+# MAGIC remaining null should fail the row.
 
 # COMMAND ----------
 
@@ -122,7 +138,10 @@ ruleset = Ruleset(
                     ),
                     row_condition(
                         "open_high_value:c2",
-                        field("amount"),
+                        field(
+                            "amount",
+                            default_if_null=literal(0, "number"),
+                        ),
                         ComparisonOperator.GE,
                         literal(100, "number"),
                     ),

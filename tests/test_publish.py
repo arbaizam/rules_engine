@@ -49,8 +49,6 @@ def _ruleset(status):
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },

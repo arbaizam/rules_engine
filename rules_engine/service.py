@@ -81,7 +81,7 @@ class RulesEngineService:
         Build a service using metadata tables under a schema.
 
         By default, table names use the standard package footprint. Callers may
-        override either table name when a deployment needs custom metadata
+        override either table name when an environment uses custom metadata
         table names.
         """
         default_table_names = RulesEngineTableNames.from_schema(schema)

@@ -12,6 +12,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 from rules_engine.models import (
+    AssignedOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -88,14 +89,46 @@ class RulesetNormalizer:
                 args={
                     str(key): (
                         self._normalize_operand(value)
-                        if isinstance(value, (FieldOperand, LiteralOperand, CustomFunctionOperand))
+                        if isinstance(
+                            value,
+                            (
+                                AssignedOperand,
+                                FieldOperand,
+                                LiteralOperand,
+                                CustomFunctionOperand,
+                            ),
+                        )
                         else value
                     )
                     for key, value in operand.args.items()
                 },
+                default_if_null=self._normalize_default(operand.default_if_null),
             )
         if isinstance(operand, FieldOperand):
-            return operand
+            return replace(
+                operand,
+                default_if_null=self._normalize_default(operand.default_if_null),
+            )
+        if isinstance(operand, AssignedOperand):
+            return replace(
+                operand,
+                default_if_null=self._normalize_default(operand.default_if_null),
+            )
         if isinstance(operand, LiteralOperand):
-            return operand
+            return replace(
+                operand,
+                default_if_null=self._normalize_default(operand.default_if_null),
+            )
         return operand
+
+    def _normalize_default(
+        self,
+        default: LiteralOperand | None,
+    ) -> LiteralOperand | None:
+        """Normalize one literal null fallback without hiding invalid nesting."""
+        if default is None:
+            return None
+        return replace(
+            default,
+            default_if_null=self._normalize_default(default.default_if_null),
+        )

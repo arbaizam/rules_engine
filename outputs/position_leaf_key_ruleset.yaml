@@ -17,8 +17,6 @@ rules:
       operator: eq
       right:
         literal: CashAndDueFromBanks-FRB_KC
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10105'
 - rule_id: position_leaf_key_002
@@ -32,8 +30,6 @@ rules:
       operator: eq
       right:
         literal: CashAndDueFromBanks-JPMC
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10110'
 - rule_id: position_leaf_key_003
@@ -47,8 +43,6 @@ rules:
       operator: eq
       right:
         literal: CashAndDueFromBanks-ADP_Outsource_Bank
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10115'
 - rule_id: position_leaf_key_004
@@ -62,8 +56,6 @@ rules:
       operator: eq
       right:
         literal: CashAndDueFromBanks-CoreFirst
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10120'
 - rule_id: position_leaf_key_005
@@ -77,8 +69,6 @@ rules:
       operator: eq
       right:
         literal: CashAndDueFromBanks-Other
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10125'
 - rule_id: position_leaf_key_006
@@ -92,15 +82,11 @@ rules:
       operator: eq
       right:
         literal: STFA-IBDDA
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IssuerTicker
       operator: eq
       right:
         literal: BANA
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10210'
 - rule_id: position_leaf_key_007
@@ -114,15 +100,11 @@ rules:
       operator: eq
       right:
         literal: STFA-IBDDA
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IssuerTicker
       operator: eq
       right:
         literal: CINY
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10215'
 - rule_id: position_leaf_key_008
@@ -136,15 +118,11 @@ rules:
       operator: eq
       right:
         literal: STFA-IBDDA
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IssuerTicker
       operator: eq
       right:
         literal: GOLD
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10220'
 - rule_id: position_leaf_key_009
@@ -158,15 +136,11 @@ rules:
       operator: eq
       right:
         literal: STFA-IBDDA
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IssuerTicker
       operator: eq
       right:
         literal: JPMC
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10225'
 - rule_id: position_leaf_key_010
@@ -180,15 +154,11 @@ rules:
       operator: eq
       right:
         literal: STFA-IBDDA
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: IssuerTicker
       operator: eq
       right:
         literal: WFBK
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10230'
 - rule_id: position_leaf_key_011
@@ -202,8 +172,6 @@ rules:
       operator: eq
       right:
         literal: IBDDA-CoreFirst
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10235'
 - rule_id: position_leaf_key_012
@@ -217,15 +185,11 @@ rules:
       operator: eq
       right:
         literal: Asset
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: CustID
       operator: eq
       right:
         literal: IBDDA-CoreFirst
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10395'
 - rule_id: position_leaf_key_013
@@ -239,8 +203,6 @@ rules:
       operator: starts_with
       right:
         literal: INV-P
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10305'
 - rule_id: position_leaf_key_014
@@ -254,8 +216,6 @@ rules:
       operator: starts_with
       right:
         literal: INV-FSO
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10350'
 - rule_id: position_leaf_key_015
@@ -269,15 +229,11 @@ rules:
       operator: eq
       right:
         literal: INV
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: CustID
       operator: starts_with
       right:
         literal: INV-T
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10410'
 - rule_id: position_leaf_key_016
@@ -291,15 +247,11 @@ rules:
       operator: eq
       right:
         literal: INV
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: CustID
       operator: starts_with
       right:
         literal: INV-A
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10420'
 - rule_id: position_leaf_key_017
@@ -313,8 +265,6 @@ rules:
       operator: eq
       right:
         literal: AvailableForSaleSecurities-FvAdjustment
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10420'
 - rule_id: position_leaf_key_018
@@ -328,15 +278,11 @@ rules:
       operator: eq
       right:
         literal: INV
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: CustID
       operator: starts_with
       right:
         literal: INV-H
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10435'
 - rule_id: position_leaf_key_019
@@ -350,8 +296,6 @@ rules:
       operator: eq
       right:
         literal: ADV
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10510'
 - rule_id: position_leaf_key_020
@@ -365,8 +309,6 @@ rules:
       operator: eq
       right:
         literal: TermAdvances-FvAdjustment
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10515'
 - rule_id: position_leaf_key_021
@@ -380,8 +322,6 @@ rules:
       operator: eq
       right:
         literal: LOC
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10525'
 - rule_id: position_leaf_key_022
@@ -395,8 +335,6 @@ rules:
       operator: eq
       right:
         literal: AdvancesParticipatedwithOtherFHLBanks
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10555'
 - rule_id: position_leaf_key_023
@@ -410,8 +348,6 @@ rules:
       operator: starts_with
       right:
         literal: C_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10570'
 - rule_id: position_leaf_key_024
@@ -425,8 +361,6 @@ rules:
       operator: starts_with
       right:
         literal: G_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10575'
 - rule_id: position_leaf_key_025
@@ -440,8 +374,6 @@ rules:
       operator: eq
       right:
         literal: MpfLoans-LLR
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: MpfLoans-LLR
 - rule_id: position_leaf_key_026
@@ -457,15 +389,11 @@ rules:
         literal:
         - Intercompany Borrowings FR
         - Intercompany Borrowings VR
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: LedgerAccountType
       operator: eq
       right:
         literal: Asset
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10605'
 - rule_id: position_leaf_key_027
@@ -479,8 +407,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-Derivatives
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10660'
 - rule_id: position_leaf_key_028
@@ -494,8 +420,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-DerivativeCashCollateral-Cleared
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10675'
 - rule_id: position_leaf_key_029
@@ -509,8 +433,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-DerivativeCashCollateral-Uncleared
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10680'
 - rule_id: position_leaf_key_030
@@ -524,8 +446,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-AvailableForSaleSecurities
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10705'
 - rule_id: position_leaf_key_031
@@ -539,8 +459,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-ConventionalMpfLoans
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10710'
 - rule_id: position_leaf_key_032
@@ -554,8 +472,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-FederalFundsSold
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10715'
 - rule_id: position_leaf_key_033
@@ -569,8 +485,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-GovernmentMpfLoans
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10720'
 - rule_id: position_leaf_key_034
@@ -584,8 +498,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-HeldToMaturitySecurities
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10725'
 - rule_id: position_leaf_key_035
@@ -599,8 +511,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-IBDDA-CINY
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10730'
 - rule_id: position_leaf_key_036
@@ -614,8 +524,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-IBDDA-Interbank
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10735'
 - rule_id: position_leaf_key_037
@@ -629,8 +537,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-IBDDA-JPMC
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10740'
 - rule_id: position_leaf_key_038
@@ -644,8 +550,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-OtherAssets-IndustrialRevenueBond
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10745'
 - rule_id: position_leaf_key_039
@@ -659,8 +563,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-OvernightAdvances
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10750'
 - rule_id: position_leaf_key_040
@@ -674,8 +576,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-ReverseRepurchaseAgreement
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10755'
 - rule_id: position_leaf_key_041
@@ -689,8 +589,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-TermAdvances
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10760'
 - rule_id: position_leaf_key_042
@@ -704,8 +602,6 @@ rules:
       operator: eq
       right:
         literal: IntRec-TradingSecurities
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10765'
 - rule_id: position_leaf_key_043
@@ -719,8 +615,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeAssets-AccruedInterest
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10805'
 - rule_id: position_leaf_key_044
@@ -734,8 +628,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeAssets-CleanFairValue
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10810'
 - rule_id: position_leaf_key_045
@@ -749,8 +641,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeAssets-Collateral
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10815'
 - rule_id: position_leaf_key_046
@@ -764,8 +654,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeAssets-Contra
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10820'
 - rule_id: position_leaf_key_047
@@ -779,8 +667,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeAssets-MpfCommitments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10825'
 - rule_id: position_leaf_key_048
@@ -794,8 +680,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeAssets-VariationMargin
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10830'
 - rule_id: position_leaf_key_049
@@ -809,8 +693,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-AhpRepaymentAgreementReceivable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10905'
 - rule_id: position_leaf_key_050
@@ -824,8 +706,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-DebtClearingWires
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10910'
 - rule_id: position_leaf_key_051
@@ -839,8 +719,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-DownPayments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10915'
 - rule_id: position_leaf_key_052
@@ -854,8 +732,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-FeesPaidOnDerivatives
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10920'
 - rule_id: position_leaf_key_053
@@ -869,8 +745,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-FHLBankSharedExpenseReceivables
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10925'
 - rule_id: position_leaf_key_054
@@ -884,8 +758,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-IndustrialRevenueBonds
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10930'
 - rule_id: position_leaf_key_055
@@ -899,8 +771,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-InvestmentCashAndSafekeepingWires
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10935'
 - rule_id: position_leaf_key_056
@@ -914,8 +784,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-InvestmentPrincipalReceivable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10940'
 - rule_id: position_leaf_key_057
@@ -929,8 +797,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-InvestmentReceivableItems
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10945'
 - rule_id: position_leaf_key_058
@@ -944,8 +810,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-LettersOfCreditFeesReceivable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10950'
 - rule_id: position_leaf_key_059
@@ -959,8 +823,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-OtherDeposits
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10955'
 - rule_id: position_leaf_key_060
@@ -974,8 +836,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-OtherReceivables
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10960'
 - rule_id: position_leaf_key_061
@@ -989,8 +849,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-PremisesAndEquipment
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10965'
 - rule_id: position_leaf_key_062
@@ -1004,8 +862,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-PrepaidExpenses-AccountsPayable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10970'
 - rule_id: position_leaf_key_063
@@ -1019,8 +875,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-PrepaidExpenses-EmployeeBenefits
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10975'
 - rule_id: position_leaf_key_064
@@ -1034,8 +888,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-RetirementAnnuityAsset
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10980'
 - rule_id: position_leaf_key_065
@@ -1049,8 +901,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-RightOfUseAssets
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10985'
 - rule_id: position_leaf_key_066
@@ -1064,8 +914,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-SbpaCommitmentFeesReceivable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10990'
 - rule_id: position_leaf_key_067
@@ -1079,8 +927,6 @@ rules:
       operator: eq
       right:
         literal: OtherAssets-ServiceFeesReceivable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '10995'
 - rule_id: position_leaf_key_068
@@ -1094,8 +940,6 @@ rules:
       operator: eq
       right:
         literal: MEM_DEM
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20065'
 - rule_id: position_leaf_key_069
@@ -1109,8 +953,6 @@ rules:
       operator: eq
       right:
         literal: MEM_OND
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20070'
 - rule_id: position_leaf_key_070
@@ -1124,8 +966,6 @@ rules:
       operator: eq
       right:
         literal: CD_REPO
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20995'
 - rule_id: position_leaf_key_071
@@ -1139,8 +979,6 @@ rules:
       operator: eq
       right:
         literal: OtherDeposits-MRAA
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20099'
 - rule_id: position_leaf_key_072
@@ -1156,15 +994,11 @@ rules:
         literal:
         - Intercompany Borrowings FR
         - Intercompany Borrowings VR
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: LedgerAccountType
       operator: eq
       right:
         literal: Liability
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20110'
 - rule_id: position_leaf_key_073
@@ -1178,15 +1012,11 @@ rules:
       operator: eq
       right:
         literal: Repurchase Agreement
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - left:
         field: LedgerAccountType
       operator: eq
       right:
         literal: Liability
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20120'
 - rule_id: position_leaf_key_074
@@ -1200,8 +1030,6 @@ rules:
       operator: eq
       right:
         literal: OvernightLoansFromCommercialBanks
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20130'
 - rule_id: position_leaf_key_075
@@ -1215,8 +1043,6 @@ rules:
       operator: eq
       right:
         literal: CO
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20210'
 - rule_id: position_leaf_key_076
@@ -1230,8 +1056,6 @@ rules:
       operator: eq
       right:
         literal: ConsolidatedObligationBonds-FvAdjustment
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20215'
 - rule_id: position_leaf_key_077
@@ -1245,8 +1069,6 @@ rules:
       operator: eq
       right:
         literal: DN
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20225'
 - rule_id: position_leaf_key_078
@@ -1260,8 +1082,6 @@ rules:
       operator: eq
       right:
         literal: ConsolidatedObligationDiscountNotes-FvAdjustment
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20230'
 - rule_id: position_leaf_key_079
@@ -1275,8 +1095,6 @@ rules:
       operator: eq
       right:
         literal: ManditorilyRedeemableCapitalStock
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20255'
 - rule_id: position_leaf_key_080
@@ -1290,8 +1108,6 @@ rules:
       operator: eq
       right:
         literal: IntPay-Derivatives
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20310'
 - rule_id: position_leaf_key_081
@@ -1305,8 +1121,6 @@ rules:
       operator: eq
       right:
         literal: IntPay-DerivativeCashCollateral-Uncleared
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20325'
 - rule_id: position_leaf_key_082
@@ -1320,8 +1134,6 @@ rules:
       operator: eq
       right:
         literal: IntPay-Bonds
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20405'
 - rule_id: position_leaf_key_083
@@ -1335,8 +1147,6 @@ rules:
       operator: eq
       right:
         literal: IntPay-DemandMemberDeposits
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20410'
 - rule_id: position_leaf_key_084
@@ -1350,8 +1160,6 @@ rules:
       operator: eq
       right:
         literal: IntPay-IBDDA-Interbank
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20415'
 - rule_id: position_leaf_key_085
@@ -1365,8 +1173,6 @@ rules:
       operator: eq
       right:
         literal: IntPay-MandatorilyRedeemableCapitalStock
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20420'
 - rule_id: position_leaf_key_086
@@ -1380,8 +1186,6 @@ rules:
       operator: eq
       right:
         literal: IntPay-OvernightLoansFromCommercialBanks
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20425'
 - rule_id: position_leaf_key_087
@@ -1395,8 +1199,6 @@ rules:
       operator: eq
       right:
         literal: IntPay-OvernightMemberDeposits
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20430'
 - rule_id: position_leaf_key_088
@@ -1410,8 +1212,6 @@ rules:
       operator: eq
       right:
         literal: IntPay-RepurchaseAgreement
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20435'
 - rule_id: position_leaf_key_089
@@ -1425,8 +1225,6 @@ rules:
       operator: eq
       right:
         literal: IntPay-ShawneeCountyLease
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20440'
 - rule_id: position_leaf_key_090
@@ -1440,8 +1238,6 @@ rules:
       operator: eq
       right:
         literal: IntPay-TermMemberDeposits
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20445'
 - rule_id: position_leaf_key_091
@@ -1455,8 +1251,6 @@ rules:
       operator: eq
       right:
         literal: AffordableHousingProgram
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20496'
 - rule_id: position_leaf_key_092
@@ -1470,8 +1264,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeLiabilities-AccruedInterest
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20505'
 - rule_id: position_leaf_key_093
@@ -1485,8 +1277,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeLiabilities-CleanFairValue
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20510'
 - rule_id: position_leaf_key_094
@@ -1500,8 +1290,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeLiabilities-Collateral
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20515'
 - rule_id: position_leaf_key_095
@@ -1515,8 +1303,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeLiabilities-Contra
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20520'
 - rule_id: position_leaf_key_096
@@ -1530,8 +1316,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeLiabilities-MpfCommitments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20525'
 - rule_id: position_leaf_key_097
@@ -1545,8 +1329,6 @@ rules:
       operator: eq
       right:
         literal: DerivativeLiabilities-VariationMargin
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20530'
 - rule_id: position_leaf_key_098
@@ -1560,8 +1342,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-AccruedCompensation
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20905'
 - rule_id: position_leaf_key_099
@@ -1575,8 +1355,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-AccruedExpenses
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20910'
 - rule_id: position_leaf_key_100
@@ -1590,8 +1368,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-AccruedPayable-RecNotInvoiced
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20915'
 - rule_id: position_leaf_key_101
@@ -1605,8 +1381,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-AccruedPayroll
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20920'
 - rule_id: position_leaf_key_102
@@ -1620,8 +1394,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-AhpRepaymentAgreementPayable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20925'
 - rule_id: position_leaf_key_103
@@ -1635,8 +1407,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-CreditCardsPayable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20930'
 - rule_id: position_leaf_key_104
@@ -1650,8 +1420,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-DeferredSbpaCommitmentFees
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20935'
 - rule_id: position_leaf_key_105
@@ -1665,8 +1433,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-DefinedBenefitPlan-BEP
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20940'
 - rule_id: position_leaf_key_106
@@ -1680,8 +1446,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-DefinedContributionPlan-BEP
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20945'
 - rule_id: position_leaf_key_107
@@ -1695,8 +1459,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-DividendsPayable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20950'
 - rule_id: position_leaf_key_108
@@ -1710,8 +1472,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-DueToPfis
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20955'
 - rule_id: position_leaf_key_109
@@ -1725,8 +1485,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-EmployeeExpensePayable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20960'
 - rule_id: position_leaf_key_110
@@ -1740,8 +1498,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-FeesRecOnDerivatives
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20965'
 - rule_id: position_leaf_key_111
@@ -1755,8 +1511,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-InvestmentPayableItems
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20970'
 - rule_id: position_leaf_key_112
@@ -1770,8 +1524,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-LeaseLiability
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20975'
 - rule_id: position_leaf_key_113
@@ -1785,8 +1537,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-LettersOfCreditFvAdjustment
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20980'
 - rule_id: position_leaf_key_114
@@ -1800,8 +1550,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-MiscPayable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20985'
 - rule_id: position_leaf_key_115
@@ -1815,8 +1563,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-OpenDeliveryCommitments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20990'
 - rule_id: position_leaf_key_116
@@ -1830,8 +1576,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-OpenDeliveryCommitments-Contra
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '20995'
 - rule_id: position_leaf_key_117
@@ -1845,8 +1589,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-OtherLiabilities
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '21000'
 - rule_id: position_leaf_key_118
@@ -1860,8 +1602,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-PayrollTaxLiabilities
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '21005'
 - rule_id: position_leaf_key_119
@@ -1875,8 +1615,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-PayrollWitholdingLiabilities
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '21010'
 - rule_id: position_leaf_key_120
@@ -1890,8 +1628,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-ReoClearing
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '21015'
 - rule_id: position_leaf_key_121
@@ -1905,8 +1641,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-RetirementAnnuityLiability
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '21020'
 - rule_id: position_leaf_key_122
@@ -1920,8 +1654,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-ShawneeCountyLease
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '21025'
 - rule_id: position_leaf_key_123
@@ -1935,8 +1667,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-SupplierPayable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '21030'
 - rule_id: position_leaf_key_124
@@ -1950,8 +1680,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-TnsInvestments-AfsSecurities
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '21035'
 - rule_id: position_leaf_key_125
@@ -1965,8 +1693,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-UnearnedLettersOfCreditFees
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '21040'
 - rule_id: position_leaf_key_126
@@ -1980,8 +1706,6 @@ rules:
       operator: eq
       right:
         literal: OtherLiabilities-VoluntaryHousingProgramContPayable
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: '21045'
 - rule_id: position_leaf_key_127
@@ -1995,7 +1719,5 @@ rules:
       operator: eq
       right:
         literal: true
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     leaf_key: Unmatched

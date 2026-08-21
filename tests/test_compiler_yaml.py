@@ -6,6 +6,34 @@ import pytest
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.enums import ComparisonOperator, RulesetStatus
 from rules_engine.exceptions import CompilationError
+from rules_engine.models import AssignedOperand
+
+
+def _minimal_payload():
+    """Return one complete ruleset payload for compiler shape tests."""
+    return {
+        "ruleset_id": "rs1",
+        "ruleset_name": "Ruleset",
+        "version": "1",
+        "rules": [
+            {
+                "rule_id": "r1",
+                "rule_name": "Rule 1",
+                "rule_order": 1,
+                "when": {
+                    "all": [
+                        {
+                            "condition_id": "c1",
+                            "left": {"field": "account"},
+                            "operator": "eq",
+                            "right": {"literal": "A"},
+                        }
+                    ]
+                },
+                "assign": {"bucket": "A"},
+            }
+        ],
+    }
 
 
 def test_compile_text_preserves_untyped_fractional_yaml_as_decimal():
@@ -22,8 +50,6 @@ rules:
         - left: {field: rate}
           operator: ge
           right: {literal: 0.0425}
-          null_input_mode: propagate
-          null_result_mode: 'null'
     assign:
       normalized_rate: 0.0425
       high_precision_rate: 0.123456789012345678901
@@ -64,8 +90,6 @@ def test_valid_simple_row_rule_compiles_and_validates():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A", "value_type": "string"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -83,8 +107,8 @@ def test_valid_simple_row_rule_compiles_and_validates():
     assert str(condition.tolerance_abs) == "0"
 
 
-def test_condition_null_modes_use_documented_authoring_defaults():
-    """Concise YAML materializes explicit null semantics in canonical models."""
+def test_condition_uses_no_match_as_the_default_null_semantics():
+    """Concise YAML needs no null configuration for the common behavior."""
     ruleset = YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "rs1",
@@ -109,8 +133,157 @@ def test_condition_null_modes_use_documented_authoring_defaults():
     )
 
     condition = ruleset.rules[0].root_group.conditions[0]
-    assert condition.null_input_mode.value == "propagate"
-    assert condition.null_result_mode.value == "null"
+    assert condition.error_on_null is False
+    assert condition.left.default_if_null is None
+    assert condition.right.default_if_null is None
+
+
+def test_operand_default_if_null_supports_scalar_and_typed_literals():
+    """Each operand can replace null before comparison with an explicit literal."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Defaults",
+            "version": "1",
+            "rules": [
+                {
+                    "rule_name": "Operand defaults",
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "amount", "default_if_null": 0},
+                                "operator": "gt",
+                                "right": {
+                                    "field": "floor",
+                                    "default_if_null": {
+                                        "literal": "1.25",
+                                        "value_type": "decimal",
+                                    },
+                                },
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "A"},
+                }
+            ],
+        }
+    )
+
+    condition = ruleset.rules[0].root_group.conditions[0]
+    assert condition.left.default_if_null.value == 0
+    assert condition.right.default_if_null.value == Decimal("1.25")
+    assert condition.right.default_if_null.value_type == "decimal"
+
+
+def test_assigned_operand_compiles_as_a_custom_function_argument():
+    """Custom functions may explicitly consume a prior committed value."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Assigned values",
+            "version": "1",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "Producer",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "status"},
+                                "operator": "eq",
+                                "right": {"literal": "OPEN"},
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "A"},
+                },
+                {
+                    "rule_id": "r2",
+                    "rule_name": "Consumer",
+                    "rule_order": 2,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {
+                                    "custom_function": {
+                                        "name": "identity",
+                                        "args": {
+                                            "value": {
+                                                "assigned": "bucket",
+                                                "default_if_null": "UNKNOWN",
+                                            }
+                                        },
+                                    }
+                                },
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                            }
+                        ]
+                    },
+                    "assign": {"review": True},
+                },
+            ],
+        }
+    )
+
+    operand = ruleset.rules[1].root_group.conditions[0].left.args["value"]
+
+    assert isinstance(operand, AssignedOperand)
+    assert operand.target_field == "bucket"
+    assert operand.default_if_null.value == "UNKNOWN"
+
+
+def test_assigned_operand_compiles_with_a_null_fallback():
+    """YAML can explicitly read the latest value from an earlier matched rule."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "rs1",
+            "ruleset_name": "Assigned values",
+            "version": "1",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "Producer",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "status"},
+                                "operator": "eq",
+                                "right": {"literal": "OPEN"},
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "A"},
+                },
+                {
+                    "rule_id": "r2",
+                    "rule_name": "Consumer",
+                    "rule_order": 2,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {
+                                    "assigned": "bucket",
+                                    "default_if_null": "UNKNOWN",
+                                },
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                            }
+                        ]
+                    },
+                    "assign": {"review": True},
+                },
+            ],
+        }
+    )
+
+    operand = ruleset.rules[1].root_group.conditions[0].left
+
+    assert isinstance(operand, AssignedOperand)
+    assert operand.target_field == "bucket"
+    assert operand.default_if_null.value == "UNKNOWN"
 
 
 @pytest.mark.parametrize("literal", [".nan", ".inf", "-.inf"])
@@ -238,42 +411,6 @@ def test_explicit_date_literal_normalizes_quoted_iso_text():
     assert literal.value == date(2024, 2, 29)
 
 
-def test_precomputed_aggregate_field_compiles_as_row_field():
-    """
-    What: Compiles a rule that references an upstream aggregate column as a field.
-    Why: Aggregate calculations now belong outside the rules engine runtime.
-    Fails when: Field operands stop supporting precomputed aggregate facts.
-    """
-    ruleset = YamlRulesetCompiler().compile_payload(
-        {
-            "ruleset_id": "rs1",
-            "ruleset_name": "Ruleset",
-            "version": "1",
-            "status": "published",
-            "rules": [
-                {
-                    "rule_name": "Precomputed aggregate",
-                    "when": {
-                        "all": [
-                            {
-                                "left": {"field": "account_amount_sum"},
-                                "operator": "gt",
-                                "right": {"literal": 100, "value_type": "number"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
-                            }
-                        ]
-                    },
-                    "assign": {"bucket": "large"},
-                }
-            ],
-        }
-    )
-
-    condition = ruleset.rules[0].root_group.conditions[0]
-    assert condition.left.field_name == "account_amount_sum"
-
-
 def test_canonical_string_operators_compile():
     """
     What: Compiles all canonical string operators.
@@ -294,8 +431,6 @@ def test_canonical_string_operators_compile():
                             "left": {"field": "name"},
                             "operator": operator,
                             "right": {"literal": "abc"},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
                         }
                         for operator in [
                             "contains",
@@ -320,162 +455,75 @@ def test_canonical_string_operators_compile():
     ]
 
 
-def test_value_operand_alias_is_rejected():
-    """
-    What: Rejects the non-canonical operand key value.
-    Why: Authoring must use literal so persisted metadata remains deterministic.
-    Fails when: Alias support is accidentally reintroduced in the YAML compiler.
-    """
-    payload = {
-        "ruleset_id": "rs1",
-        "ruleset_name": "Ruleset",
-        "version": "1",
-        "status": "published",
-        "rules": [
+@pytest.mark.parametrize(
+    "location",
+    ("ruleset", "rule", "condition", "expectation", "assignment", "function"),
+)
+def test_unknown_mapping_keys_are_rejected_at_every_contract_level(location):
+    """Every structured authoring mapping has an explicit closed key set."""
+    payload = _minimal_payload()
+    if location == "ruleset":
+        target = payload
+    elif location == "rule":
+        target = payload["rules"][0]
+    elif location == "condition":
+        target = payload["rules"][0]["when"]["all"][0]
+    elif location == "expectation":
+        payload["expect"] = [{"name": "example", "given": {}, "then": {"matched": True}}]
+        target = payload["expect"][0]
+    elif location == "assignment":
+        payload["rules"][0]["assign"] = [
             {
-                "rule_name": "Alias",
-                "when": {
-                    "all": [
-                        {
-                            "left": {"field": "name"},
-                            "operator": "eq",
-                            "right": {"value": "abc"},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
-                        }
-                    ]
-                },
-                "assign": {"bucket": "match"},
+                "assignment_id": "a1",
+                "target_field": "bucket",
+                "value": {"literal": "A"},
             }
-        ],
-    }
+        ]
+        target = payload["rules"][0]["assign"][0]
+    else:
+        function = {
+            "name": "identity",
+            "args": {"value": {"field": "account"}},
+        }
+        payload["rules"][0]["when"]["all"][0]["left"] = {
+            "custom_function": function
+        }
+        target = function
+    target["unexpected"] = True
 
-    with pytest.raises(CompilationError, match="Unsupported operand key: value"):
+    with pytest.raises(CompilationError, match="unsupported keys"):
         YamlRulesetCompiler().compile_payload(payload)
 
 
-def test_assignments_rule_alias_is_rejected():
-    """
-    What: Rejects the non-canonical rule key assignments.
-    Why: Authoring must use assign to avoid multiple spellings for the same concept.
-    Fails when: The compiler accepts legacy or convenience aliases.
-    """
-    payload = {
-        "ruleset_id": "rs1",
-        "ruleset_name": "Ruleset",
-        "version": "1",
-        "status": "published",
-        "rules": [
-            {
-                "rule_name": "Alias",
-                "when": {
-                    "all": [
-                        {
-                            "left": {"field": "name"},
-                            "operator": "eq",
-                            "right": {"literal": "abc"},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
-                        }
-                    ]
-                },
-                "assignments": {"bucket": "match"},
-            }
-        ],
-    }
+def test_root_wrapper_is_not_part_of_the_ruleset_contract():
+    """The compiler accepts one document shape: the ruleset mapping itself."""
+    with pytest.raises(CompilationError, match="unsupported keys"):
+        YamlRulesetCompiler().compile_payload({"ruleset": _minimal_payload()})
 
-    with pytest.raises(CompilationError, match="Unsupported rule key: assignments"):
+
+def test_unknown_operand_kind_is_rejected_generically():
+    """Operand parsing is defined only by the four current operand kinds."""
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["right"] = {"unexpected": "A"}
+
+    with pytest.raises(CompilationError, match="exactly one operand kind"):
         YamlRulesetCompiler().compile_payload(payload)
 
 
-def test_aggregate_operand_is_rejected():
-    """
-    What: Rejects aggregate operands.
-    Why: Spark deployments should consume precomputed aggregate fields instead.
-    Fails when: Aggregate authoring is accidentally reintroduced.
-    """
-    payload = {
-        "ruleset_id": "rs1",
-        "ruleset_name": "Ruleset",
-        "version": "1",
-        "status": "published",
-        "rules": [
-            {
-                "rule_name": "Alias",
-                "when": {
-                    "all": [
-                        {
-                            "left": {
-                                "aggregate": {
-                                    "function": "sum",
-                                    "field_name": "amount",
-                                    "scope": "dataset",
-                                    "null_input_mode": "ignore",
-                                    "null_result_mode": "null",
-                                }
-                            },
-                            "operator": "gt",
-                            "right": {"literal": 0},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
-                        }
-                    ]
-                },
-                "assign": {"bucket": "match"},
-            }
-        ],
-    }
+@pytest.mark.parametrize(
+    ("field_name", "value", "message"),
+    (
+        ("rule_order", "1", "rule_order must be an integer"),
+        ("active_flag", "false", "active_flag must be a boolean"),
+        ("stop_on_match", 1, "stop_on_match must be a boolean"),
+    ),
+)
+def test_rule_scalar_types_are_not_coerced(field_name, value, message):
+    """Rule metadata must use its declared YAML scalar types."""
+    payload = _minimal_payload()
+    payload["rules"][0][field_name] = value
 
-    with pytest.raises(CompilationError, match="Unsupported operand key: aggregate"):
-        YamlRulesetCompiler().compile_payload(payload)
-
-
-def test_aggregate_operand_inside_custom_function_arg_is_rejected():
-    """
-    What: Rejects aggregate operands nested inside custom-function args.
-    Why: Aggregate authoring should not be reachable through nested operand shapes.
-    Fails when: Custom-function argument compilation accepts aggregate payloads.
-    """
-    payload = {
-        "ruleset_id": "rs1",
-        "ruleset_name": "Ruleset",
-        "version": "1",
-        "status": "published",
-        "rules": [
-            {
-                "rule_name": "Nested aggregate",
-                "when": {
-                    "all": [
-                        {
-                            "left": {
-                                "custom_function": {
-                                    "name": "score",
-                                    "args": {
-                                        "x": {
-                                            "aggregate": {
-                                                "function": "sum",
-                                                "field": "amount",
-                                                "scope": "dataset",
-                                                "null_input_mode": "ignore",
-                                                "null_result_mode": "null",
-                                            }
-                                        }
-                                    },
-                                }
-                            },
-                            "operator": "gt",
-                            "right": {"literal": 0},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
-                        }
-                    ]
-                },
-                "assign": {"bucket": "match"},
-            }
-        ],
-    }
-
-    with pytest.raises(CompilationError, match="Unsupported operand key: aggregate"):
+    with pytest.raises(CompilationError, match=message):
         YamlRulesetCompiler().compile_payload(payload)
 
 
@@ -495,8 +543,6 @@ def test_generated_assignment_ids_are_stable_by_rule_and_target():
                             "left": {"literal": True},
                             "operator": "eq",
                             "right": {"literal": True},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
                         }
                     ]
                 },
@@ -544,8 +590,6 @@ def test_explicit_assignment_list_uses_stable_generated_id_when_omitted():
                             "left": {"literal": True},
                             "operator": "eq",
                             "right": {"literal": True},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
                         }
                     ]
                 },
@@ -575,8 +619,6 @@ rules:
         - left: {literal: true}
           operator: eq
           right: {literal: true}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       RateCode: Adjustable
       RateCode: Fixed
@@ -589,12 +631,19 @@ rules:
 def test_yaml_merge_allows_explicit_key_override():
     """A legal YAML merge may be overridden by an explicit mapping key."""
     yaml_text = """
-assignment_defaults: &assignment_defaults
-  bucket: inherited
 ruleset_id: rs1
 ruleset_name: Ruleset
 version: '1'
 rules:
+  - rule_id: defaults
+    rule_name: Defaults
+    when:
+      all:
+        - left: {literal: true}
+          operator: eq
+          right: {literal: true}
+    assign: &assignment_defaults
+      bucket: inherited
   - rule_id: r1
     rule_name: Rule 1
     when:
@@ -602,8 +651,6 @@ rules:
         - left: {literal: true}
           operator: eq
           right: {literal: true}
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       <<: *assignment_defaults
       bucket: explicit
@@ -611,31 +658,4 @@ rules:
 
     ruleset = YamlRulesetCompiler().compile_text(yaml_text)
 
-    assert ruleset.rules[0].assignments[0].value.value == "explicit"
-
-
-def test_yaml_loader_preserves_recursive_alias_construction():
-    """Two-phase mapping construction supports legal recursive YAML aliases."""
-    yaml_text = """
-ignored_recursive_metadata: &self
-  self: *self
-ruleset_id: rs1
-ruleset_name: Ruleset
-version: '1'
-rules:
-  - rule_id: r1
-    rule_name: Rule 1
-    when:
-      all:
-        - left: {literal: true}
-          operator: eq
-          right: {literal: true}
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      bucket: explicit
-"""
-
-    ruleset = YamlRulesetCompiler().compile_text(yaml_text)
-
-    assert ruleset.ruleset_id == "rs1"
+    assert ruleset.rules[1].assignments[0].value.value == "explicit"

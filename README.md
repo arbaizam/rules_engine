@@ -31,16 +31,11 @@ semantic weakening.
 - [Publish Lifecycle](#publish-lifecycle)
 - [Standard Workflows](#standard-workflows)
 - [Auditability Model](#auditability-model)
-- [Reconciliation CSV Translation Utility](#reconciliation-csv-translation-utility)
 - [Databricks System Test](#databricks-system-test)
 - [Testing](#testing)
 - [Packaging](#packaging)
 - [Developer Workflow](#developer-workflow)
 - [Troubleshooting](#troubleshooting)
-- [Migration Notes For 0.4.0](#migration-notes-for-040)
-- [Migration Notes For 0.3.1](#migration-notes-for-031)
-- [Migration Notes For 0.3.0](#migration-notes-for-030)
-- [Migration Notes For 0.2.0](#migration-notes-for-020)
 - [Known Limitations](#known-limitations)
 
 ## Who This Is For
@@ -112,7 +107,8 @@ Groups may contain conditions and nested groups. Empty groups are invalid.
 ### Condition
 
 A condition compares a left operand to an optional right operand using a
-canonical operator. Null behavior and tolerance are explicit metadata fields.
+canonical operator. `error_on_null` controls whether a remaining null operand
+fails the condition or raises a row error. Numeric tolerance is explicit.
 
 ### Operand
 
@@ -120,18 +116,21 @@ Operands are one of:
 
 ```text
 field
+assigned
 literal
 custom_function
 ```
 
-No operand aliases are accepted.
+No operand aliases are accepted. Any operand may declare `default_if_null` as a
+non-null literal. The runtime substitutes that value before comparison or
+assignment.
 
 ### Assignment
 
 Assignments are emitted when a rule matches. Assignment values may be literals,
-fields, or custom functions. A rule may assign multiple different target
-fields, but it may not assign the same target more than once. Use separate
-ordered rules when the same target needs multiple candidate values.
+fields, prior assigned values, or custom functions. A rule may assign multiple
+different target fields, but it may not assign the same target more than once.
+Use separate ordered rules when the same target needs multiple candidate values.
 
 `assignment_id` is audit identity only; it does not control execution order or
 precedence. IDs must be unique within one `ruleset_id + version`. IDs may be
@@ -201,21 +200,16 @@ notebooks/
   rules_engine_quickstart.py
   python_ruleset_authoring_guide.py
   custom_function_authoring_guide.py
-  production_yaml_publish_pipeline.py
-  retire_ruleset_pipeline.py
+  rules_engine_serverless_performance.py
+  rules_engine_system_tests.py
+  rules_engine_uat_tests.py
 
 rule_sets/
   account_key_cap_mkt.yaml
   account_key_mra.yaml
 
 tools/
-  recon_spec_translation/
-    audit.py
-    models.py
-    normalizer.py
-    reader_csv.py
-    translator.py
-    writer_yaml.py
+  spark_dataframe_parity.py
 
 tests/
 ```
@@ -233,8 +227,7 @@ Purpose:
 - Parse a YAML string into the canonical `Ruleset` dataclass model.
 - Reject malformed YAML and unsupported enum values.
 - Preserve canonical vocabulary only.
-- Accept either a top-level ruleset mapping or a wrapper mapping under
-  `ruleset:`.
+- Require one top-level ruleset mapping with only contract-defined keys.
 
 Side effects:
 
@@ -243,10 +236,10 @@ Side effects:
 
 Common failures:
 
-- unquoted `null_result_mode: null`, which YAML parses as Python `None`.
-  Use `null_result_mode: "null"`.
-- unsupported aliases such as `value` instead of `literal`.
-- unsupported aliases such as `assignments` instead of `assign`.
+- keys outside the declared ruleset, rule, condition, operand, assignment, or
+  expected-case contract;
+- values whose YAML scalar type does not match the contract;
+- a null `default_if_null`; omit the option when no substitution is wanted;
 - duplicate YAML mapping keys; duplicate keys are rejected throughout the
   document before a YAML loader can discard an earlier value.
 
@@ -440,7 +433,7 @@ Detailed sequence:
 3. Preflight cloudpickle serialization of the worker evaluator and registered
    implementations, then serialize only required fields into the Python UDF.
 4. Evaluate rules through the compact path by default. When `full_audit=True`,
-   also build match summaries, the first-match trace, and assignment events.
+   also build one detailed trace for every matched rule and assignment events.
 5. Resolve typed assignments against the original row.
 6. Append `rules_engine_*` result columns in one Spark projection.
 7. If `fail_on_error=True`, raise from the UDF during the caller's first Spark
@@ -448,7 +441,7 @@ Detailed sequence:
 
 The runtime preserves existing DataFrame columns, then appends the result
 columns in the order documented under [Spark Runtime](#spark-runtime).
-`full_audit=True` adds only the three detailed audit columns. Ruleset and engine
+`full_audit=True` adds only the two detailed audit columns. Ruleset and engine
 identity are driver-side literals and do not enlarge the Python UDF result.
 
 Side effects:
@@ -457,38 +450,6 @@ Side effects:
 - Does not start a Spark action merely to check row errors.
 - Does not write output rows unless the caller writes the returned DataFrame.
 - Does not mutate input metadata.
-
-### `ReconciliationSpecTranslator.translate(rows, ...)`
-
-Purpose:
-
-- Convert source reconciliation CSV rows into canonical YAML payloads.
-
-Detailed sequence:
-
-1. Group rows by `MatchRuleName`.
-2. Sort by `GroupSequence` and `CriteriaSequence`.
-3. Fold `JoinType` left-to-right inside each group.
-4. Fold `GroupJoinOperator` left-to-right across groups.
-5. Map supported source operators to canonical rules engine operators.
-6. Emit assignments to the configured target field.
-7. Emit `stop_on_match: true` by default.
-8. Emit required top-level `owner` and `owner_department` metadata from the
-   explicit `translate(...)` arguments.
-9. Produce translation audit records.
-
-Side effects:
-
-- None. It returns a payload and audit records.
-- It does not publish metadata.
-- It does not participate in runtime execution.
-
-Intended workflow:
-
-- translate to YAML,
-- inspect audit,
-- manually refine YAML,
-- compile/validate/publish the refined artifact.
 
 ## Semantic Contract
 
@@ -501,13 +462,17 @@ review.
 - Published metadata must be fully resolved and explicit.
 - Delta metadata is shaped for queryability.
 - Runtime reads published metadata.
-- Rule evaluation is row-local. Cross-row facts must be precomputed upstream
-  and supplied as ordinary input fields.
-- Aggregate operands are not supported by the rules engine runtime.
-- Omitted null modes are normalized to `null_input_mode: propagate` and
-  `null_result_mode: "null"`; exported and persisted metadata is explicit.
-- `null_default_value` is a boolean when `null_result_mode: default`; quoted
-  strings such as `"false"` are rejected.
+- Rule evaluation is row-local.
+- A binary condition with a null operand does not match by default.
+- `default_if_null` belongs to the operand whose null value should be replaced;
+  substitution occurs before comparison or assignment.
+- `default_if_null` must be a non-null literal. Use scalar shorthand or an
+  explicit `{literal: ..., value_type: ...}` mapping when a type is required.
+- `error_on_null: true` turns a remaining null operand in a binary comparison
+  into a row evaluation error.
+- Unary `is_null` and `is_not_null` operators inspect the effective value after
+  any operand default is applied; validation rejects `error_on_null` on these
+  operators because null is the value being tested.
 - Tolerance is absolute only.
 - Omitted tolerance is normalized and persisted as `0`.
 - Custom logic is allowed only through `FunctionRegistry`.
@@ -516,17 +481,20 @@ review.
   Use an explicit `double` or `float` `value_type` only when binary floating
   point is intentional.
 - Pre-publish and publish-time validation are mandatory.
-- Rule conditions and assignments are non-cascading: every operand resolves
-  against the original input row. Earlier assignments do not mutate the row
-  seen by later rules or later assignments in the same rule.
+- A `field` operand always reads the original input row. It is never changed by
+  an assignment.
+- An `assigned` operand reads the latest value committed for that target by a
+  matched rule with a lower `rule_order`.
+- Every condition and assignment in one rule reads the same pre-rule snapshot.
+  If the rule matches, all of its assignments commit together before the next
+  rule. Assignment list order therefore cannot create hidden dependencies.
 - Assignment precedence is `last_assignment_wins`, independently per target
   field. Different target fields merge; a later match overrides only an earlier
   assignment to the same field. `stop_on_match` controls rule evaluation and is
   separate from assignment precedence.
 - `matched_rule_ids` is the ordered source of truth for rule matches. Full audit
-  adds lightweight summaries for every match and a detailed trace for only the
-  first match. A single matched rule need not supply every effective assigned
-  field.
+  adds a detailed trace for every matched rule. A single matched rule need not
+  supply every effective assigned field.
 
 ## Supported Operators
 
@@ -579,13 +547,120 @@ is_not_null
 Unary operators must not define a right operand. All other operators require a
 right operand.
 
-## Precomputed Aggregate Facts
+## Null Semantics
 
-Aggregate calculations should be performed before invoking the rules engine.
-After an upstream Spark job adds the aggregate result to each row, rules can
-reference that value with a normal `field` operand. This keeps rule evaluation
-row-local and avoids Spark memory pressure from serializing aggregate trace
-payloads.
+The default is deliberately simple: if either operand in a binary comparison is
+still null, the condition does not match. No null configuration is required.
+
+Use `default_if_null` on the specific operand when a business value should
+replace null before comparison. For example, treat a missing amount as zero:
+
+```yaml
+left:
+  field: amount
+  default_if_null: 0
+operator: gt
+right: { literal: 100 }
+```
+
+Or treat a missing status as a named string value:
+
+```yaml
+left:
+  field: status
+  default_if_null: UNKNOWN
+operator: eq
+right: { literal: UNKNOWN }
+```
+
+The fallback may use an explicit literal type when YAML alone is not precise
+enough:
+
+```yaml
+left:
+  field: effective_date
+  default_if_null: { literal: "1900-01-01", value_type: date }
+operator: lt
+right: { field: as_of_date }
+```
+
+`default_if_null` works on field, assigned, literal, and custom-function
+operands in both conditions and assignments. It must not itself be null. Full
+audit records the original value, effective value, configured fallback, and
+whether substitution occurred.
+
+When null means the row is invalid rather than merely a non-match, set
+`error_on_null: true` on the condition:
+
+```yaml
+left: { field: amount }
+operator: gt
+right: { literal: 100 }
+error_on_null: true
+```
+
+This raises a row evaluation error if either binary operand is still null after
+defaults are applied. With `fail_on_error=False`, Spark returns that error in
+`rules_engine_error`; with `fail_on_error=True`, it raises during the caller's
+first materializing action. Unary `is_null` and `is_not_null` inspect the
+effective operand value; `error_on_null` is invalid for those operators.
+
+## Referencing Prior Assignments
+
+Use an `assigned` operand when a later rule should depend on a value produced by
+an earlier matched rule:
+
+```yaml
+rules:
+  - rule_id: classify
+    rule_name: Classify risk
+    rule_order: 1
+    when:
+      all:
+        - left: { field: fico }
+          operator: lt
+          right: { literal: 680 }
+    assign:
+      risk_bucket: high
+
+  - rule_id: route
+    rule_name: Route high risk
+    rule_order: 2
+    when:
+      all:
+        - left: { assigned: risk_bucket }
+          operator: eq
+          right: { literal: high }
+    assign:
+      manual_review: true
+```
+
+The contract is intentionally explicit:
+
+- `{field: risk_bucket}` reads the original DataFrame column.
+- `{assigned: risk_bucket}` reads the latest committed assignment.
+- Validation requires at least one active producer with a lower `rule_order`.
+  A same-rule or future assignment is not a producer.
+- A prior producer may legitimately not match the current row. In that case the
+  assigned value is null, so normal `default_if_null` and `error_on_null`
+  behavior applies.
+- Conditions, assignment expressions, and custom-function arguments may use an
+  assigned operand.
+- A matching `stop_on_match: true` rule commits its assignments and then stops
+  traversal.
+
+Assignments within a rule are atomic. In this example, `copied_bucket` receives
+the value committed by an earlier rule, not the sibling value `critical`:
+
+```yaml
+assign:
+  - assignment_id: replace_bucket
+    target_field: risk_bucket
+    value: { literal: critical }
+  - assignment_id: copy_prior_bucket
+    target_field: copied_bucket
+    value: { assigned: risk_bucket }
+```
 
 ## Authoring YAML
 
@@ -609,45 +684,8 @@ rules:
           operator: eq
           right: { literal: TRAD, value_type: string }
           tolerance_abs: "0"
-          null_input_mode: propagate
-          null_result_mode: "null"
     assign:
       review_bucket: trad
-```
-
-### Precomputed Aggregate Rule
-
-```yaml
-ruleset_id: account_rules
-ruleset_name: Account Rules
-version: "1"
-owner: Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: high_value_account
-    rule_name: High Value Account
-    rule_order: 1
-    when:
-      all:
-        - left: { field: account_amount_sum }
-          operator: gt
-          right: { literal: 1000000, value_type: number }
-          tolerance_abs: "0"
-          null_input_mode: propagate
-          null_result_mode: "null"
-    assign:
-      review_bucket: high_value
-```
-
-### Precomputed Filtered Total
-
-```yaml
-left: { field: open_amount_sum }
-operator: gt
-right: { literal: 0, value_type: number }
-tolerance_abs: "0"
-null_input_mode: propagate
-null_result_mode: "null"
 ```
 
 ### Custom Function Operand
@@ -662,8 +700,6 @@ left:
 operator: eq
 right: { literal: 5, value_type: number }
 tolerance_abs: "0"
-null_input_mode: propagate
-null_result_mode: "null"
 ```
 
 ## Compile, Validate, Normalize
@@ -723,10 +759,10 @@ jobs still register approved implementations in code, typically by calling
 `register_standard_functions(...)` and registering any environment-specific
 custom functions during job startup.
 
-For deployment setup, `RulesEngineService.save_standard_function_registry()`
+`RulesEngineService.save_standard_function_registry()`
 upserts metadata for package standard functions so contracts remain aligned
-with the installed package. Pass `update_existing=False` only when a controlled
-deployment intentionally pins existing registry metadata.
+with the installed package. Pass `update_existing=False` only when the caller
+intentionally preserves existing registry metadata.
 
 For a notebook-style user guide, see:
 
@@ -765,7 +801,7 @@ stack trace.
 The package includes a reusable `rules_engine.standard_functions` module for
 common rule helpers such as `substring`, `left`, `right`, `trim`, `upper`,
 `lower`, `normalize_whitespace`, `length`, `regex_extract`, `regex_replace`,
-`contains_any`, `default_if_null`, `null_if`, `to_number`, `to_date`,
+`contains_any`, `null_if`, `to_number`, `to_date`,
 `date_add_days`, `date_add_months`, `date_add_years`, `date_diff_days`,
 `month_start`, and `month_end`.
 
@@ -782,8 +818,6 @@ left:
       length: 3
 operator: eq
 right: { literal: BCD }
-null_input_mode: propagate
-null_result_mode: "null"
 ```
 
 ### Date and Timestamp Rules
@@ -817,8 +851,6 @@ left:
       months: 3
 operator: ge
 right: { field: maturity_date }
-null_input_mode: propagate
-null_result_mode: "null"
 ```
 
 Supply volatile facts such as the processing or as-of date as input columns or
@@ -852,23 +884,23 @@ result_df = spark_runtime.evaluate_dataframe(
 
 The compact default returns typed assignments, ordered match IDs, errors, and
 immutable evaluation identity. Set `full_audit=True` for investigations or
-governed outputs that also require match summaries, a detailed first-match
-trace, and per-assignment provenance. `full_audit` must be a Python `bool`.
+governed outputs that also require a detailed trace for every matched rule and
+per-assignment provenance. `full_audit` must be a Python `bool`.
 
 | Parameter | Default | Effect |
 |---|---|---|
 | `column_prefix` | `"rules_engine"` | Prefixes every appended runtime column. The input must not already contain any output column for that prefix. |
 | `fail_on_error` | `True` | Raises from the UDF during the caller's first materializing action when a row fails. `False` quarantines the error in the row. |
 | `include_error_traceback` | `False` | Adds a Python traceback to quarantined error text. Use only for controlled debugging and only with `fail_on_error=False`. |
-| `full_audit` | `False` | Adds ordered match summaries, the detailed first-match trace, and assignment provenance. |
+| `full_audit` | `False` | Adds a detailed trace for every matched rule and assignment provenance. |
 
 For example, these evaluation options change the returned schema or error row:
 
 | Call option | Returned-value effect |
 |---|---|
 | `full_audit=False` | Returns the compact six-column runtime contract; detailed audit columns are absent. |
-| `full_audit=True` | Inserts `matched_rules`, `first_matched_rule_trace`, and `assignment_results` after `assign`. The core match IDs and final assignments do not change. |
-| `fail_on_error=False` | A failing row returns `error="ExceptionType: message"`, `matched=False`, `matched_rule_ids=[]`, and `assign=null`; full-audit arrays are empty and the first-match trace is null. |
+| `full_audit=True` | Inserts `matched_rules` and `assignment_results` after `assign`. The core match IDs and final assignments do not change. |
+| `fail_on_error=False` | A failing row returns `error="ExceptionType: message"`, `matched=False`, `matched_rule_ids=[]`, and `assign=null`; full-audit arrays are empty. |
 | `fail_on_error=False, include_error_traceback=True` | Returns the same quarantined values, with the Python traceback appended to `error`. |
 | `column_prefix="decision"` | Uses names such as `decision_error`, `decision_assign`, and `decision_ruleset` without changing their contents. |
 
@@ -912,15 +944,14 @@ are appended in the following order:
 | 2 | `rules_engine_matched` | Always | `BOOLEAN` | True when at least one active rule matched before evaluation ended. |
 | 3 | `rules_engine_matched_rule_ids` | Always | `ARRAY<STRING>` | Rule IDs in evaluation order. Empty for no match or a quarantined error row. First and last matches are the first and last array elements; no duplicate scalar columns are emitted. |
 | 4 | `rules_engine_assign` | Always | ruleset-derived `STRUCT` | Authoritative typed assignments merged from all matched rules. Every active assignment target is a struct field. Unassigned fields are null; the whole struct is null when no assignment was produced. |
-| 5 | `rules_engine_matched_rules` | `full_audit=True` | `ARRAY<STRUCT>` | Lightweight authored summaries for every matched rule in evaluation order. Empty when no rule matched. |
-| 6 | `rules_engine_first_matched_rule_trace` | `full_audit=True` | `STRUCT` | Detailed resolved-condition trace for the first matched rule only. Null when no rule matched. |
-| 7 | `rules_engine_assignment_results` | `full_audit=True` | `ARRAY<STRUCT>` | Every assignment event in evaluation order, including events later overridden. Empty when no assignment ran. |
-| 8 | `rules_engine_ruleset` | Always | `STRUCT` | Immutable identity of the evaluated ruleset payload. |
-| 9 | `rules_engine_engine_version` | Always | `STRING` | Installed rules-engine package version that evaluated the row. |
+| 5 | `rules_engine_matched_rules` | `full_audit=True` | `ARRAY<STRUCT>` | Detailed resolved-condition trace for every matched rule in evaluation order. Empty when no rule matched. |
+| 6 | `rules_engine_assignment_results` | `full_audit=True` | `ARRAY<STRUCT>` | Every assignment event in evaluation order, including events later overridden. Empty when no assignment ran. |
+| 7 | `rules_engine_ruleset` | Always | `STRUCT` | Immutable identity of the evaluated ruleset payload. |
+| 8 | `rules_engine_engine_version` | Always | `STRING` | Installed rules-engine package version that evaluated the row. |
 
 The default therefore appends six columns: `error`, `matched`,
 `matched_rule_ids`, `assign`, `ruleset`, and `engine_version`. Full audit inserts
-the three detailed audit columns between `assign` and `ruleset`.
+the two detailed audit columns between `assign` and `ruleset`.
 
 ### `rules_engine_assign` fields
 
@@ -930,8 +961,9 @@ The assignment struct is ruleset-specific rather than fixed:
 |---|---|---|
 | `<target_field>` | Inferred and schema-validated from the assignment | Final typed value for that target after all matched-rule assignments. If several matches assign the same target, the later assignment wins. If no matched rule assigns the target, the field is null. |
 
-All conditions and assignment expressions read the original input row. An
-earlier assignment does not become an input to a later rule or assignment.
+`field` operands read the original input row. `assigned` operands read the
+latest committed value from an earlier matched rule. The final struct still
+uses last-assignment-wins independently for each target.
 
 ### `rules_engine_ruleset` fields
 
@@ -948,28 +980,15 @@ earlier assignment does not become an input to a later rule or assignment.
 | `rule_id` | `STRING` | Stable matched-rule identifier. |
 | `rule_name` | `STRING` | Author-facing matched-rule name. |
 | `rule_order` | `BIGINT` | Evaluation order of the rule. |
-| `human_readable_condition` | `STRING` | Complete authored condition rendered with readable boolean syntax. |
-| `human_readable_assignment` | `STRING` | Complete authored assignment payload rendered as text. |
-| `assigned_fields` | `ARRAY<STRING>` | Assignment targets authored on the matched rule, in assignment order. |
-
-These static descriptions are precomputed once per evaluator. Because they
-repeat on every matched row, omit full audit from wide production writes when
-the summaries are not required; retain `matched_rule_ids` and recover static
-text later with `RulesEngineService.describe_rules()`.
-
-### `rules_engine_first_matched_rule_trace` fields
-
-| Nested field | Spark type | Definition |
-|---|---|---|
-| `rule_id` | `STRING` | ID of the first matched rule. |
-| `rule_name` | `STRING` | Name of the first matched rule. |
-| `rule_order` | `BIGINT` | Evaluation order of the first matched rule. |
 | `explanation` | `STRING` | Author-facing expression containing the condition branches that passed, preserving `AND`/`OR` grouping. |
 | `assignments_applied` | `ARRAY<STRING>` | Target fields authored on this rule. Later rules may override their values. |
-| `conditions` | `ARRAY<STRUCT>` | Resolved trace entries for the rule's evaluated conditions. |
+| `conditions` | `ARRAY<STRUCT>` | Resolved trace entries for this matched rule's evaluated conditions. |
 
-The trace is present only for the first matched rule, so it does not repeat a
-`matched` field. No-match and quarantined-error rows return a null trace.
+Every element is a complete matched-rule trace; there is no separate first- or
+last-match trace column. Omit full audit from high-volume production writes when
+row-level explanations are not required. `matched_rule_ids` remains the compact
+match history, and static authored text can be recovered with
+`RulesEngineService.describe_rules()`.
 
 Condition trace fields:
 
@@ -979,22 +998,25 @@ Condition trace fields:
 | `left` | `STRUCT` | Resolved left operand; null only when absent. |
 | `right` | `STRUCT` | Resolved right operand; null for unary operators. |
 | `operator` | `STRING` | Canonical comparison operator. |
-| `comparison_result` | `BOOLEAN` | Raw comparison result before `null_result_mode` resolves a null result. May be null. |
+| `comparison_result` | `BOOLEAN` | Raw comparison result. Null when a binary operand remains null and `error_on_null` is false. |
 | `passed` | `BOOLEAN` | Final condition pass/fail result used by group logic. |
 | `tolerance_abs` | `STRING` | Non-default absolute numeric tolerance; null when the default zero applies. |
-| `null_input_mode` | `STRING` | Non-default null-input behavior; null when `propagate` applies. |
-| `null_result_mode` | `STRING` | Non-default null-result behavior; null when `null` applies. |
-| `null_default_value` | `STRING` | Trace-safe default value used by `null_result_mode=default`, otherwise null. |
 
 Operand trace fields used by `left` and `right`:
 
 | Nested field | Spark type | Definition |
 |---|---|---|
-| `kind` | `STRING` | `field`, `literal`, or `custom_function`. |
+| `kind` | `STRING` | `field`, `assigned`, `literal`, or `custom_function`. |
 | `column` | `STRING` | Source column for a field operand; otherwise null. |
-| `value` | `STRING` | Resolved value rendered as trace-safe text. The typed assignment remains in `rules_engine_assign`. |
+| `target_field` | `STRING` | Assignment target read by an `assigned` operand; otherwise null. |
+| `original_value` | `STRING` | Resolved value before `default_if_null`, rendered as trace-safe text. |
+| `value` | `STRING` | Effective value after `default_if_null`, rendered as trace-safe text. The typed assignment remains in `rules_engine_assign`. |
 | `value_type` | `STRING` | Explicit authored literal value type when present. |
+| `default_if_null` | `STRING` | Configured fallback rendered as trace-safe text; null when no fallback was authored. |
+| `default_applied` | `BOOLEAN` | True when the original value was null and the configured fallback supplied the effective value. |
 | `function_name` | `STRING` | Registered custom-function name when applicable. |
+| `produced_by_rule_id` | `STRING` | Rule that committed the consumed assigned value; null when no prior producer matched or for other operand kinds. |
+| `produced_by_assignment_id` | `STRING` | Assignment that committed the consumed assigned value; null when no prior producer matched or for other operand kinds. |
 | `source_columns` | `ARRAY<STRING>` | Source columns used to resolve this operand. |
 | `arguments` | `MAP<STRING,STRING>` | Custom-function arguments rendered as compact trace-safe summaries. |
 
@@ -1053,9 +1075,9 @@ For input `account = "A"`, the important returned values are:
 
 | Setting | `matched_rule_ids` | `assign` | Full-audit effect |
 |---|---|---|---|
-| Both rules use `stop_on_match: false` | `["first", "second"]` | `{bucket: "second", review: true, priority: "high"}` | Both summaries are emitted. The first bucket event is ineffective and points to the second assignment as its override. The trace describes `first`. |
-| `first` uses `stop_on_match: true` | `["first"]` | `{bucket: "first", review: true, priority: null}` | Only the first summary and its assignment events are emitted. The trace still describes `first`; `second` is never evaluated. |
-| `first` does not match | `["second"]` | `{bucket: "second", review: null, priority: "high"}` | Full-audit arrays contain only `second`, and the trace describes `second`. |
+| Both rules use `stop_on_match: false` | `["first", "second"]` | `{bucket: "second", review: true, priority: "high"}` | Detailed traces for both rules are emitted. The first bucket event is ineffective and points to the second assignment as its override. |
+| `first` uses `stop_on_match: true` | `["first"]` | `{bucket: "first", review: true, priority: null}` | Only the first rule trace and its assignment events are emitted; `second` is never evaluated. |
+| `first` does not match | `["second"]` | `{bucket: "second", review: null, priority: "high"}` | Full-audit arrays contain only the detailed `second` trace and its assignment events. |
 
 `stop_on_match` stops traversal only when that rule matches. Assignments to
 different fields accumulate; only repeated assignments to the same target use
@@ -1066,8 +1088,8 @@ Spark evaluation strategy:
 
 1. Pass the input row into a Python UDF.
 2. Evaluate rule logic and assignments against row-local fields.
-3. Return Spark-native structs and arrays for typed assignments, first-match
-   detail, lightweight match summaries, and assignment provenance.
+3. Return Spark-native structs and arrays for typed assignments, detailed traces
+   for matched rules, and assignment provenance.
 4. Either raise from the UDF in the caller's materializing action when
    `fail_on_error` is true, or return compact row errors for quarantine.
 
@@ -1176,7 +1198,7 @@ coverage = service.coverage_report(
 `semantic_diff.to_text()` emphasizes rule-order, condition, and assignment
 changes in authored syntax, including null-handling and metadata identity.
 Nested condition and assignment contracts render only changed leaf fields,
-while both immutable content hashes remain visible for reconciliation.
+while both immutable content hashes remain visible for comparison.
 
 `coverage_report()` materializes one full evaluation action to calculate its
 counts. `coverage.no_match_rows` remains lazy; materializing it evaluates the
@@ -1185,8 +1207,8 @@ Consequently, custom condition functions run again for clean no-match rows and
 must be safe to reevaluate. Estimate this multi-pass cost before using coverage
 on a production-scale tape.
 
-Pass custom metadata table names when the deployment should not use the
-standard `ruleset_versions` and `function_registry` names:
+Pass custom metadata table names when a caller should not use the standard
+`ruleset_versions` and `function_registry` names:
 
 ```python
 service = RulesEngineService.from_schema(
@@ -1240,9 +1262,8 @@ metastore-backed Delta tables. The repository checks table existence through
 Spark's catalog API, so validate that behavior in any non-standard catalog
 before production rollout.
 
-The repository emits SQL for lifecycle updates. Production clusters should use
-the modern Spark default `spark.sql.parser.escapedStringLiterals=false`; legacy
-escaped-string parsing is not part of the supported v1 operating profile.
+The repository emits SQL for lifecycle updates and requires
+`spark.sql.parser.escapedStringLiterals=false`.
 
 ## Publish Lifecycle
 
@@ -1304,10 +1325,8 @@ implement a distributed lock across concurrent publish jobs. Production
 promotion should run through one controlled pipeline, or through an external
 lock if multiple publishers are introduced later.
 
-Schema evolution is operator-owned. Before adding or changing columns in
-`ruleset_versions`, deploy the package version and run an explicit Delta table
-migration, then publish new metadata. The v1 package does not automatically
-merge schema changes into the ruleset table on append.
+`create_tables()` creates the current metadata schema but does not mutate an
+existing table definition. Existing tables must already match the current DDL.
 
 The `ruleset_versions` table is append-and-retire by design. Retained metadata
 is the audit history, so production owners should apply their normal Delta
@@ -1339,119 +1358,27 @@ After creating tables, call `service.save_standard_function_registry()` to load
 metadata for package standard functions. The call is rerunnable and refreshes
 existing package-owned rows by default.
 
-### Production YAML Publish Pipeline
+### Publish And Retire
 
-The production pipeline is implemented in:
-
-```text
-notebooks/production_yaml_publish_pipeline.py
-```
-
-The pipeline expects a trusted YAML artifact in a production-controlled path.
-Authored YAML does not need a `status` field; publication is represented by
-the registry row lifecycle status.
-
-Required job parameters:
-
-- `schema`: target catalog/schema, for example `catalog.schema`.
-- `yaml_path`: source YAML path.
-- `archive_dir`: archive destination for source and canonical YAML copies.
-- `published_by`: actor stored on publication and automatic retirement.
-
-Optional job parameters:
-
-- `create_metadata_tables`: create the two package registry tables when `true`.
-- `create_log_table`: create the notebook-owned `ruleset_validation_logs` table when `true`.
-- `retire_existing_published`: retire the currently published version before
-  publishing a newer version.
-- `require_newer_version`: require numeric dot-notation version ordering during
-  automatic retirement.
-
-The pipeline sequence is:
-
-1. Compile YAML.
-2. Normalize ruleset metadata.
-3. Validate with `SparkRulesetCompatibilityValidator`.
-4. Optionally retire the existing published version for the same `ruleset_name`.
-5. Publish the incoming ruleset.
-6. Export canonical YAML and copy the source YAML to the archive path.
-7. Append a row to the notebook-owned `ruleset_validation_logs` table.
-
-### New Version Cutover
-
-By default, publishing a new `version` for the same `ruleset_name` leaves any
-other published versions in place. Runtime calls that load by name only will
-fail when multiple published versions match; pass `version` explicitly or
-retire versions that should no longer serve runtime traffic.
-
-Set:
-
-```text
-retire_existing_published = true
-require_newer_version = true
-```
-
-to make the pipeline retire the currently published version and publish the
-incoming version in one run. Versions must use numeric dot notation:
-
-```text
-1 < 1.0.1 < 1.1.0 < 2.0.0 < 2.1.0
-```
-
-Tags and date-like versions such as `v1.0.0`, `pilot`, or `2024-Q4` are rejected
-for automatic retirement. If `2.1.0` is published and `1.0.0` is dropped, the
-pipeline fails and leaves `2.1.0` published.
-
-### Validation And Publish Logs
-
-Logging is no longer part of the rules engine package. The production and
-retirement notebooks include a local `ruleset_validation_logs` schema for teams
-that want those jobs to write audit rows, but package setup creates only
-`ruleset_versions` and `function_registry`.
-
-Key fields:
-
-- `operation`: `publish` for the production YAML publish pipeline.
-- `status`: `published`, `validation_failed`, or `failed`.
-- `reason`: human-readable reason such as `validation failed`,
-  `pipeline failed`, or automatic retirement context.
-- `ruleset_id`, `ruleset_name`, `version`, `content_hash`.
-- `retired_ruleset_id`, `retired_version` when automatic cutover retires an
-  existing version.
-- `validation_issue_count` and `validation_issues_json`.
-- `source_yaml_path`, `canonical_yaml_path`, and `original_yaml_archive_path`.
-
-### Standalone Retirement
-
-Use standalone retirement when a published ruleset should be removed from
-runtime eligibility without replacing it:
-
-```text
-notebooks/retire_ruleset_pipeline.py
-```
-
-Required job parameters:
-
-- `schema`: target catalog/schema, for example `catalog.schema`.
-- `ruleset_id`: ruleset identity to retire.
-- `version`: version to retire.
-- `retired_by`: actor stored on the lifecycle row.
-- `reason`: required audit reason written to the notebook-owned log table.
-
-The notebook calls:
+Publication accepts a compiled ruleset and records the caller as lifecycle
+metadata:
 
 ```python
-repository.retire(
-    ruleset_id="account_rules",
-    version="1.0.0",
-    retired_by="operator",
-)
+ruleset = service.compile_yaml_path("account_rules.yaml")
+service.publish(ruleset, published_by="rules-publisher")
 ```
 
-Retirement changes the persisted row to `status = retired`, stamps
-`retired_by` and `retired_at`, and makes the version unavailable through
-`load_published(...)`. It also writes a log row with `operation = retire`,
-`status = retired`, and the supplied `reason`.
+Publishing another version under the same `ruleset_name` does not implicitly
+retire existing versions. Load an intended version explicitly, and retire a
+version when it should no longer be eligible for runtime loading:
+
+```python
+service.retire(
+    ruleset_id="account_rules",
+    version="1",
+    retired_by="rules-publisher",
+)
+```
 
 ### Lifecycle Flow
 
@@ -1582,93 +1509,6 @@ The audit model supports these operational questions:
 - Did the content change between environments?
 - What exact canonical YAML/JSON payload was published?
 
-## Reconciliation CSV Translation Utility
-
-The reconciliation translator is outside the runtime package. It is a
-one-time migration utility that converts external reconciliation CSV specs
-into canonical YAML authoring payloads.
-
-It does not participate in runtime execution.
-It is kept in the repository under `tools/`, but it is intentionally excluded
-from the production wheel artifact. Run it from source or package it separately
-for migration work.
-
-The intended workflow is:
-
-1. translate the source CSV into YAML,
-2. write the translation audit artifact,
-3. manually refine the YAML for rules or semantics not captured by the source
-   reconciliation spec,
-4. compile, validate, publish, and execute the refined YAML through the rules
-   engine.
-
-Source CSV columns:
-
-```text
-MatchRuleName
-GroupSequence
-GroupJoinOperator
-CriteriaSequence
-FieldName
-ValueOperator
-Value
-JoinType
-```
-
-Supported source operators:
-
-```text
-TextEquals          -> eq
-TextNotEquals       -> ne
-TextContains        -> contains
-TextNotContains     -> not_contains
-TextInList          -> in
-NumericLessThan     -> lt
-NumericGreaterThan  -> gt
-```
-
-Example:
-
-```python
-from tools.recon_spec_translation.reader_csv import read_reconciliation_csv
-from tools.recon_spec_translation.translator import ReconciliationSpecTranslator
-from tools.recon_spec_translation.writer_yaml import write_yaml
-from tools.recon_spec_translation.audit import write_audit
-
-rows = read_reconciliation_csv("source_spec.csv")
-result = ReconciliationSpecTranslator(
-    assignment_target_field="translated_match_rule_name",
-).translate(
-    rows,
-    owner="Rules Team",
-    owner_department="ALM Engineering",
-)
-
-if any(record.failures for record in result.audit_records):
-    write_audit(result.audit_records, "translation_audit.json")
-    raise ValueError("Translation failed. Review translation_audit.json.")
-
-write_yaml(result.payload, "translated_rules.yaml")
-write_audit(result.audit_records, "translation_audit.json")
-```
-
-Join semantics:
-
-- `JoinType` connects the current source row to the next source row.
-- `GroupJoinOperator` connects the current source group to the next source
-  group.
-- `JoinType = null` terminates the current condition group and is only valid
-  on the final condition row for that `GroupSequence`.
-- `GroupJoinOperator = null` terminates the rule group chain and is only valid
-  on the final `GroupSequence`.
-- condition and group chains are folded left-to-right. For example,
-  `A And B And C Or D` becomes `(((A And B) And C) Or D)`.
-- translated rules default to `stop_on_match: true`, so the first matching
-  rule by `rule_order` wins. Pass `stop_on_match=False` to
-  `ReconciliationSpecTranslator` only when multi-match behavior is explicitly
-  intended.
-- malformed chains fail translation and are reported in the audit.
-
 ## Supplemental Notebook
 
 The notebook source file is:
@@ -1688,8 +1528,7 @@ Databricks or copy cells into a Databricks notebook. It walks through:
 - publish/load/retire workflow,
 - Spark DataFrame evaluation,
 - embedded expected-case publication gates,
-- compact/full-audit identity, semantic diffs, and coverage diagnostics,
-- reconciliation CSV translation.
+- compact/full-audit identity, semantic diffs, and coverage diagnostics.
 
 The quickstart notebook is:
 
@@ -1737,11 +1576,11 @@ custom-function serialization, and both error modes.
 
 ## Packaging
 
-This repository owns the Python source and package metadata only. Wheel builds
-and deployment configuration are maintained by each consuming environment.
+This repository owns the Python source and package metadata only. Each
+consuming environment owns its wheel build and runtime configuration.
 
 The wheel includes the `rules_engine` package only. Repository utilities under
-`tools/` are migration and support tooling rather than runtime dependencies.
+`tools/` support development verification and are not runtime dependencies.
 `pyproject.toml` requires PySpark 3.5 or newer; test against every target runtime
 before adopting runtime-specific types such as `timestamp_ntz`.
 
@@ -1776,7 +1615,7 @@ Recommended Databricks workflow:
 ## Logging
 
 The package uses Python's standard `logging` library and does not configure
-global logging handlers. Databricks jobs, notebooks, or deployment wrappers
+global logging handlers. Databricks jobs, notebooks, or calling applications
 should configure log level and destinations according to the environment.
 
 Useful loggers:
@@ -1810,12 +1649,11 @@ business-sensitive row data.
 
 Common causes:
 
-- unsupported key such as `value` instead of `literal`,
-- unsupported key such as `assignments` instead of `assign`,
-- unsupported operand key `aggregate`; precompute the value upstream and
-  reference it with `field`,
-- an explicit null mode that is empty or not a supported string (omitted modes
-  use the documented defaults),
+- a key outside the documented mapping contract,
+- a null `default_if_null`,
+- a scalar with the wrong YAML type, such as quoted text for a boolean or
+  integer field,
+- a non-boolean `error_on_null`,
 - malformed condition group with more than one logical operator.
 
 ### Validation Fails
@@ -1875,117 +1713,12 @@ service.retire("<ruleset_id>", "<version>", retired_by="operator")
 Published and retired `(ruleset_name, version)` pairs are immutable. Increment
 the version before publishing a replacement under the same ruleset name.
 
-## Migration Notes For 0.4.0
-
-Version `0.4.0` intentionally simplifies the pre-1.0 Spark output contract:
-
-- `evaluate_dataframe(..., audit_level=...)` is replaced by
-  `evaluate_dataframe(..., full_audit=False)`. The compact schema is now the
-  default; pass the boolean `full_audit=True` for detailed audit artifacts.
-- `AuditLevel` is removed from the public package API.
-- `first_matched_rule*`, `last_matched_rule`, and `winning_rule*` columns are
-  removed. Ordered `matched_rule_ids` and, under full audit, `matched_rules`
-  are the canonical match history.
-- Full audit emits `first_matched_rule_trace`, with the row-specific readable
-  explanation nested inside the trace, plus `matched_rules` and
-  `assignment_results`.
-- `ruleset_id`, `ruleset_version`, and `content_hash` output columns are grouped
-  into `rules_engine_ruleset STRUCT<id,version,content_hash>`.
-- Existing input columns remain first. Runtime columns now have a stable order:
-  error, matched, matched IDs, typed assign, optional full-audit detail,
-  ruleset identity, and engine version.
-
-This is a breaking output-schema change. Migrate persisted Delta targets and
-downstream projections explicitly before their first 0.4 write; do not rely on
-implicit `mergeSchema` for the removed and reshaped columns.
-
-## Migration Notes For 0.3.1
-
-Version `0.3.1` hardens the governance tools before Databricks migration:
-
-- Coverage uses ANSI-safe array access, including for clean no-match rows.
-- Semantic diffs include null behavior, condition/group/assignment identity,
-  operand metadata, per-case expectation changes, and both content hashes.
-- Expected-case assignment keys are validated against declared target fields;
-  misspellings fail publication with `EXPECTED_CASE_UNKNOWN_KEY`.
-- Diagnostic evaluators use one documented repository-free construction path,
-  and worker-serialization validation is a public runtime method.
-- The experimental backtest API introduced in 0.3.0 was removed. It had not
-  completed target-runtime verification and carried ambiguous Decimal and
-  row-error comparison semantics. No persisted metadata migration is needed.
-
-## Migration Notes For 0.3.0
-
-The package version is `0.3.0`. The default `audit_level="full"` preserves the
-0.2 runtime audit schema, with four additive identity columns:
-`rules_engine_ruleset_id`, `rules_engine_ruleset_version`,
-`rules_engine_content_hash`, and `rules_engine_engine_version`.
-
-- Persisted output tables need an explicit schema-evolution step for the four
-  identity columns before their first 0.3 full-audit write.
-- `audit_level="minimal"` and `"standard"` intentionally emit narrower schemas;
-  route them to tables whose schema matches the selected contract.
-- Adding or changing `expect` cases changes canonical payload JSON and
-  `content_hash`. Publish as a new immutable ruleset version.
-- Publication now executes embedded expected cases after validation and before
-  repository persistence. A failed case prevents the write.
-- In 0.3.0, coverage and the then-experimental backtest helper materialized
-  Spark actions to compute report counts. Coverage retains this documented
-  behavior; the backtest helper was removed in 0.3.1.
-- The 0.3 wheel adds no dependency and does not implement a native-Spark rule
-  compiler or an input-contract schema.
-
-## Migration Notes For 0.2.0
-
-The package version is `0.2.0`. Runtime output changes are additive, but
-validation and generated metadata identity are compatibility-sensitive for a
-pre-1.0 package.
-
-- Existing persisted/exported assignments already contain explicit IDs and
-  continue to load unchanged. Do not rewrite immutable published payloads.
-- Recompiling shorthand or list entries without explicit IDs changes generated
-  IDs from position-based `assignment:<rule_id>:<position>` to stable
-  `assignment:<rule_id>:<target_field>`. Canonical payload JSON and
-  `content_hash` can therefore change even when assignment behavior does not.
-- Recompiling YAML with untyped fractional literals now records exact Decimal
-  semantics instead of binary floats. This can change canonical payload JSON,
-  inferred Spark assignment types, and `content_hash`; publish it as a reviewed
-  new ruleset version rather than rewriting immutable metadata.
-- Inventory older `payload_json` rows containing quoted numeric-looking
-  literals before migration. Earlier dataclass-authored Decimal values could be
-  stored as strings and reload as `StringType`, especially for new assignment
-  targets. Treat matches as review candidates—not automatic conversions,
-  because account identifiers may legitimately be numeric strings—and
-  re-publish confirmed Decimal rules from their source YAML.
-- `fail_on_error=True` no longer materializes the DataFrame inside
-  `evaluate_dataframe()`. Row failures now surface during the caller's first
-  Spark action, eliminating the former hidden scan/recomputation cost. Jobs
-  that previously relied on the method call itself as an action must add an
-  explicit write, count, or collect as appropriate.
-- Before publishing a recompiled version, review duplicate assignment IDs
-  across rules, duplicate targets within a rule, and Spark schema/type errors.
-- Consumers may adopt the new columns incrementally. Existing
-  `winning_rule*`, `matched`, `matched_rule_ids`, typed `assign`, `error`,
-  `column_prefix`, `fail_on_error`, and `stop_on_match` contracts remain.
-- Each `assignment_results` event now includes an additive
-  `authored_expression` field such as
-  `review_date = date_add_years(value=funded_date, years=1)`.
-- Existing Delta output tables that persist the nested `assignment_results`
-  struct need an explicit schema-evolution step before the first 0.2.0 write;
-  validate this in a cloned or disposable table rather than relying on an
-  implicit production `mergeSchema`.
-- Install 0.2.0 only on a runtime that already satisfies the package's Python
-  and PySpark requirements. Do not let pip replace the Databricks-provided
-  PySpark distribution to resolve an incompatible cluster runtime.
-
 ## Known Limitations
 
 - v1 allows multiple published versions per `ruleset_name`, but callers must
   pass `version` when loading by name would be ambiguous.
 - v1 does not guarantee concurrent publish safety. Run publication from a
   controlled promotion workflow, not competing interactive jobs.
-- v1 expects an explicit schema migration before `ruleset_versions` columns are
-  added or changed.
 - v1 supports Databricks Unity Catalog and Hive metastore-backed Delta tables.
 - v1 assumes `spark.sql.parser.escapedStringLiterals=false`, the modern Spark
   default.
@@ -1993,22 +1726,18 @@ pre-1.0 package.
 - The UDF receives only required source and assignment-target columns, then
   converts that pruned struct with `Row.asDict(recursive=True)`. Extremely wide
   required nested structs still carry recursive Python conversion cost.
-- Pure losing rules use an allocation-light match path. The first matched pure
-  rule is evaluated once more to build its detailed trace; this deliberately
-  avoids allocating trace objects for every earlier losing rule. Custom
-  functions are never reevaluated.
+- Compact evaluation uses an allocation-light match path. Full audit evaluates
+  each active condition it reaches once, retaining detailed traces only for
+  rules that match. Custom functions are never reevaluated to build audit output.
 - Condition groups intentionally evaluate every active condition until a
   matching rule with `stop_on_match` ends rule traversal. This preserves
   observable data errors in later conditions; do not rely on boolean
   short-circuiting to hide invalid inputs.
-- Spark runtime emits typed assignment output, one detailed first-match trace,
-  lightweight summaries for all matches, and per-assignment provenance. It
-  intentionally does not emit detailed resolved condition traces for every
-  matched rule.
+- Spark runtime emits typed assignment output, detailed resolved-condition
+  traces for every matched rule, and per-assignment provenance when full audit
+  is enabled.
 - Spark runtime does not yet compile every row predicate into native Spark
   expressions.
-- Aggregate operands are not supported. Precompute aggregate facts upstream in
-  Spark and reference them as ordinary fields.
 - `like` and `not_like` support SQL `%` and `_` wildcards. Escape-character
   semantics for literal `%` or `_` are not part of v1.
 - Custom function implementations must be available to Spark workers and must

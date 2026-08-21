@@ -21,12 +21,11 @@ from yaml.constructor import ConstructorError
 from rules_engine.enums import (
     ComparisonOperator,
     LogicalOperator,
-    NullInputMode,
-    NullResultMode,
     RulesetStatus,
 )
 from rules_engine.exceptions import CompilationError
 from rules_engine.models import (
+    AssignedOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -175,8 +174,21 @@ class YamlRulesetCompiler:
         Compile a parsed YAML payload.
         """
         payload = self._ensure_mapping(payload, "root payload")
-        if "ruleset" in payload:
-            payload = self._require_mapping(payload, "ruleset")
+        self._reject_unsupported_keys(
+            payload,
+            {
+                "ruleset_id",
+                "ruleset_name",
+                "version",
+                "status",
+                "description",
+                "owner",
+                "owner_department",
+                "rules",
+                "expect",
+            },
+            "Ruleset",
+        )
 
         ruleset_id = self._require_str(payload, "ruleset_id")
         ruleset_name = self._require_str(payload, "ruleset_name")
@@ -220,6 +232,11 @@ class YamlRulesetCompiler:
     ) -> RulesetExpectation:
         """Compile one executable ruleset example."""
         payload = self._ensure_mapping(payload, f"expected case at index {index}")
+        self._reject_unsupported_keys(
+            payload,
+            {"name", "given", "then"},
+            f"Expected case at index {index}",
+        )
         given = self._require_mapping(payload, "given")
         then = self._require_mapping(payload, "then")
         return RulesetExpectation(
@@ -233,19 +250,31 @@ class YamlRulesetCompiler:
         Compile one rule mapping into a ``Rule`` dataclass.
 
         Only contract-defined structural defaults are applied here, such as a
-        generated rule identifier or order. Unsupported aliases are rejected so
-        later persistence always reflects canonical authoring vocabulary.
+        generated rule identifier or order. Unknown keys are rejected so later
+        persistence always reflects the declared authoring contract.
         """
         payload = self._ensure_mapping(payload, f"rule at index {index}")
+        self._reject_unsupported_keys(
+            payload,
+            {
+                "rule_id",
+                "rule_name",
+                "rule_order",
+                "description",
+                "when",
+                "assign",
+                "active_flag",
+                "stop_on_match",
+            },
+            f"Rule at index {index}",
+        )
         rule_name = self._require_str(payload, "rule_name")
-        rule_id = str(payload.get("rule_id", f"rule:{index}"))
-        rule_order = int(payload.get("rule_order", index))
+        rule_id = self._str_or_default(payload, "rule_id", f"rule:{index}")
+        rule_order = self._int_or_default(payload, "rule_order", index)
 
         when_payload = self._require_mapping(payload, "when")
         root_group = self._compile_group_mapping(when_payload, f"cg:{rule_id}:root")
 
-        if "assignments" in payload:
-            raise CompilationError("Unsupported rule key: assignments. Use canonical key: assign.")
         assignments_payload = payload.get("assign")
         if assignments_payload is None:
             raise CompilationError(f"Rule {rule_id} must define assign.")
@@ -257,8 +286,8 @@ class YamlRulesetCompiler:
             rule_order=rule_order,
             root_group=root_group,
             assignments=assignments,
-            active_flag=bool(payload.get("active_flag", True)),
-            stop_on_match=bool(payload.get("stop_on_match", False)),
+            active_flag=self._bool_or_default(payload, "active_flag", True),
+            stop_on_match=self._bool_or_default(payload, "stop_on_match", False),
             description=self._optional_str(payload, "description"),
         )
 
@@ -272,11 +301,11 @@ class YamlRulesetCompiler:
         """
         logical_keys = set(payload) & {member.value for member in LogicalOperator}
         allowed_keys = logical_keys | {"condition_group_id"}
-        unsupported_keys = set(payload) - allowed_keys
-        if unsupported_keys:
-            raise CompilationError(
-                f"Condition group {group_id} contains unsupported keys: {sorted(unsupported_keys)}."
-            )
+        self._reject_unsupported_keys(
+            payload,
+            allowed_keys,
+            f"Condition group {group_id}",
+        )
         if len(logical_keys) != 1:
             raise CompilationError(
                 f"Condition group {group_id} must define exactly one logical operator."
@@ -323,10 +352,23 @@ class YamlRulesetCompiler:
         """
         Compile one condition mapping into a canonical condition model.
 
-        The compiler materializes explicit tolerance and null-mode fields so
-        downstream validation and runtime execution do not rely on hidden
-        runtime defaults.
+        Null defaults belong to operands. Conditions only choose whether a
+        remaining null should fail the condition or raise an error.
         """
+        allowed_keys = {
+            "condition_id",
+            "left",
+            "operator",
+            "right",
+            "tolerance_abs",
+            "error_on_null",
+            "active_flag",
+        }
+        self._reject_unsupported_keys(
+            payload,
+            allowed_keys,
+            f"Condition {condition_id}",
+        )
         left = self._compile_operand(self._require_mapping(payload, "left"))
         operator = self._enum(
             ComparisonOperator,
@@ -339,32 +381,19 @@ class YamlRulesetCompiler:
             if right_payload is not None
             else None
         )
+        error_on_null = self._bool_or_default(payload, "error_on_null", False)
         return Condition(
-            condition_id=str(payload.get("condition_id", condition_id)),
+            condition_id=self._str_or_default(
+                payload,
+                "condition_id",
+                condition_id,
+            ),
             left=left,
             operator=operator,
             right=right,
             tolerance_abs=self._decimal(payload.get("tolerance_abs", "0"), "tolerance_abs"),
-            null_input_mode=self._enum(
-                NullInputMode,
-                self._str_or_default(
-                    payload,
-                    "null_input_mode",
-                    NullInputMode.PROPAGATE.value,
-                ),
-                "null_input_mode",
-            ),
-            null_result_mode=self._enum(
-                NullResultMode,
-                self._str_or_default(
-                    payload,
-                    "null_result_mode",
-                    NullResultMode.NULL.value,
-                ),
-                "null_result_mode",
-            ),
-            null_default_value=payload.get("null_default_value"),
-            active_flag=bool(payload.get("active_flag", True)),
+            error_on_null=error_on_null,
+            active_flag=self._bool_or_default(payload, "active_flag", True),
         )
 
     def _compile_assignments(self, payload: Any, rule_id: str) -> tuple[Assignment, ...]:
@@ -376,27 +405,37 @@ class YamlRulesetCompiler:
         literal or operand payloads.
         """
         if isinstance(payload, Mapping):
-            return tuple(
-                Assignment(
-                    assignment_id=f"assignment:{rule_id}:{target_field}",
-                    target_field=str(target_field),
-                    value=self._coerce_assignment_value(raw_value),
+            assignments: list[Assignment] = []
+            for target_field, raw_value in payload.items():
+                if not isinstance(target_field, str) or not target_field:
+                    raise CompilationError(
+                        "Assignment target fields must be non-empty strings."
+                    )
+                assignments.append(
+                    Assignment(
+                        assignment_id=f"assignment:{rule_id}:{target_field}",
+                        target_field=target_field,
+                        value=self._coerce_assignment_value(raw_value),
+                    )
                 )
-                for target_field, raw_value in payload.items()
-            )
+            return tuple(assignments)
         if not isinstance(payload, list):
             raise CompilationError("assign must be a list or mapping.")
         assignments: list[Assignment] = []
-        for raw_assignment in payload:
+        for index, raw_assignment in enumerate(payload, start=1):
             assignment = self._ensure_mapping(raw_assignment, "assignment")
+            self._reject_unsupported_keys(
+                assignment,
+                {"assignment_id", "target_field", "value"},
+                f"Assignment at index {index} in rule {rule_id}",
+            )
             target_field = self._require_str(assignment, "target_field")
             assignments.append(
                 Assignment(
-                    assignment_id=str(
-                        assignment.get(
-                            "assignment_id",
-                            f"assignment:{rule_id}:{target_field}",
-                        )
+                    assignment_id=self._str_or_default(
+                        assignment,
+                        "assignment_id",
+                        f"assignment:{rule_id}:{target_field}",
                     ),
                     target_field=target_field,
                     value=self._compile_operand(self._require_mapping(assignment, "value")),
@@ -420,37 +459,91 @@ class YamlRulesetCompiler:
         Compile one operand payload.
 
         Exactly one operand kind is allowed. The accepted keys are canonical:
-        ``field``, ``literal``, and ``custom_function``.
+        ``field``, ``assigned``, ``literal``, and ``custom_function``.
         """
-        if "value" in payload:
-            raise CompilationError("Unsupported operand key: value. Use canonical key: literal.")
-        if "aggregate" in payload:
-            raise CompilationError(
-                "Unsupported operand key: aggregate. Precompute aggregate values upstream and reference them with field."
-            )
-        operand_keys = [key for key in ("field", "literal", "custom_function") if key in payload]
+        operand_keys = [
+            key
+            for key in ("field", "assigned", "literal", "custom_function")
+            if key in payload
+        ]
         if len(operand_keys) != 1:
             raise CompilationError(
                 f"Operand must define exactly one operand kind, found: {operand_keys}"
             )
         key = operand_keys[0]
+        allowed_keys = {
+            "field": {"field", "default_if_null"},
+            "assigned": {"assigned", "default_if_null"},
+            "literal": {"literal", "value_type", "default_if_null"},
+            "custom_function": {"custom_function", "default_if_null"},
+        }[key]
+        self._reject_unsupported_keys(payload, allowed_keys, f"{key} operand")
+        default_if_null = (
+            self._compile_default_if_null(payload["default_if_null"])
+            if "default_if_null" in payload
+            else None
+        )
         if key == "field":
-            return FieldOperand(self._require_str(payload, "field"))
+            return FieldOperand(
+                self._require_str(payload, "field"),
+                default_if_null=default_if_null,
+            )
+        if key == "assigned":
+            return AssignedOperand(
+                self._require_str(payload, "assigned"),
+                default_if_null=default_if_null,
+            )
         if key == "literal":
-            value_type = payload.get("value_type")
+            value_type = (
+                self._require_str(payload, "value_type")
+                if "value_type" in payload
+                else None
+            )
             return LiteralOperand(
                 self._normalize_literal_value(payload[key], value_type),
                 value_type,
+                default_if_null,
             )
         if key == "custom_function":
             fn_payload = self._require_mapping(payload, "custom_function")
+            self._reject_unsupported_keys(
+                fn_payload,
+                {"name", "args"},
+                "Custom function operand",
+            )
             return CustomFunctionOperand(
                 function_name=self._require_str(fn_payload, "name"),
                 args={
                     str(arg_name): self._compile_custom_function_arg(arg_value)
                     for arg_name, arg_value in self._optional_mapping(fn_payload, "args").items()
                 },
+                default_if_null=default_if_null,
             )
+
+    def _compile_default_if_null(self, value: Any) -> LiteralOperand:
+        """Compile an operand's non-null literal fallback."""
+        value_type = None
+        if isinstance(value, Mapping):
+            unsupported_keys = set(value) - {"literal", "value_type"}
+            if "literal" not in value or unsupported_keys:
+                raise CompilationError(
+                    "default_if_null must be a scalar/list literal or a mapping "
+                    "containing only literal and optional value_type."
+                )
+            raw_value = value["literal"]
+            value_type = (
+                self._require_str(value, "value_type")
+                if "value_type" in value
+                else None
+            )
+        else:
+            raw_value = value
+        if raw_value is None:
+            raise CompilationError("default_if_null cannot itself be null.")
+        return LiteralOperand(
+            self._normalize_literal_value(raw_value, value_type),
+            value_type,
+        )
 
     def _compile_custom_function_arg(self, value: Any) -> Any:
         """
@@ -459,13 +552,9 @@ class YamlRulesetCompiler:
         if isinstance(value, Mapping):
             operand_keys = {
                 key
-                for key in ("field", "literal", "custom_function")
+                for key in ("field", "assigned", "literal", "custom_function")
                 if key in value
             }
-            if "aggregate" in value:
-                raise CompilationError(
-                    "Unsupported operand key: aggregate. Precompute aggregate values upstream and reference them with field."
-                )
             if operand_keys:
                 return self._compile_operand(value)
         return self._normalize_literal_value(value)
@@ -599,6 +688,47 @@ class YamlRulesetCompiler:
     ) -> str:
         """Read a non-empty string or materialize its authoring default."""
         return default if key not in payload else self._require_str(payload, key)
+
+    def _int_or_default(
+        self,
+        payload: Mapping[str, Any],
+        key: str,
+        default: int,
+    ) -> int:
+        """Read an integer without coercing strings, floats, or booleans."""
+        if key not in payload:
+            return default
+        value = payload[key]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise CompilationError(f"{key} must be an integer when provided.")
+        return value
+
+    def _bool_or_default(
+        self,
+        payload: Mapping[str, Any],
+        key: str,
+        default: bool,
+    ) -> bool:
+        """Read a boolean without applying Python truthiness coercion."""
+        if key not in payload:
+            return default
+        value = payload[key]
+        if not isinstance(value, bool):
+            raise CompilationError(f"{key} must be a boolean when provided.")
+        return value
+
+    def _reject_unsupported_keys(
+        self,
+        payload: Mapping[str, Any],
+        allowed_keys: set[str],
+        label: str,
+    ) -> None:
+        """Reject keys outside one explicitly declared mapping contract."""
+        unsupported_keys = set(payload) - allowed_keys
+        if unsupported_keys:
+            raise CompilationError(
+                f"{label} contains unsupported keys: {sorted(unsupported_keys)}."
+            )
 
     def _optional_str(self, payload: Mapping[str, Any], key: str) -> str | None:
         """

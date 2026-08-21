@@ -109,6 +109,165 @@ def _evaluate_worker(
     return evaluator(FakeSparkRow(row))
 
 
+def _assigned_chain_ruleset():
+    """Return a chain that exercises original-row and committed-value reads."""
+    return YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "assigned-chain",
+            "ruleset_name": "Assigned chain",
+            "version": "1",
+            "owner": "Rules Team",
+            "owner_department": "ALM Engineering",
+            "rules": [
+                {
+                    "rule_id": "producer",
+                    "rule_name": "Producer",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "eligible"},
+                                "operator": "eq",
+                                "right": {"literal": True},
+                            }
+                        ]
+                    },
+                    "assign": [
+                        {
+                            "assignment_id": "produce_bucket",
+                            "target_field": "bucket",
+                            "value": {"literal": "A"},
+                        },
+                        {
+                            "assignment_id": "produce_score",
+                            "target_field": "score",
+                            "value": {"literal": 10},
+                        },
+                    ],
+                },
+                {
+                    "rule_id": "consumer",
+                    "rule_name": "Consumer",
+                    "rule_order": 2,
+                    "when": {
+                        "all": [
+                            {
+                                "condition_id": "assigned_bucket_is_a",
+                                "left": {"assigned": "bucket"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                            },
+                            {
+                                "condition_id": "original_bucket_unchanged",
+                                "left": {"field": "bucket"},
+                                "operator": "eq",
+                                "right": {"literal": "ORIGINAL"},
+                            },
+                        ]
+                    },
+                    "assign": [
+                        {
+                            "assignment_id": "replace_score",
+                            "target_field": "score",
+                            "value": {"literal": 20},
+                        },
+                        {
+                            "assignment_id": "copy_prior_score",
+                            "target_field": "copied_score",
+                            "value": {"assigned": "score"},
+                        },
+                    ],
+                },
+            ],
+        }
+    )
+
+
+def test_assigned_values_are_visible_to_later_rules_and_atomic_within_a_rule():
+    """Later rules see commits, while sibling assignments share one snapshot."""
+    result = SparkRowEvaluator.for_embedded_ruleset(
+        FunctionRegistry()
+    ).evaluate_row(
+        _assigned_chain_ruleset(),
+        {"eligible": True, "bucket": "ORIGINAL"},
+    )
+
+    assert result == {
+        "matched": True,
+        "matched_rule_ids": ["producer", "consumer"],
+        "assign": {"bucket": "A", "score": 20, "copied_score": 10},
+    }
+
+
+def test_missing_prior_commit_is_null_and_can_use_default_if_null():
+    """A potential producer need not match; an absent commit resolves as null."""
+    payload = {
+        "ruleset_id": "assigned-default",
+        "ruleset_name": "Assigned default",
+        "version": "1",
+        "rules": [
+            {
+                "rule_id": "producer",
+                "rule_name": "Producer",
+                "rule_order": 1,
+                "when": {
+                    "all": [
+                        {
+                            "left": {"field": "eligible"},
+                            "operator": "eq",
+                            "right": {"literal": True},
+                        }
+                    ]
+                },
+                "assign": {"bucket": "A"},
+            },
+            {
+                "rule_id": "fallback",
+                "rule_name": "Fallback",
+                "rule_order": 2,
+                "when": {
+                    "all": [
+                        {
+                            "left": {
+                                "assigned": "bucket",
+                                "default_if_null": "MISSING",
+                            },
+                            "operator": "eq",
+                            "right": {"literal": "MISSING"},
+                        }
+                    ]
+                },
+                "assign": {"review": True},
+            },
+        ],
+    }
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+
+    result = SparkRowEvaluator.for_embedded_ruleset(
+        FunctionRegistry()
+    ).evaluate_row(ruleset, {"eligible": False})
+
+    assert result["matched_rule_ids"] == ["fallback"]
+    assert result["assign"] == {"review": True}
+
+
+def test_full_audit_identifies_the_assignment_that_produced_an_operand():
+    """Assigned traces explain both the consumed target and its producer."""
+    result = _evaluate_worker(
+        _assigned_chain_ruleset(),
+        {"eligible": True, "bucket": "ORIGINAL"},
+        full_audit=True,
+    )
+
+    trace = result["matched_rules"][1]["conditions"][0]["left"]
+
+    assert trace["kind"] == "assigned"
+    assert trace["target_field"] == "bucket"
+    assert trace["value"] == "A"
+    assert trace["produced_by_rule_id"] == "producer"
+    assert trace["produced_by_assignment_id"] == "produce_bucket"
+
+
 @pytest.mark.parametrize(
     ("operator", "expected"),
     [("in", True), ("not_in", False)],
@@ -191,7 +350,6 @@ def test_result_payload_keys_match_the_declared_schema(
         matched_rule_ids=[],
         matched_rules=[],
         assign_payload=None,
-        first_matched_rule_trace=None,
         assignment_results=[],
         base_payload_template=base_payload_template,
         full_audit=full_audit,
@@ -265,7 +423,6 @@ def test_compact_evaluation_reserves_full_audit_only_names():
 
     for field_name in (
         "matched_rules",
-        "first_matched_rule_trace",
         "assignment_results",
     ):
         column_name = f"rules_engine_{field_name}"
@@ -371,8 +528,6 @@ def test_spark_row_evaluator_orders_date_operands(operator, right, expected):
             "left": {"field": "as_of_date"},
             "operator": operator,
             "right": {"literal": right},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
 
@@ -391,8 +546,6 @@ def test_spark_row_evaluator_orders_date_ranges(operator):
             "right": {
                 "literal": [date(2024, 2, 1), date(2024, 2, 29)]
             },
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
 
@@ -410,8 +563,6 @@ def test_spark_row_evaluator_orders_timezone_aware_timestamps():
             "right": {
                 "literal": datetime(2024, 2, 29, 12, 0, tzinfo=timezone.utc)
             },
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
 
@@ -449,8 +600,6 @@ def test_spark_row_evaluator_rejects_ambiguous_temporal_comparisons(
             "left": {"field": "temporal_value"},
             "operator": "ge",
             "right": {"literal": right},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
 
@@ -466,8 +615,6 @@ def test_spark_row_evaluator_rejects_numeric_tolerance_for_dates():
             "operator": "ge",
             "right": {"literal": date(2024, 2, 29)},
             "tolerance_abs": "1",
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
 
@@ -499,8 +646,6 @@ def test_required_source_columns_returns_only_active_runtime_dependencies():
                                 "left": {"field": "later_field"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -516,8 +661,6 @@ def test_required_source_columns_returns_only_active_runtime_dependencies():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             },
                             {
                                 "left": {
@@ -531,16 +674,12 @@ def test_required_source_columns_returns_only_active_runtime_dependencies():
                                 },
                                 "operator": "eq",
                                 "right": {"literal": 1},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             },
                             {
                                 "active_flag": False,
                                 "left": {"field": "inactive_condition"},
                                 "operator": "eq",
                                 "right": {"literal": "ignored"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             },
                         ]
                     },
@@ -557,8 +696,6 @@ def test_required_source_columns_returns_only_active_runtime_dependencies():
                                 "left": {"field": "inactive_rule"},
                                 "operator": "eq",
                                 "right": {"literal": "ignored"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -589,8 +726,6 @@ def test_required_source_columns_can_return_no_dependencies():
             "left": {"literal": "A"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         },
         assign={"bucket": "matched"},
     )
@@ -598,24 +733,29 @@ def test_required_source_columns_can_return_no_dependencies():
     assert required_source_columns(ruleset) == ()
 
 
-def test_spark_row_evaluator_returns_native_first_match_trace():
+def test_required_source_columns_does_not_treat_assigned_targets_as_input_fields():
+    """Assigned state is internal and must not enlarge the serialized row projection."""
+    ruleset = _assigned_chain_ruleset()
+
+    assert required_source_columns(ruleset) == ("eligible", "bucket")
+
+
+def test_spark_row_evaluator_returns_native_matched_rule_trace():
     """
-    What: Returns assignment and first-match trace payloads through the Spark row UDF.
+    What: Returns assignment and matched-rule trace payloads through the Spark row UDF.
     Why: Spark output should avoid full JSON rule-results payloads.
-    Fails when: Spark reintroduces all-rule trace output or stringifies match traces.
+    Fails when: Spark stringifies match traces or separates their condition detail.
     """
     ruleset = _compile(
         {
             "left": {"field": "account"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
 
     result = _evaluate_worker(ruleset, {"account": "A"})
-    match_trace = result["first_matched_rule_trace"]
+    match_trace = result["matched_rules"][0]
 
     assert result["matched"] is True
     assert result["assign"] == {"bucket": "matched"}
@@ -629,29 +769,29 @@ def test_spark_row_evaluator_returns_native_first_match_trace():
     assert match_trace["conditions"][0]["left"]["value"] == "A"
 
 
-def test_spark_row_evaluator_first_match_trace_keeps_default_options_null():
+def test_spark_row_evaluator_trace_shows_operand_default_application():
     """
-    What: Leaves default condition options null in the first-match Spark trace.
-    Why: The Spark trace struct intentionally omits default-valued metadata.
-    Fails when: Trace simplification starts emitting default values as strings.
+    What: Shows the original null, configured fallback, and effective value.
+    Why: Full audit must explain when a fallback changed a comparison operand.
+    Fails when: Null substitution is invisible or reported as the source value.
     """
     ruleset = _compile(
         {
-            "left": {"field": "account"},
+            "left": {"field": "account", "default_if_null": "UNKNOWN"},
             "operator": "eq",
-            "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
+            "right": {"literal": "UNKNOWN"},
         }
     )
 
-    result = _evaluate_worker(ruleset, {"account": "A"})
-    condition = result["first_matched_rule_trace"]["conditions"][0]
+    result = _evaluate_worker(ruleset, {"account": None})
+    condition = result["matched_rules"][0]["conditions"][0]
 
     assert condition["tolerance_abs"] is None
-    assert condition["null_input_mode"] is None
-    assert condition["null_result_mode"] is None
-    assert condition["null_default_value"] is None
+    assert condition["left"]["original_value"] is None
+    assert condition["left"]["value"] == "UNKNOWN"
+    assert condition["left"]["default_if_null"] == "UNKNOWN"
+    assert condition["left"]["default_applied"] is True
+    assert condition["right"]["default_applied"] is False
 
 
 def test_spark_row_evaluator_assignment_struct_includes_unassigned_fields_as_null():
@@ -677,8 +817,6 @@ def test_spark_row_evaluator_assignment_struct_includes_unassigned_fields_as_nul
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -694,8 +832,6 @@ def test_spark_row_evaluator_assignment_struct_includes_unassigned_fields_as_nul
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "B"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -727,15 +863,11 @@ def test_spark_row_evaluator_match_trace_explanation_uses_any_joiner():
                     "left": {"field": "account"},
                     "operator": "eq",
                     "right": {"literal": "A"},
-                    "null_input_mode": "propagate",
-                    "null_result_mode": "null",
                 },
                 {
                     "left": {"field": "status"},
                     "operator": "eq",
                     "right": {"literal": "open"},
-                    "null_input_mode": "propagate",
-                    "null_result_mode": "null",
                 },
             ]
         }
@@ -743,16 +875,16 @@ def test_spark_row_evaluator_match_trace_explanation_uses_any_joiner():
 
     result = _evaluate_worker(ruleset, {"account": "A", "status": "open"})
 
-    assert result["first_matched_rule_trace"]["explanation"] == (
+    assert result["matched_rules"][0]["explanation"] == (
         "account == 'A' OR status == 'open'"
     )
 
 
 def test_spark_row_evaluator_match_trace_explanation_drops_failing_any_branches():
     """
-    What: Omits failed OR branches from the first-match explanation.
+    What: Omits failed OR branches from the matched-rule explanation.
     Why: The explanation should describe the passed path, not every authored branch.
-    Fails when: Failed sibling conditions appear in the first-match explanation.
+    Fails when: Failed sibling conditions appear in the matched-rule explanation.
     """
     ruleset = _compile_when(
         {
@@ -761,15 +893,11 @@ def test_spark_row_evaluator_match_trace_explanation_drops_failing_any_branches(
                     "left": {"field": "account"},
                     "operator": "eq",
                     "right": {"literal": "A"},
-                    "null_input_mode": "propagate",
-                    "null_result_mode": "null",
                 },
                 {
                     "left": {"field": "status"},
                     "operator": "eq",
                     "right": {"literal": "open"},
-                    "null_input_mode": "propagate",
-                    "null_result_mode": "null",
                 },
             ]
         }
@@ -777,7 +905,7 @@ def test_spark_row_evaluator_match_trace_explanation_drops_failing_any_branches(
 
     result = _evaluate_worker(ruleset, {"account": "A", "status": "closed"})
 
-    assert result["first_matched_rule_trace"]["explanation"] == "account == 'A'"
+    assert result["matched_rules"][0]["explanation"] == "account == 'A'"
 
 
 def test_spark_row_evaluator_match_trace_explanation_preserves_nested_groups():
@@ -793,8 +921,6 @@ def test_spark_row_evaluator_match_trace_explanation_preserves_nested_groups():
                     "left": {"field": "record_type"},
                     "operator": "eq",
                     "right": {"literal": "asset"},
-                    "null_input_mode": "propagate",
-                    "null_result_mode": "null",
                 },
                 {
                     "any": [
@@ -802,15 +928,11 @@ def test_spark_row_evaluator_match_trace_explanation_preserves_nested_groups():
                             "left": {"field": "market_value"},
                             "operator": "eq",
                             "right": {"literal": True},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
                         },
                         {
                             "left": {"field": "book_value"},
                             "operator": "eq",
                             "right": {"literal": True},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
                         },
                     ]
                 },
@@ -827,7 +949,7 @@ def test_spark_row_evaluator_match_trace_explanation_preserves_nested_groups():
         },
     )
 
-    assert result["first_matched_rule_trace"]["explanation"] == (
+    assert result["matched_rules"][0]["explanation"] == (
         "record_type == 'asset' AND "
         "(market_value == true OR book_value == true)"
     )
@@ -837,7 +959,7 @@ def test_spark_row_evaluator_match_trace_explanation_drops_failing_nested_or_arm
     """
     What: Omits a failed nested OR arm while preserving the passed nested path.
     Why: Nested explanations should stay concise without misrepresenting matched logic.
-    Fails when: Failed nested conditions leak into the first-match explanation.
+    Fails when: Failed nested conditions leak into the matched-rule explanation.
     """
     ruleset = _compile_when(
         {
@@ -846,8 +968,6 @@ def test_spark_row_evaluator_match_trace_explanation_drops_failing_nested_or_arm
                     "left": {"field": "record_type"},
                     "operator": "eq",
                     "right": {"literal": "asset"},
-                    "null_input_mode": "propagate",
-                    "null_result_mode": "null",
                 },
                 {
                     "any": [
@@ -855,15 +975,11 @@ def test_spark_row_evaluator_match_trace_explanation_drops_failing_nested_or_arm
                             "left": {"field": "market_value"},
                             "operator": "eq",
                             "right": {"literal": True},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
                         },
                         {
                             "left": {"field": "book_value"},
                             "operator": "eq",
                             "right": {"literal": True},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
                         },
                     ]
                 },
@@ -880,7 +996,7 @@ def test_spark_row_evaluator_match_trace_explanation_drops_failing_nested_or_arm
         },
     )
 
-    assert result["first_matched_rule_trace"]["explanation"] == (
+    assert result["matched_rules"][0]["explanation"] == (
         "record_type == 'asset' AND market_value == true"
     )
 
@@ -898,15 +1014,11 @@ def test_spark_row_evaluator_match_trace_explanation_matches_service_formatter()
                     "left": {"field": "account"},
                     "operator": "eq",
                     "right": {"literal": "A"},
-                    "null_input_mode": "propagate",
-                    "null_result_mode": "null",
                 },
                 {
                     "left": {"field": "amount"},
                     "operator": "gt",
                     "right": {"literal": 100},
-                    "null_input_mode": "propagate",
-                    "null_result_mode": "null",
                 },
             ]
         }
@@ -914,7 +1026,7 @@ def test_spark_row_evaluator_match_trace_explanation_matches_service_formatter()
     result = _evaluate_worker(ruleset, {"account": "A", "amount": 150})
     service_logic = HumanReadableRulesetFormatter().describe_rules(ruleset)[0]["rule_logic"]
 
-    assert result["first_matched_rule_trace"]["explanation"] == service_logic
+    assert result["matched_rules"][0]["explanation"] == service_logic
 
 
 def test_spark_row_evaluator_preserves_mapping_literal_assignment_as_struct():
@@ -928,8 +1040,6 @@ def test_spark_row_evaluator_preserves_mapping_literal_assignment_as_struct():
             "left": {"field": "account"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         },
         assign={
             "leaf_key": "10110",
@@ -988,8 +1098,6 @@ def test_spark_assignment_schema_ignores_inactive_rules():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -1013,8 +1121,6 @@ def test_spark_assignment_schema_ignores_inactive_rules():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -1065,8 +1171,6 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -1089,8 +1193,6 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -1140,8 +1242,8 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
     assert compact_result["assign"] == result["assign"]
     assert "assignment_results" not in compact_result
     assert [item["rule_order"] for item in result["matched_rules"]] == [1, 2]
-    assert result["matched_rules"][0]["human_readable_condition"] == "account == 'A'"
-    assert result["matched_rules"][1]["assigned_fields"] == [
+    assert result["matched_rules"][0]["explanation"] == "account == 'A'"
+    assert result["matched_rules"][1]["assignments_applied"] == [
         "bucket",
         "risk",
         "cleared",
@@ -1149,13 +1251,16 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
     assert result["matched_rules"][-1]["rule_id"] == "second_match"
     assert result["matched_rules"][0] is not another_result["matched_rules"][0]
     assert (
-        result["matched_rules"][0]["assigned_fields"]
-        is not another_result["matched_rules"][0]["assigned_fields"]
+        result["matched_rules"][0]["conditions"]
+        is not another_result["matched_rules"][0]["conditions"]
     )
-    result["matched_rules"][0]["assigned_fields"].append("row-local-mutation")
-    assert another_result["matched_rules"][0]["assigned_fields"] == ["bucket"]
-    assert result["first_matched_rule_trace"]["rule_id"] == "first_match"
-    assert result["first_matched_rule_trace"]["explanation"] == "account == 'A'"
+    assert [item["rule_id"] for item in result["matched_rules"]] == [
+        "first_match",
+        "second_match",
+    ]
+    assert all(item["conditions"] for item in result["matched_rules"])
+    assert result["matched_rules"][0]["rule_id"] == "first_match"
+    assert result["matched_rules"][0]["explanation"] == "account == 'A'"
     assignment_results = {
         item["assignment_id"]: item
         for item in result["assignment_results"]
@@ -1177,14 +1282,12 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
 
 
 def test_spark_row_evaluator_no_match_returns_empty_audit_arrays():
-    """No-match rows use empty summary/provenance arrays and null rule structs."""
+    """No-match rows use empty trace and provenance arrays."""
     ruleset = _compile(
         {
             "left": {"field": "account"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
 
@@ -1193,7 +1296,6 @@ def test_spark_row_evaluator_no_match_returns_empty_audit_arrays():
     assert result["matched"] is False
     assert result["matched_rules"] == []
     assert result["assignment_results"] == []
-    assert result["first_matched_rule_trace"] is None
 
 
 def test_compact_and_full_audit_payloads_have_core_result_parity():
@@ -1203,8 +1305,6 @@ def test_compact_and_full_audit_payloads_have_core_result_parity():
             "left": {"field": "amount"},
             "operator": "gt",
             "right": {"literal": 10},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
     cases = {
@@ -1235,43 +1335,39 @@ def test_compact_and_full_audit_payloads_have_core_result_parity():
         if case_name == "success":
             assert full["error"] is None
             assert [item["rule_id"] for item in full["matched_rules"]] == ["r1"]
-            assert full["first_matched_rule_trace"]["rule_id"] == "r1"
+            assert full["matched_rules"][0]["rule_id"] == "r1"
             assert len(full["assignment_results"]) == 1
         elif case_name == "no_match":
             assert full["error"] is None
             assert full["matched_rules"] == []
-            assert full["first_matched_rule_trace"] is None
             assert full["assignment_results"] == []
         else:
             assert full["error"] is not None
             assert full["matched_rules"] == []
-            assert full["first_matched_rule_trace"] is None
             assert full["assignment_results"] == []
 
 
-def test_rule_summaries_are_precomputed_once_per_row_evaluator(monkeypatch):
-    """Static human-readable rule descriptions are not rebuilt per row."""
+def test_full_audit_builds_explanations_only_for_matched_rules(monkeypatch):
+    """Losing rules are evaluated once but do not build discarded explanations."""
     ruleset = _compile(
         {
             "left": {"field": "account"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
     calls = 0
-    original = HumanReadableRulesetFormatter.describe_rule
+    original = HumanReadableRulesetFormatter.format_matched_rule_explanation
 
-    def record_description(self, rule):
+    def record_explanation(self, rule, passed_condition_ids):
         nonlocal calls
         calls += 1
-        return original(self, rule)
+        return original(self, rule, passed_condition_ids)
 
     monkeypatch.setattr(
         HumanReadableRulesetFormatter,
-        "describe_rule",
-        record_description,
+        "format_matched_rule_explanation",
+        record_explanation,
     )
     runtime = _spark_runtime()
     assign_schema = runtime._assignment_schema(ruleset, T.StructType())
@@ -1307,8 +1403,6 @@ def test_spark_row_evaluator_rejects_lossy_assignment_coercion(
             "left": {"literal": True},
             "operator": "eq",
             "right": {"literal": True},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         },
         assign={"target": {"literal": value, "value_type": value_type}},
     )
@@ -1318,7 +1412,7 @@ def test_spark_row_evaluator_rejects_lossy_assignment_coercion(
     assert error_text in result["error"]
 
 
-def test_spark_row_evaluator_stop_on_match_excludes_later_summaries_and_assignments():
+def test_spark_row_evaluator_stop_on_match_excludes_later_traces_and_assignments():
     """stop_on_match prevents later rules from appearing in either audit array."""
     payload = {
         "ruleset_id": "rs1",
@@ -1330,8 +1424,6 @@ def test_spark_row_evaluator_stop_on_match_excludes_later_summaries_and_assignme
         "left": {"field": "account"},
         "operator": "eq",
         "right": {"literal": "A"},
-        "null_input_mode": "propagate",
-        "null_result_mode": "null",
     }
     for order, stop in ((1, True), (2, False)):
         payload["rules"].append(
@@ -1353,11 +1445,11 @@ def test_spark_row_evaluator_stop_on_match_excludes_later_summaries_and_assignme
     assert [item["rule_id"] for item in result["assignment_results"]] == ["r1"]
 
 
-def test_spark_row_evaluator_builds_condition_traces_only_for_first_match(monkeypatch):
+def test_full_audit_evaluates_each_condition_once_and_emits_only_matched_traces(monkeypatch):
     """
-    What: Builds condition trace objects only for the first matching rule.
-    Why: Losing-rule trace allocation is discarded output and a major row-level cost.
-    Fails when: Match-only evaluation regresses to tracing every tested rule.
+    What: Evaluates every condition once and emits detailed traces only for matches.
+    Why: Full audit must not re-invoke custom logic to construct matched-rule detail.
+    Fails when: Conditions are skipped, repeated, or losing rules enter matched_rules.
     """
     ruleset = YamlRulesetCompiler().compile_payload(
         {
@@ -1378,16 +1470,12 @@ def test_spark_row_evaluator_builds_condition_traces_only_for_first_match(monkey
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "B"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             },
                             {
                                 "condition_id": "loser_second",
                                 "left": {"field": "status"},
                                 "operator": "eq",
                                 "right": {"literal": "open"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             },
                         ]
                     },
@@ -1405,8 +1493,6 @@ def test_spark_row_evaluator_builds_condition_traces_only_for_first_match(monkey
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -1426,8 +1512,12 @@ def test_spark_row_evaluator_builds_condition_traces_only_for_first_match(monkey
 
     result = _evaluate_worker(ruleset, {"account": "A", "status": "open"})
 
-    assert result["first_matched_rule_trace"]["rule_id"] == "first_match"
-    assert traced_condition_ids == ["first_match_condition"]
+    assert result["matched_rules"][0]["rule_id"] == "first_match"
+    assert traced_condition_ids == [
+        "loser_first",
+        "loser_second",
+        "first_match_condition",
+    ]
 
 
 def test_losing_custom_condition_is_invoked_once_during_full_audit():
@@ -1557,15 +1647,11 @@ def test_match_only_losing_rule_preserves_later_condition_errors():
                     "left": {"field": "account"},
                     "operator": "eq",
                     "right": {"literal": "B"},
-                    "null_input_mode": "propagate",
-                    "null_result_mode": "null",
                 },
                 {
                     "left": {"field": "amount"},
                     "operator": "gt",
                     "right": {"literal": 10},
-                    "null_input_mode": "propagate",
-                    "null_result_mode": "null",
                 },
             ]
         }
@@ -1589,8 +1675,6 @@ def test_match_only_and_traced_paths_agree_on_inactive_condition_groups():
             "left": {"field": "account"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         },
         {
             "condition_id": "inactive_false",
@@ -1598,8 +1682,6 @@ def test_match_only_and_traced_paths_agree_on_inactive_condition_groups():
             "left": {"field": "inactive_source"},
             "operator": "eq",
             "right": {"literal": "ignored"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         },
     ]
     evaluator = SparkRowEvaluator(DummyRepository(), FunctionRegistry())
@@ -1636,8 +1718,6 @@ def test_spark_assignment_schema_rejects_incompatible_same_target_assignments():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -1654,8 +1734,6 @@ def test_spark_assignment_schema_rejects_incompatible_same_target_assignments():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -1676,37 +1754,10 @@ def test_spark_assignment_schema_rejects_incompatible_same_target_assignments():
         _spark_runtime()._assignment_schema(ruleset, T.StructType())
 
 
-def test_spark_row_evaluator_first_match_trace_includes_precomputed_aggregate_field():
+def test_spark_row_evaluator_matched_rule_trace_includes_custom_function_args():
     """
-    What: Emits precomputed aggregate columns like ordinary field operands.
-    Why: Aggregate calculations now live upstream while match trace remains useful.
-    Fails when: Precomputed field values disappear from the first-match trace.
-    """
-    ruleset = _compile(
-        {
-            "left": {"field": "account_amount_sum"},
-            "operator": "gt",
-            "right": {"literal": 15},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
-        }
-    )
-    result = _evaluate_worker(ruleset, {"account": "A", "account_amount_sum": 30})
-
-    left = result["first_matched_rule_trace"]["conditions"][0]["left"]
-    assert left["kind"] == "field"
-    assert left["column"] == "account_amount_sum"
-    assert left["source_columns"] == ["account_amount_sum"]
-    assert left["value"] == "30"
-    assert result["first_matched_rule_trace"]["explanation"] == (
-        "account_amount_sum > 15"
-    )
-
-
-def test_spark_row_evaluator_first_match_trace_includes_custom_function_args():
-    """
-    What: Emits custom-function argument summaries in the first-match trace.
-    Why: Function-backed matched rules must remain explainable without all-rule traces.
+    What: Emits custom-function argument summaries in a matched-rule trace.
+    Why: Function-backed matched rules must remain explainable in full audit.
     Fails when: Custom function source columns or resolved argument values disappear.
     """
     registry = FunctionRegistry()
@@ -1736,20 +1787,18 @@ def test_spark_row_evaluator_first_match_trace_includes_custom_function_args():
             },
             "operator": "eq",
             "right": {"literal": 5},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
 
     result = _evaluate_worker(ruleset, {"amount": 2}, registry=registry)
 
-    left = result["first_matched_rule_trace"]["conditions"][0]["left"]
+    left = result["matched_rules"][0]["conditions"][0]["left"]
     assert left["kind"] == "custom_function"
     assert left["function_name"] == "score"
     assert left["source_columns"] == ["amount"]
     assert left["value"] == "5"
     assert left["arguments"] == {"x": "amount=2", "y": "3"}
-    assert result["first_matched_rule_trace"]["explanation"] == (
+    assert result["matched_rules"][0]["explanation"] == (
         "score(x=amount, y=3) == 5"
     )
     assert calls == [{"x": 2, "y": 3}]
@@ -1789,8 +1838,6 @@ def test_spark_row_evaluator_like_uses_sql_wildcard_semantics():
             "left": {"field": "name"},
             "operator": "like",
             "right": {"literal": "abc%"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
 
@@ -1798,42 +1845,99 @@ def test_spark_row_evaluator_like_uses_sql_wildcard_semantics():
     assert _evaluate_worker(ruleset, {"name": "xyz"})["matched"] is False
 
 
-def test_spark_row_evaluator_null_result_default_controls_condition_result():
+def test_spark_row_evaluator_default_if_null_controls_condition_result():
     """
-    What: Evaluates null_result_mode=default on a null comparison result.
-    Why: Null handling is explicit metadata and controls final condition truth.
-    Fails when: Null defaults are ignored or treated as ordinary nulls.
+    What: Replaces a null operand before comparison.
+    Why: Operand-level fallbacks are the explicit way to make missing data match.
+    Fails when: The fallback is applied after comparison or ignored.
     """
     ruleset = _compile(
         {
-            "left": {"field": "missing"},
+            "left": {"field": "missing", "default_if_null": "A"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "default",
-            "null_default_value": True,
         }
     )
 
     assert _evaluate_worker(ruleset, {})["matched"] is True
 
 
-def test_spark_row_evaluator_rejects_non_boolean_null_default_at_runtime():
-    """Direct callers cannot bypass the validator into Python truthiness."""
+def test_spark_row_evaluator_default_if_null_applies_to_custom_function_result_once():
+    """A null custom-function result receives its fallback without reevaluation."""
+    registry = FunctionRegistry()
+    calls = []
+
+    def missing_value():
+        calls.append(True)
+        return None
+
+    registry.register(
+        CustomFunctionSpec(
+            function_name="missing_value",
+            implementation_reference="tests.missing_value",
+            arg_names=(),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=False,
+            return_type_hint="string",
+        ),
+        implementation=missing_value,
+    )
+    ruleset = _compile(
+        {
+            "left": {
+                "custom_function": {"name": "missing_value", "args": {}},
+                "default_if_null": "UNKNOWN",
+            },
+            "operator": "eq",
+            "right": {"literal": "UNKNOWN"},
+        }
+    )
+
+    result = _evaluate_worker(ruleset, {}, registry=registry)
+
+    left_trace = result["matched_rules"][0]["conditions"][0]["left"]
+    assert result["matched"] is True
+    assert left_trace["original_value"] is None
+    assert left_trace["value"] == "UNKNOWN"
+    assert left_trace["default_applied"] is True
+    assert calls == [True]
+
+
+def test_spark_row_evaluator_default_if_null_applies_to_assignment_operand():
+    """Assignment operands replace null before producing their typed value."""
+    ruleset = _compile(
+        {
+            "left": {"literal": True},
+            "operator": "eq",
+            "right": {"literal": True},
+        },
+        assign={
+            "bucket": {
+                "literal": None,
+                "default_if_null": "UNKNOWN",
+            }
+        },
+    )
+
+    result = _evaluate_worker(ruleset, {})
+
+    assert result["assign"] == {"bucket": "UNKNOWN"}
+
+
+def test_spark_row_evaluator_error_on_null_returns_compact_error():
+    """error_on_null turns an unresolved null into an explicit row error."""
     ruleset = _compile(
         {
             "left": {"field": "missing"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "default",
-            "null_default_value": "false",
+            "error_on_null": True,
         }
     )
 
     result = _evaluate_worker(ruleset, {})
 
-    assert result["error"].startswith("TypeError: null_default_value must be")
+    assert result["error"].startswith("ValueError: Null operand encountered")
     assert "Traceback" not in result["error"]
 
 
@@ -1843,9 +1947,7 @@ def test_spark_row_evaluator_can_include_debug_traceback():
             "left": {"field": "missing"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "default",
-            "null_default_value": "false",
+            "error_on_null": True,
         }
     )
 
@@ -1860,9 +1962,7 @@ def test_spark_row_evaluator_can_raise_during_materializing_action():
             "left": {"field": "missing"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "default",
-            "null_default_value": "false",
+            "error_on_null": True,
         }
     )
 
@@ -1877,8 +1977,6 @@ def test_assignment_changed_compares_spark_normalized_values():
             "left": {"literal": True},
             "operator": "eq",
             "right": {"literal": True},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         },
         assign={"target": date(2025, 1, 15)},
     )
@@ -1921,8 +2019,6 @@ def test_spark_runtime_preflights_custom_function_serialization():
             },
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
     runtime = _spark_runtime(registry)
@@ -1942,8 +2038,6 @@ def test_spark_runtime_accepts_serializable_worker_evaluator():
             "left": {"field": "value"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
     runtime = _spark_runtime()

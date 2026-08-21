@@ -3,9 +3,8 @@ Spark-facing rules engine runtime.
 
 The runtime evaluates each input row with a Python UDF and returns Spark-native
 struct columns so downstream Spark jobs can select nested fields directly.
-Rules must reference row-level fields, literals, or registered custom
-functions. Aggregate-style facts should be precomputed upstream and exposed as
-ordinary input columns.
+Rules use original row fields, committed lower-order assignments, literals, or
+registered custom functions.
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ from pyspark.sql import types as T
 
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.models import (
+    AssignedOperand,
     Assignment,
     ConditionGroup,
     CustomFunctionOperand,
@@ -40,7 +40,7 @@ from rules_engine.models import (
 )
 from rules_engine.registry import FunctionRegistry
 from rules_engine.repository import RulesetRepository
-from rules_engine.runtime import SparkRowEvaluator
+from rules_engine.runtime import AssignedValue, SparkRowEvaluator
 from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.spark_types import (
     INTEGRAL_LIMITS,
@@ -70,7 +70,12 @@ def required_source_columns(ruleset: Ruleset) -> tuple[str, ...]:
             for argument in operand.args.values():
                 if isinstance(
                     argument,
-                    (FieldOperand, LiteralOperand, CustomFunctionOperand),
+                    (
+                        AssignedOperand,
+                        FieldOperand,
+                        LiteralOperand,
+                        CustomFunctionOperand,
+                    ),
                 ):
                     add_operand(argument)
 
@@ -102,9 +107,15 @@ OPERAND_TRACE_STRUCT = T.StructType(
     [
         T.StructField("kind", T.StringType(), True),
         T.StructField("column", T.StringType(), True),
+        T.StructField("target_field", T.StringType(), True),
+        T.StructField("original_value", T.StringType(), True),
         T.StructField("value", T.StringType(), True),
         T.StructField("value_type", T.StringType(), True),
+        T.StructField("default_if_null", T.StringType(), True),
+        T.StructField("default_applied", T.BooleanType(), False),
         T.StructField("function_name", T.StringType(), True),
+        T.StructField("produced_by_rule_id", T.StringType(), True),
+        T.StructField("produced_by_assignment_id", T.StringType(), True),
         T.StructField("source_columns", T.ArrayType(T.StringType(), False), True),
         T.StructField("arguments", T.MapType(T.StringType(), T.StringType(), True), True),
     ]
@@ -119,13 +130,10 @@ CONDITION_TRACE_STRUCT = T.StructType(
         T.StructField("comparison_result", T.BooleanType(), True),
         T.StructField("passed", T.BooleanType(), True),
         T.StructField("tolerance_abs", T.StringType(), True),
-        T.StructField("null_input_mode", T.StringType(), True),
-        T.StructField("null_result_mode", T.StringType(), True),
-        T.StructField("null_default_value", T.StringType(), True),
     ]
 )
 
-FIRST_MATCHED_RULE_TRACE_STRUCT = T.StructType(
+MATCHED_RULE_TRACE_STRUCT = T.StructType(
     [
         T.StructField("rule_id", T.StringType(), True),
         T.StructField("rule_name", T.StringType(), True),
@@ -133,17 +141,6 @@ FIRST_MATCHED_RULE_TRACE_STRUCT = T.StructType(
         T.StructField("explanation", T.StringType(), True),
         T.StructField("assignments_applied", T.ArrayType(T.StringType(), False), True),
         T.StructField("conditions", T.ArrayType(CONDITION_TRACE_STRUCT, False), True),
-    ]
-)
-
-MATCHED_RULE_SUMMARY_STRUCT = T.StructType(
-    [
-        T.StructField("rule_id", T.StringType(), True),
-        T.StructField("rule_name", T.StringType(), True),
-        T.StructField("rule_order", T.LongType(), True),
-        T.StructField("human_readable_condition", T.StringType(), True),
-        T.StructField("human_readable_assignment", T.StringType(), True),
-        T.StructField("assigned_fields", T.ArrayType(T.StringType(), False), False),
     ]
 )
 
@@ -170,18 +167,7 @@ class _PreparedRule:
     """Driver-precomputed rule metadata captured by the worker evaluator."""
 
     rule: Rule
-    has_custom_condition: bool
     assignment_specs: tuple[tuple[Assignment, str | None], ...]
-    summary: dict[str, Any] | None
-
-
-def _copy_rule_summary(summary: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return one row-owned rule summary, including its nested field list."""
-    if summary is None:
-        raise RuntimeError("Full-audit rule summary was not prepared.")
-    copied = dict(summary)
-    copied["assigned_fields"] = list(summary["assigned_fields"])
-    return copied
 
 
 def _require_bool(name: str, value: Any) -> None:
@@ -198,13 +184,8 @@ _COMPACT_RESULT_FIELDS_BEFORE_ASSIGN = (
 _FULL_AUDIT_ONLY_RESULT_FIELDS = (
     T.StructField(
         "matched_rules",
-        T.ArrayType(MATCHED_RULE_SUMMARY_STRUCT, False),
+        T.ArrayType(MATCHED_RULE_TRACE_STRUCT, False),
         False,
-    ),
-    T.StructField(
-        "first_matched_rule_trace",
-        FIRST_MATCHED_RULE_TRACE_STRUCT,
-        True,
     ),
     T.StructField(
         "assignment_results",
@@ -297,10 +278,8 @@ class SparkRulesEngineRuntime:
         df : pyspark.sql.DataFrame
             Incoming rows. Any cross-row facts must already exist as columns.
         ruleset : Ruleset
-            Ruleset metadata to evaluate. Direct runtime callers are responsible
-            for base metadata validation; published rulesets loaded through the
-            service have already passed that gate. This method always performs
-            incoming-schema compatibility validation before building the UDF.
+            Ruleset metadata to evaluate. This method performs semantic and
+            incoming-schema validation before building the UDF.
         column_prefix : str, default "rules_engine"
             Prefix for appended output columns.
         fail_on_error : bool, default True
@@ -311,9 +290,9 @@ class SparkRulesEngineRuntime:
             Include full Python tracebacks in row error payloads. Keep disabled
             for production data because tracebacks substantially enlarge rows.
         full_audit : bool, default False
-            Add ordered match summaries, the detailed first-match trace, and
-            assignment provenance. Immutable ruleset/engine identity is always
-            appended as driver-side literal columns.
+            Add a detailed trace for every matched rule plus assignment
+            provenance. Immutable ruleset/engine identity is always appended
+            as driver-side literal columns.
 
         Returns
         -------
@@ -346,14 +325,14 @@ class SparkRulesEngineRuntime:
             len(ruleset.rules),
             fail_on_error,
         )
-        compatibility = self._compatibility_validator.validate_schema(
+        validation = self._compatibility_validator.validate(
             ruleset,
             df.schema,
         )
-        if compatibility.has_errors():
+        if validation.has_errors():
             raise ValidationFailedError(
-                "Ruleset is incompatible with the incoming Spark schema.\n"
-                + compatibility.to_text()
+                "Ruleset validation failed for Spark evaluation.\n"
+                + validation.to_text()
             )
         assign_schema = self._assignment_schema(ruleset, df.schema)
         assign_field_names = [field.name for field in assign_schema.fields]
@@ -479,11 +458,6 @@ class SparkRulesEngineRuntime:
         ordered_rules = sorted(ruleset.rules, key=lambda item: item.rule_order)
         active_rules: list[_PreparedRule] = []
         for rule in (item for item in ordered_rules if item.active_flag):
-            description = (
-                runtime._rule_formatter.describe_rule(rule)
-                if full_audit
-                else None
-            )
             assignment_specs = tuple(
                 (
                     assignment,
@@ -495,25 +469,10 @@ class SparkRulesEngineRuntime:
                 )
                 for assignment in rule.assignments
             )
-            summary = None
-            if description is not None:
-                summary = {
-                    "rule_id": rule.rule_id,
-                    "rule_name": rule.rule_name,
-                    "rule_order": rule.rule_order,
-                    "human_readable_condition": description["rule_logic"],
-                    "human_readable_assignment": description["match_payload"],
-                    "assigned_fields": [
-                        assignment.target_field
-                        for assignment in rule.assignments
-                    ],
-                }
             active_rules.append(
                 _PreparedRule(
                     rule=rule,
-                    has_custom_condition=runtime._rule_has_custom_condition(rule),
                     assignment_specs=assignment_specs,
-                    summary=summary,
                 )
             )
         base_payload_template = runtime._base_payload(full_audit=full_audit)
@@ -525,51 +484,42 @@ class SparkRulesEngineRuntime:
                 matched_rule_ids: list[str] = []
                 matched_rules: list[dict[str, Any]] = []
                 assignments: dict[str, Any] = {}
+                assigned_values: dict[str, AssignedValue] = {}
                 assignment_events: list[dict[str, Any]] = []
-                first_matched_rule_trace: dict[str, Any] | None = None
                 for prepared_rule in active_rules:
                     rule = prepared_rule.rule
-                    condition_traces = None
-                    need_first_match_trace = (
-                        full_audit and first_matched_rule_trace is None
-                    )
-                    # Every active condition remains eager until stop_on_match,
-                    # preserving row errors. Full audit reevaluates a pure first
-                    # match only; custom first matches stay single-pass.
-                    if (
-                        need_first_match_trace
-                        and prepared_rule.has_custom_condition
-                    ):
+                    if full_audit:
                         matched, condition_traces = runtime._evaluate_rule(
                             rule,
                             row_dict,
+                            assigned_values,
                         )
                     else:
-                        matched = runtime._rule_matches(rule, row_dict)
+                        matched = runtime._rule_matches(
+                            rule,
+                            row_dict,
+                            assigned_values,
+                        )
+                        condition_traces = []
                     if matched:
                         matched_rule_ids.append(rule.rule_id)
                         if full_audit:
-                            matched_rules.append(
-                                _copy_rule_summary(prepared_rule.summary)
-                            )
-                        if need_first_match_trace:
-                            if condition_traces is None:
-                                _, condition_traces = runtime._evaluate_rule(
-                                    rule,
-                                    row_dict,
-                                )
                             explanation = runtime._matched_rule_explanation_from_trace(
                                 rule,
                                 condition_traces,
                             )
-                            first_matched_rule_trace = runtime._spark_rule_trace(
-                                runtime._rule_execution_trace(
-                                    rule,
-                                    matched,
-                                    condition_traces,
-                                ),
-                                explanation=explanation,
+                            matched_rules.append(
+                                runtime._spark_rule_trace(
+                                    runtime._rule_execution_trace(
+                                        rule,
+                                        condition_traces,
+                                    ),
+                                    explanation=explanation,
+                                )
                             )
+                        resolved_rule_assignments: list[
+                            tuple[Assignment, Any]
+                        ] = []
                         for assignment, authored_expression in (
                             prepared_rule.assignment_specs
                         ):
@@ -580,18 +530,29 @@ class SparkRulesEngineRuntime:
                                     authored_expression,
                                     row_dict,
                                     assign_field_types[assignment.target_field],
+                                    assigned_values,
                                 )
-                                assignments[assignment.target_field] = event[
-                                    "proposed_value"
-                                ]
+                                proposed_value = event["proposed_value"]
                                 assignment_events.append(event)
                             else:
-                                assignments[assignment.target_field] = (
-                                    runtime._spark_assignment_value(
-                                        runtime._resolve_operand(assignment.value, row_dict),
-                                        assign_field_types[assignment.target_field],
-                                    )
+                                proposed_value = runtime._spark_assignment_value(
+                                    runtime._resolve_operand(
+                                        assignment.value,
+                                        row_dict,
+                                        assigned_values,
+                                    ),
+                                    assign_field_types[assignment.target_field],
                                 )
+                            resolved_rule_assignments.append(
+                                (assignment, proposed_value)
+                            )
+                        for assignment, proposed_value in resolved_rule_assignments:
+                            assignments[assignment.target_field] = proposed_value
+                            assigned_values[assignment.target_field] = AssignedValue(
+                                value=proposed_value,
+                                rule_id=rule.rule_id,
+                                assignment_id=assignment.assignment_id,
+                            )
                         if rule.stop_on_match:
                             break
                 assignment_results = (
@@ -611,7 +572,6 @@ class SparkRulesEngineRuntime:
                     matched_rule_ids=matched_rule_ids,
                     matched_rules=matched_rules,
                     assign_payload=assign_payload,
-                    first_matched_rule_trace=first_matched_rule_trace,
                     assignment_results=assignment_results,
                     full_audit=full_audit,
                     base_payload_template=base_payload_template,
@@ -642,9 +602,14 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         authored_expression: str,
         row: Mapping[str, Any],
         data_type: T.DataType,
+        assigned_values: Mapping[str, AssignedValue] | None = None,
     ) -> dict[str, Any]:
         """Resolve and normalize both sides of one assignment audit event."""
-        proposed_value = self._resolve_operand(assignment.value, row)
+        proposed_value = self._resolve_operand(
+            assignment.value,
+            row,
+            assigned_values,
+        )
         return {
             "assignment_id": assignment.assignment_id,
             "rule_id": rule.rule_id,
@@ -706,7 +671,6 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         matched_rule_ids: list[str],
         matched_rules: list[dict[str, Any]],
         assign_payload: dict[str, Any] | None,
-        first_matched_rule_trace: dict[str, Any] | None,
         assignment_results: list[dict[str, Any]],
         base_payload_template: Mapping[str, Any],
         full_audit: bool = False,
@@ -721,7 +685,6 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         if full_audit:
             payload.update(
                 matched_rules=matched_rules,
-                first_matched_rule_trace=first_matched_rule_trace,
                 assignment_results=assignment_results,
             )
         return payload
@@ -911,15 +874,6 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
             "comparison_result": trace.comparison_result,
             "passed": trace.passed,
             "tolerance_abs": self._non_default_trace_text(trace.tolerance_abs, "0"),
-            "null_input_mode": self._non_default_trace_value(
-                trace.null_input_mode,
-                "propagate",
-            ),
-            "null_result_mode": self._non_default_trace_value(
-                trace.null_result_mode,
-                "null",
-            ),
-            "null_default_value": self._trace_text(trace.null_default_value),
         }
 
     def _spark_condition_columns(self, trace: ResolvedConditionTrace) -> list[str]:
@@ -948,9 +902,17 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         return {
             "kind": trace.get("kind"),
             "column": column,
+            "target_field": trace.get("target_field"),
+            "original_value": self._trace_text(trace.get("original_value")),
             "value": self._trace_text(trace.get("value")),
             "value_type": trace.get("value_type"),
+            "default_if_null": self._trace_text(trace.get("default_if_null")),
+            "default_applied": bool(trace.get("default_applied", False)),
             "function_name": trace.get("function_name"),
+            "produced_by_rule_id": trace.get("produced_by_rule_id"),
+            "produced_by_assignment_id": trace.get(
+                "produced_by_assignment_id"
+            ),
             "source_columns": [str(column) for column in source_columns or []],
             "arguments": self._trace_arguments(trace),
         }
@@ -970,12 +932,6 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         if value in (None, default):
             return None
         return self._trace_text(value)
-
-    def _non_default_trace_value(self, value: Any, default: Any) -> Any | None:
-        """Return a trace value only when it differs from its default."""
-        if value in (None, default):
-            return None
-        return value
 
     def _trace_text(self, value: Any) -> str | None:
         """Convert arbitrary trace values to compact Spark string fields."""

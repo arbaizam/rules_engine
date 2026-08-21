@@ -14,6 +14,7 @@ from typing import Any
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exporter_yaml import YamlRulesetExporter
 from rules_engine.models import (
+    AssignedOperand,
     ConditionGroup,
     CustomFunctionOperand,
     FieldOperand,
@@ -150,7 +151,15 @@ class DeltaRowSerializer:
         count = 1 if isinstance(operand, operand_type) else 0
         if isinstance(operand, CustomFunctionOperand):
             for arg_value in operand.args.values():
-                if isinstance(arg_value, (FieldOperand, LiteralOperand, CustomFunctionOperand)):
+                if isinstance(
+                    arg_value,
+                    (
+                        AssignedOperand,
+                        FieldOperand,
+                        LiteralOperand,
+                        CustomFunctionOperand,
+                    ),
+                ):
                     count += self._count_operand_tree(arg_value, operand_type)
         return count
 

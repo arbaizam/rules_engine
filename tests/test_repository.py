@@ -107,8 +107,6 @@ def _ruleset(*, ruleset_id="rs1", ruleset_name="Ruleset", version="1"):
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -283,8 +281,8 @@ def test_retire_rejects_already_retired_version():
 def test_save_function_registry_rows_skips_existing_rows_when_update_disabled():
     """
     What: Emits an insert-only merge when update_existing is disabled.
-    Why: Deployment setup should load standard functions only when missing.
-    Fails when: Existing function registry rows are overwritten during setup.
+    Why: Callers may intentionally preserve existing function metadata.
+    Fails when: Existing function registry rows are overwritten in insert-only mode.
     """
     spark = FakeSpark()
     repo = SparkDeltaRulesetRepository(

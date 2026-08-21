@@ -14,6 +14,7 @@ from rules_engine.enums import (
     LogicalOperator,
 )
 from rules_engine.models import (
+    AssignedOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -167,12 +168,21 @@ class HumanReadableRulesetFormatter:
         Render an operand in author-facing expression syntax.
         """
         if isinstance(operand, FieldOperand):
-            return operand.field_name
-        if isinstance(operand, LiteralOperand):
-            return self._format_value(operand.value)
-        if isinstance(operand, CustomFunctionOperand):
-            return self._format_custom_function(operand)
-        raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+            expression = operand.field_name
+        elif isinstance(operand, AssignedOperand):
+            expression = f"assigned({operand.target_field})"
+        elif isinstance(operand, LiteralOperand):
+            expression = self._format_value(operand.value)
+        elif isinstance(operand, CustomFunctionOperand):
+            expression = self._format_custom_function(operand)
+        else:
+            raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+        if operand.default_if_null is not None:
+            expression = (
+                f"default_if_null({expression}, "
+                f"{self._format_value(operand.default_if_null.value)})"
+            )
+        return expression
 
     def _format_custom_function(self, operand: CustomFunctionOperand) -> str:
         """
@@ -190,7 +200,7 @@ class HumanReadableRulesetFormatter:
         """
         if isinstance(
             value,
-            (FieldOperand, LiteralOperand, CustomFunctionOperand),
+            (AssignedOperand, FieldOperand, LiteralOperand, CustomFunctionOperand),
         ):
             return self._format_operand(value)
         return self._format_value(value)

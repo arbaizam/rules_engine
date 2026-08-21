@@ -16,12 +16,11 @@ from typing import Any
 from rules_engine.enums import (
     ComparisonOperator,
     LogicalOperator,
-    NullInputMode,
-    NullResultMode,
     OperandKind,
 )
 from rules_engine.human_readable import HumanReadableRulesetFormatter
 from rules_engine.models import (
+    AssignedOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -44,6 +43,15 @@ class OperandResolution:
 
     value: Any
     trace: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AssignedValue:
+    """One committed assignment value and the rule that produced it."""
+
+    value: Any
+    rule_id: str
+    assignment_id: str
 
 
 class SparkRowEvaluator:
@@ -97,11 +105,31 @@ class SparkRowEvaluator:
         """
         matched_rule_ids: list[str] = []
         assignments: dict[str, Any] = {}
+        assigned_values: dict[str, AssignedValue] = {}
         for rule in sorted(ruleset.rules, key=lambda item: item.rule_order):
-            if not rule.active_flag or not self._rule_matches(rule, row):
+            if not rule.active_flag or not self._rule_matches(
+                rule,
+                row,
+                assigned_values,
+            ):
                 continue
             matched_rule_ids.append(rule.rule_id)
-            assignments.update(self._evaluate_assignments(rule.assignments, row))
+            resolved_assignments = self._evaluate_assignments(
+                rule.assignments,
+                row,
+                assigned_values,
+            )
+            assignments.update(resolved_assignments)
+            assigned_values.update(
+                {
+                    assignment.target_field: AssignedValue(
+                        value=resolved_assignments[assignment.target_field],
+                        rule_id=rule.rule_id,
+                        assignment_id=assignment.assignment_id,
+                    )
+                    for assignment in rule.assignments
+                }
+            )
             if rule.stop_on_match:
                 break
         return {
@@ -122,10 +150,11 @@ class SparkRowEvaluator:
         coverage rows; only use implementations that are safe to reevaluate.
         """
         candidates: list[tuple[float, int, int, Rule, list[str]]] = []
+        assigned_values: dict[str, AssignedValue] = {}
         for rule in sorted(ruleset.rules, key=lambda item: item.rule_order):
             if not rule.active_flag:
                 continue
-            _, traces = self._evaluate_rule(rule, row)
+            matched, traces = self._evaluate_rule(rule, row, assigned_values)
             active_traces = [trace for trace in traces if trace.active_flag]
             passed_count = sum(trace.passed for trace in active_traces)
             total_count = len(active_traces)
@@ -136,6 +165,24 @@ class SparkRowEvaluator:
             candidates.append(
                 (score, passed_count, -rule.rule_order, rule, failed_ids)
             )
+            if matched:
+                resolved_assignments = self._evaluate_assignments(
+                    rule.assignments,
+                    row,
+                    assigned_values,
+                )
+                assigned_values.update(
+                    {
+                        assignment.target_field: AssignedValue(
+                            value=resolved_assignments[assignment.target_field],
+                            rule_id=rule.rule_id,
+                            assignment_id=assignment.assignment_id,
+                        )
+                        for assignment in rule.assignments
+                    }
+                )
+                if rule.stop_on_match:
+                    break
         if not candidates:
             return None
         score, passed_count, _, rule, failed_ids = max(
@@ -156,6 +203,7 @@ class SparkRowEvaluator:
         self,
         rule: Rule,
         row: Mapping[str, Any],
+        assigned_values: Mapping[str, AssignedValue] | None = None,
     ) -> tuple[bool, list[ResolvedConditionTrace]]:
         """
         Evaluate one rule against one row and collect condition traces.
@@ -165,6 +213,7 @@ class SparkRowEvaluator:
             rule.root_group,
             row,
             condition_traces,
+            assigned_values,
         )
         return matched, condition_traces
 
@@ -172,32 +221,34 @@ class SparkRowEvaluator:
         self,
         rule: Rule,
         row: Mapping[str, Any],
+        assigned_values: Mapping[str, AssignedValue] | None = None,
     ) -> bool:
         """Evaluate one rule without constructing trace payloads."""
-        return self._group_matches(rule.root_group, row)
+        return self._group_matches(rule.root_group, row, assigned_values)
 
     def _group_matches(
         self,
         group: ConditionGroup,
         row: Mapping[str, Any],
+        assigned_values: Mapping[str, AssignedValue] | None = None,
     ) -> bool:
         """Evaluate a group without trace allocation while preserving errors."""
         if group.logical_operator is LogicalOperator.ALL:
             matched = True
             for condition in group.conditions:
-                if not self._condition_matches(condition, row):
+                if not self._condition_matches(condition, row, assigned_values):
                     matched = False
             for nested_group in group.groups:
-                if not self._group_matches(nested_group, row):
+                if not self._group_matches(nested_group, row, assigned_values):
                     matched = False
             return matched
 
         matched = False
         for condition in group.conditions:
-            if self._condition_matches(condition, row):
+            if self._condition_matches(condition, row, assigned_values):
                 matched = True
         for nested_group in group.groups:
-            if self._group_matches(nested_group, row):
+            if self._group_matches(nested_group, row, assigned_values):
                 matched = True
         return matched
 
@@ -205,13 +256,14 @@ class SparkRowEvaluator:
         self,
         condition: Condition,
         row: Mapping[str, Any],
+        assigned_values: Mapping[str, AssignedValue] | None = None,
     ) -> bool:
         """Evaluate one condition without resolving trace metadata."""
         if not condition.active_flag:
             return False
-        left = self._resolve_operand(condition.left, row)
+        left = self._resolve_operand(condition.left, row, assigned_values)
         right = (
-            self._resolve_operand(condition.right, row)
+            self._resolve_operand(condition.right, row, assigned_values)
             if condition.right is not None
             else None
         )
@@ -220,37 +272,16 @@ class SparkRowEvaluator:
             condition.operator,
             right,
             condition.tolerance_abs,
-            condition.null_input_mode,
+            condition.error_on_null,
         )
-        return self._resolve_null_result(
-            result,
-            condition.null_result_mode,
-            condition.null_default_value,
-        )
-
-    def _rule_has_custom_condition(self, rule: Rule) -> bool:
-        """Return whether an active condition can invoke a custom function."""
-        return self._group_has_custom_condition(rule.root_group)
-
-    def _group_has_custom_condition(self, group: ConditionGroup) -> bool:
-        """Return whether a group contains an active custom-function operand."""
-        return any(
-            condition.active_flag
-            and (
-                isinstance(condition.left, CustomFunctionOperand)
-                or isinstance(condition.right, CustomFunctionOperand)
-            )
-            for condition in group.conditions
-        ) or any(
-            self._group_has_custom_condition(nested_group)
-            for nested_group in group.groups
-        )
+        return result is True
 
     def _evaluate_group(
         self,
         group: ConditionGroup,
         row: Mapping[str, Any],
         condition_traces: list[ResolvedConditionTrace],
+        assigned_values: Mapping[str, AssignedValue] | None = None,
     ) -> bool:
         """
         Evaluate a logical group and all nested child groups.
@@ -261,6 +292,7 @@ class SparkRowEvaluator:
                 condition,
                 group,
                 row,
+                assigned_values,
             )
             condition_traces.append(condition_trace)
             results.append(condition_trace.passed)
@@ -270,6 +302,7 @@ class SparkRowEvaluator:
                     nested_group,
                     row,
                     condition_traces,
+                    assigned_values,
                 )
             )
         if group.logical_operator is LogicalOperator.ALL:
@@ -281,6 +314,7 @@ class SparkRowEvaluator:
         condition: Condition,
         group: ConditionGroup,
         row: Mapping[str, Any],
+        assigned_values: Mapping[str, AssignedValue] | None = None,
     ) -> ResolvedConditionTrace:
         """
         Evaluate one active condition after resolving its operands.
@@ -298,9 +332,13 @@ class SparkRowEvaluator:
                 ),
                 comparison_result=None,
             )
-        left = self._resolve_operand_resolution(condition.left, row)
+        left = self._resolve_operand_resolution(
+            condition.left,
+            row,
+            assigned_values,
+        )
         right = (
-            self._resolve_operand_resolution(condition.right, row)
+            self._resolve_operand_resolution(condition.right, row, assigned_values)
             if condition.right is not None
             else None
         )
@@ -309,17 +347,12 @@ class SparkRowEvaluator:
             condition.operator,
             right.value if right is not None else None,
             condition.tolerance_abs,
-            condition.null_input_mode,
-        )
-        passed = self._resolve_null_result(
-            result,
-            condition.null_result_mode,
-            condition.null_default_value,
+            condition.error_on_null,
         )
         return self._condition_trace(
             condition=condition,
             group=group,
-            passed=passed,
+            passed=result is True,
             left=left.trace,
             right=right.trace if right is not None else None,
             comparison_result=result,
@@ -329,6 +362,7 @@ class SparkRowEvaluator:
         self,
         assignments: tuple[Assignment, ...],
         row: Mapping[str, Any],
+        assigned_values: Mapping[str, AssignedValue] | None = None,
     ) -> dict[str, Any]:
         """
         Resolve all assignments for a matched rule into output values.
@@ -337,6 +371,7 @@ class SparkRowEvaluator:
             assignment.target_field: self._resolve_operand(
                 assignment.value,
                 row,
+                assigned_values,
             )
             for assignment in assignments
         }
@@ -344,7 +379,6 @@ class SparkRowEvaluator:
     def _rule_execution_trace(
         self,
         rule: Rule,
-        matched: bool,
         condition_traces: list[ResolvedConditionTrace],
     ) -> RuleExecutionTrace:
         """
@@ -353,12 +387,9 @@ class SparkRowEvaluator:
         return RuleExecutionTrace(
             rule_id=rule.rule_id,
             condition_traces=tuple(condition_traces),
-            assignments_applied=(
-                tuple(assignment.target_field for assignment in rule.assignments)
-                if matched
-                else ()
+            assignments_applied=tuple(
+                assignment.target_field for assignment in rule.assignments
             ),
-            matched=matched,
             rule_name=rule.rule_name,
             rule_order=rule.rule_order,
         )
@@ -391,6 +422,9 @@ class SparkRowEvaluator:
         if kind == OperandKind.FIELD.value:
             column = operand.get("column") or operand.get("field_name")
             return f"{column}={self._trace_display_value(operand.get('value'))}"
+        if kind == OperandKind.ASSIGNED.value:
+            target = operand.get("target_field")
+            return f"assigned({target})={self._trace_display_value(operand.get('value'))}"
         if kind == OperandKind.LITERAL.value:
             return self._trace_display_value(operand.get("value"))
         if kind == OperandKind.CUSTOM_FUNCTION.value:
@@ -441,9 +475,6 @@ class SparkRowEvaluator:
             active_flag=condition.active_flag,
             operator=condition.operator.value,
             tolerance_abs=self._trace_value(condition.tolerance_abs),
-            null_input_mode=condition.null_input_mode.value,
-            null_result_mode=condition.null_result_mode.value,
-            null_default_value=self._trace_value(condition.null_default_value),
             left=left,
             right=right,
             comparison_result=comparison_result,
@@ -454,22 +485,23 @@ class SparkRowEvaluator:
         self,
         operand: Operand,
         row: Mapping[str, Any],
+        assigned_values: Mapping[str, AssignedValue] | None = None,
     ) -> Any:
         """
         Resolve one operand against the current row.
         """
         if isinstance(operand, FieldOperand):
-            return row.get(operand.field_name)
-        if isinstance(operand, LiteralOperand):
-            return operand.value
-        if isinstance(operand, CustomFunctionOperand):
+            value = row.get(operand.field_name)
+        elif isinstance(operand, AssignedOperand):
+            assigned_value = (assigned_values or {}).get(operand.target_field)
+            value = assigned_value.value if assigned_value is not None else None
+        elif isinstance(operand, LiteralOperand):
+            value = operand.value
+        elif isinstance(operand, CustomFunctionOperand):
             args = {
                 str(key): (
-                    self._resolve_operand(value, row)
-                    if isinstance(
-                        value,
-                        (FieldOperand, LiteralOperand, CustomFunctionOperand),
-                    )
+                    self._resolve_operand(value, row, assigned_values)
+                    if isinstance(value, Operand)
                     else value
                 )
                 for key, value in operand.args.items()
@@ -477,47 +509,72 @@ class SparkRowEvaluator:
             implementation = self._function_registry.get_implementation(
                 operand.function_name
             )
-            return implementation(**args)
-        raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+            value = implementation(**args)
+        else:
+            raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+        if value is None and operand.default_if_null is not None:
+            return self._resolve_operand(
+                operand.default_if_null,
+                row,
+                assigned_values,
+            )
+        return value
 
     def _resolve_operand_resolution(
         self,
         operand: Operand,
         row: Mapping[str, Any],
+        assigned_values: Mapping[str, AssignedValue] | None = None,
     ) -> OperandResolution:
         """
         Resolve one operand and return both the value and trace metadata.
         """
         if isinstance(operand, FieldOperand):
-            value = row.get(operand.field_name)
-            return OperandResolution(
-                value=value,
-                trace={
-                    "kind": operand.kind.value,
-                    "columns": [operand.field_name],
-                    "field_name": operand.field_name,
-                    "value": self._trace_value(value),
-                    "evaluated": True,
-                },
+            original_value = row.get(operand.field_name)
+            trace = {
+                "kind": operand.kind.value,
+                "columns": [operand.field_name],
+                "field_name": operand.field_name,
+                "evaluated": True,
+            }
+        elif isinstance(operand, AssignedOperand):
+            assigned_value = (assigned_values or {}).get(operand.target_field)
+            original_value = (
+                assigned_value.value if assigned_value is not None else None
             )
-        if isinstance(operand, LiteralOperand):
-            return OperandResolution(
-                value=operand.value,
-                trace={
-                    "kind": operand.kind.value,
-                    "columns": [],
-                    "value": self._trace_value(operand.value),
-                    "value_type": operand.value_type,
-                    "evaluated": True,
-                },
-            )
-        if isinstance(operand, CustomFunctionOperand):
+            trace = {
+                "kind": operand.kind.value,
+                "columns": [],
+                "target_field": operand.target_field,
+                "produced_by_rule_id": (
+                    assigned_value.rule_id if assigned_value is not None else None
+                ),
+                "produced_by_assignment_id": (
+                    assigned_value.assignment_id
+                    if assigned_value is not None
+                    else None
+                ),
+                "evaluated": True,
+            }
+        elif isinstance(operand, LiteralOperand):
+            original_value = operand.value
+            trace = {
+                "kind": operand.kind.value,
+                "columns": [],
+                "value_type": operand.value_type,
+                "evaluated": True,
+            }
+        elif isinstance(operand, CustomFunctionOperand):
             args: dict[str, Any] = {}
             arg_traces: dict[str, Any] = {}
             for key, value in operand.args.items():
                 arg_key = str(key)
-                if isinstance(value, (FieldOperand, LiteralOperand, CustomFunctionOperand)):
-                    argument = self._resolve_operand_resolution(value, row)
+                if isinstance(value, Operand):
+                    argument = self._resolve_operand_resolution(
+                        value,
+                        row,
+                        assigned_values,
+                    )
                     args[arg_key] = argument.value
                     arg_traces[arg_key] = argument.trace
                 else:
@@ -529,23 +586,37 @@ class SparkRowEvaluator:
                         "evaluated": True,
                     }
             implementation = self._function_registry.get_implementation(operand.function_name)
-            value = implementation(**args)
-            return OperandResolution(
-                value=value,
-                trace={
-                    "kind": operand.kind.value,
-                    "columns": self._unique_strings(
-                        column
-                        for arg_trace in arg_traces.values()
-                        for column in arg_trace.get("columns", [])
-                    ),
-                    "function_name": operand.function_name,
-                    "args": arg_traces,
-                    "value": self._trace_value(value),
-                    "evaluated": True,
-                },
-            )
-        raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+            original_value = implementation(**args)
+            trace = {
+                "kind": operand.kind.value,
+                "columns": self._unique_strings(
+                    column
+                    for arg_trace in arg_traces.values()
+                    for column in arg_trace.get("columns", [])
+                ),
+                "function_name": operand.function_name,
+                "args": arg_traces,
+                "evaluated": True,
+            }
+        else:
+            raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+        default_applied = original_value is None and operand.default_if_null is not None
+        value = (
+            self._resolve_operand(operand.default_if_null, row, assigned_values)
+            if default_applied
+            else original_value
+        )
+        trace.update(
+            original_value=self._trace_value(original_value),
+            value=self._trace_value(value),
+            default_if_null=(
+                self._trace_value(operand.default_if_null.value)
+                if operand.default_if_null is not None
+                else None
+            ),
+            default_applied=default_applied,
+        )
+        return OperandResolution(value=value, trace=trace)
 
     def _operand_metadata(self, operand: Operand) -> dict[str, Any]:
         """
@@ -556,6 +627,19 @@ class SparkRowEvaluator:
                 "kind": operand.kind.value,
                 "columns": [operand.field_name],
                 "field_name": operand.field_name,
+                "default_if_null": self._operand_default_trace_value(operand),
+                "default_applied": False,
+                "evaluated": False,
+            }
+        if isinstance(operand, AssignedOperand):
+            return {
+                "kind": operand.kind.value,
+                "columns": [],
+                "target_field": operand.target_field,
+                "produced_by_rule_id": None,
+                "produced_by_assignment_id": None,
+                "default_if_null": self._operand_default_trace_value(operand),
+                "default_applied": False,
                 "evaluated": False,
             }
         if isinstance(operand, LiteralOperand):
@@ -564,6 +648,9 @@ class SparkRowEvaluator:
                 "columns": [],
                 "value": self._trace_value(operand.value),
                 "value_type": operand.value_type,
+                "original_value": self._trace_value(operand.value),
+                "default_if_null": self._operand_default_trace_value(operand),
+                "default_applied": False,
                 "evaluated": False,
             }
         if isinstance(operand, CustomFunctionOperand):
@@ -574,7 +661,7 @@ class SparkRowEvaluator:
                 "args": {
                     str(key): (
                         self._operand_metadata(value)
-                        if isinstance(value, (FieldOperand, LiteralOperand, CustomFunctionOperand))
+                        if isinstance(value, Operand)
                         else {
                             "kind": "literal",
                             "columns": [],
@@ -584,9 +671,19 @@ class SparkRowEvaluator:
                     )
                     for key, value in operand.args.items()
                 },
+                "default_if_null": self._operand_default_trace_value(operand),
+                "default_applied": False,
                 "evaluated": False,
             }
         raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
+
+    def _operand_default_trace_value(self, operand: Operand) -> Any:
+        """Return one configured fallback as a trace-safe value."""
+        return (
+            self._trace_value(operand.default_if_null.value)
+            if operand.default_if_null is not None
+            else None
+        )
 
     def _operand_columns(self, operand: Operand | Any) -> list[str]:
         """
@@ -594,6 +691,8 @@ class SparkRowEvaluator:
         """
         if isinstance(operand, FieldOperand):
             return [operand.field_name]
+        if isinstance(operand, AssignedOperand):
+            return []
         if isinstance(operand, LiteralOperand):
             return []
         if isinstance(operand, CustomFunctionOperand):
@@ -648,22 +747,19 @@ class SparkRowEvaluator:
         operator: ComparisonOperator,
         right: Any,
         tolerance_abs: Decimal,
-        null_input_mode: NullInputMode,
+        error_on_null: bool,
     ) -> bool | None:
         """
-        Apply one comparison operator with null-input and tolerance handling.
+        Apply one comparison operator after operand-level null defaults.
         """
         if operator is ComparisonOperator.IS_NULL:
             return left is None
         if operator is ComparisonOperator.IS_NOT_NULL:
             return left is not None
 
-        left, right, null_propagated = self._apply_null_input_mode(
-            left,
-            right,
-            null_input_mode,
-        )
-        if null_propagated:
+        if left is None or right is None:
+            if error_on_null:
+                raise ValueError("Null operand encountered with error_on_null=true.")
             return None
 
         if operator is ComparisonOperator.EQ:
@@ -760,45 +856,6 @@ class SparkRowEvaluator:
             tolerance_abs,
         )
         return ordered_lower <= ordered_left and ordered_left_again <= ordered_upper
-
-    def _apply_null_input_mode(
-        self,
-        left: Any,
-        right: Any,
-        null_input_mode: NullInputMode,
-    ) -> tuple[Any, Any, bool]:
-        """
-        Apply configured null-input handling before comparison.
-        """
-        if left is not None and right is not None:
-            return left, right, False
-        if null_input_mode is NullInputMode.ERROR:
-            raise ValueError("Null input encountered with null_input_mode=error.")
-        if null_input_mode is NullInputMode.ZERO:
-            return 0 if left is None else left, 0 if right is None else right, False
-        return left, right, True
-
-    def _resolve_null_result(
-        self,
-        result: bool | None,
-        null_result_mode: NullResultMode,
-        null_default_value: Any | None,
-    ) -> bool:
-        """
-        Convert a nullable comparison result into a final boolean result.
-        """
-        if result is not None:
-            return bool(result)
-        if null_result_mode is NullResultMode.ERROR:
-            raise ValueError("Null result encountered with null_result_mode=error.")
-        if null_result_mode is NullResultMode.DEFAULT:
-            if not isinstance(null_default_value, bool):
-                raise TypeError(
-                    "null_default_value must be a boolean when "
-                    "null_result_mode=default."
-                )
-            return null_default_value
-        return False
 
     def _equals(self, left: Any, right: Any, tolerance_abs: Decimal) -> bool:
         """

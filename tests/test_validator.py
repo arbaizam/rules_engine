@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.models import LiteralOperand
+from rules_engine.normalizer import RulesetNormalizer
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 from rules_engine.validator import RulesetValidator
 
@@ -43,8 +44,6 @@ def test_missing_owner_metadata_fails_validation():
             "left": {"field": "account"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
     payload.pop("owner")
@@ -80,8 +79,6 @@ def test_custom_function_args_mismatch_fails_validation():
             "left": {"custom_function": {"name": "score", "args": {"x": 1}}},
             "operator": "gt",
             "right": {"literal": 1},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         },
         registry=registry,
     )
@@ -89,40 +86,146 @@ def test_custom_function_args_mismatch_fails_validation():
     assert any(issue.check_name == "CUSTOM_FUNCTION_ARGS_MISMATCH" for issue in result.issues)
 
 
-def test_null_result_mode_default_without_default_fails_validation():
-    """
-    What: Validates that null_result_mode=default requires null_default_value.
-    Why: Default null behavior must be explicit in published metadata.
-    Fails when: Conditions can silently default null results without a value.
-    """
+def test_code_authored_null_default_cannot_itself_be_null():
+    """Direct dataclass authors cannot bypass the non-null fallback contract."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "account"},
+                "operator": "eq",
+                "right": {"literal": "A"},
+            }
+        )
+    )
+    condition = ruleset.rules[0].root_group.conditions[0]
+    invalid_left = replace(
+        condition.left,
+        default_if_null=LiteralOperand(None),
+    )
+    invalid_ruleset = replace(
+        ruleset,
+        rules=(
+            replace(
+                ruleset.rules[0],
+                root_group=replace(
+                    ruleset.rules[0].root_group,
+                    conditions=(replace(condition, left=invalid_left),),
+                ),
+            ),
+        ),
+    )
+
+    result = RulesetValidator().validate(invalid_ruleset)
+
+    assert "DEFAULT_IF_NULL_VALUE_REQUIRED" in {
+        issue.check_name for issue in result.issues
+    }
+
+
+def test_normalizer_does_not_hide_nested_null_default_validation_error():
+    """Publish normalization preserves invalid nesting for validation to reject."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "account"},
+                "operator": "eq",
+                "right": {"literal": "A"},
+            }
+        )
+    )
+    condition = ruleset.rules[0].root_group.conditions[0]
+    invalid_left = replace(
+        condition.left,
+        default_if_null=LiteralOperand(
+            "UNKNOWN",
+            default_if_null=LiteralOperand("SECOND"),
+        ),
+    )
+    invalid_ruleset = replace(
+        ruleset,
+        rules=(
+            replace(
+                ruleset.rules[0],
+                root_group=replace(
+                    ruleset.rules[0].root_group,
+                    conditions=(replace(condition, left=invalid_left),),
+                ),
+            ),
+        ),
+    )
+
+    normalized = RulesetNormalizer().normalize_ruleset(invalid_ruleset)
+    result = RulesetValidator().validate(normalized)
+
+    assert "DEFAULT_IF_NULL_NESTED_FORBIDDEN" in {
+        issue.check_name for issue in result.issues
+    }
+
+
+def test_error_on_null_is_rejected_for_unary_null_operators():
+    """Unary null checks cannot also demand an error for the value they inspect."""
     result = _validate_condition(
         {
             "left": {"field": "account"},
-            "operator": "eq",
-            "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "default",
+            "operator": "is_null",
+            "error_on_null": True,
         }
     )
 
-    assert any(issue.check_name == "NULL_DEFAULT_REQUIRED" for issue in result.issues)
-    assert result.passed is False
+    assert "ERROR_ON_NULL_UNARY_FORBIDDEN" in {
+        issue.check_name for issue in result.issues
+    }
 
 
-def test_null_result_mode_default_rejects_string_boolean():
-    """Quoted YAML booleans must not become truthy defaults at runtime."""
-    result = _validate_condition(
+def test_assigned_operand_requires_an_active_lower_order_producer():
+    """Same-rule, future, and inactive assignments cannot satisfy a reference."""
+    payload = _base_payload(
         {
-            "left": {"field": "account"},
+            "left": {"assigned": "bucket"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "default",
-            "null_default_value": "false",
         }
     )
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
 
-    assert "NULL_DEFAULT_BOOLEAN_REQUIRED" in {
+    result = RulesetValidator().validate(ruleset)
+
+    assert "ASSIGNED_VALUE_PRIOR_PRODUCER_REQUIRED" in {
+        issue.check_name for issue in result.issues
+    }
+
+
+def test_assigned_operand_accepts_a_potential_prior_producer():
+    """The producer must be structurally earlier; it need not match every row."""
+    payload = _base_payload(
+        {
+            "left": {"field": "status"},
+            "operator": "eq",
+            "right": {"literal": "OPEN"},
+        }
+    )
+    payload["rules"].append(
+        {
+            "rule_id": "r2",
+            "rule_name": "Consumer",
+            "rule_order": 2,
+            "when": {
+                "all": [
+                    {
+                        "left": {"assigned": "bucket"},
+                        "operator": "eq",
+                        "right": {"literal": "A"},
+                    }
+                ]
+            },
+            "assign": {"review": True},
+        }
+    )
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+
+    result = RulesetValidator().validate(ruleset)
+
+    assert "ASSIGNED_VALUE_PRIOR_PRODUCER_REQUIRED" not in {
         issue.check_name for issue in result.issues
     }
 
@@ -138,8 +241,6 @@ def test_valid_string_operators_validate():
             "left": {"field": "account"},
             "operator": "contains",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
     ruleset = YamlRulesetCompiler().compile_payload(payload)
@@ -159,8 +260,6 @@ def test_between_with_nonzero_tolerance_fails_validation():
             "operator": "between",
             "right": {"literal": [10, 20]},
             "tolerance_abs": "0.01",
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
 
@@ -192,16 +291,12 @@ def test_duplicate_condition_ids_fail_validation():
                             "left": {"field": "account"},
                             "operator": "eq",
                             "right": {"literal": "A"},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
                         },
                         {
                             "condition_id": "duplicate_condition",
                             "left": {"field": "status"},
                             "operator": "eq",
                             "right": {"literal": "OPEN"},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
                         },
                     ]
                 },
@@ -240,8 +335,6 @@ def test_duplicate_condition_group_ids_fail_validation():
                             "left": {"field": "account"},
                             "operator": "eq",
                             "right": {"literal": "A"},
-                            "null_input_mode": "propagate",
-                            "null_result_mode": "null",
                         },
                         {
                             "condition_group_id": "duplicate_group",
@@ -250,8 +343,6 @@ def test_duplicate_condition_group_ids_fail_validation():
                                     "left": {"field": "status"},
                                     "operator": "eq",
                                     "right": {"literal": "OPEN"},
-                                    "null_input_mode": "propagate",
-                                    "null_result_mode": "null",
                                 }
                             ],
                         },
@@ -275,8 +366,6 @@ def test_duplicate_assignment_target_within_rule_fails_validation():
             "left": {"field": "account"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
     payload["rules"][0]["assign"] = [
@@ -315,8 +404,6 @@ def test_duplicate_assignment_id_across_rules_fails_validation():
             "left": {"field": "account"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
     first_rule = payload["rules"][0]
@@ -364,8 +451,6 @@ def test_duplicate_assignment_id_within_rule_has_clear_location():
             "left": {"field": "account"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
     payload["rules"][0]["assign"] = [
@@ -400,8 +485,6 @@ def test_assignment_id_may_be_reused_when_versions_are_validated_independently()
             "left": {"field": "account"},
             "operator": "eq",
             "right": {"literal": "A"},
-            "null_input_mode": "propagate",
-            "null_result_mode": "null",
         }
     )
     payload["rules"][0]["assign"] = [

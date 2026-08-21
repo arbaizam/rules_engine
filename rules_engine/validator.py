@@ -17,12 +17,12 @@ from rules_engine.enums import (
     COLLECTION_LITERAL_OPERATORS,
     UNARY_OPERATORS,
     ComparisonOperator,
-    NullResultMode,
     ObjectType,
     ValidationSeverity,
 )
 from rules_engine.exceptions import RegistryError
 from rules_engine.models import (
+    AssignedOperand,
     Assignment,
     Condition,
     ConditionGroup,
@@ -145,6 +145,101 @@ class RulesetValidator:
                 seen_assignment_ids,
                 ruleset,
             )
+        self._validate_assigned_references(ruleset, result)
+
+    def _validate_assigned_references(
+        self,
+        ruleset: Ruleset,
+        result: ValidationResult,
+    ) -> None:
+        """Require every assigned reference to have an earlier active producer."""
+        active_rules = sorted(
+            (rule for rule in ruleset.rules if rule.active_flag),
+            key=lambda rule: rule.rule_order,
+        )
+        producers: dict[str, list[tuple[int, str, str]]] = {}
+        for rule in active_rules:
+            for assignment in rule.assignments:
+                producers.setdefault(assignment.target_field, []).append(
+                    (rule.rule_order, rule.rule_id, assignment.assignment_id)
+                )
+
+        for rule in active_rules:
+            references: list[tuple[AssignedOperand, ObjectType, str]] = []
+            self._collect_group_assigned_references(rule.root_group, references)
+            for assignment in rule.assignments:
+                self._collect_assigned_references(
+                    assignment.value,
+                    ObjectType.ASSIGNMENT,
+                    assignment.assignment_id,
+                    references,
+                )
+            for operand, object_type, object_id in references:
+                earlier = [
+                    producer
+                    for producer in producers.get(operand.target_field, [])
+                    if producer[0] < rule.rule_order
+                ]
+                if earlier:
+                    continue
+                self._add(
+                    result,
+                    "ASSIGNED_VALUE_PRIOR_PRODUCER_REQUIRED",
+                    f"Assigned value {operand.target_field!r} must be produced "
+                    "by an active rule with a lower rule_order.",
+                    object_type,
+                    object_id,
+                    details={
+                        "rule_id": rule.rule_id,
+                        "rule_order": rule.rule_order,
+                        "target_field": operand.target_field,
+                    },
+                )
+
+    def _collect_group_assigned_references(
+        self,
+        group: ConditionGroup,
+        references: list[tuple[AssignedOperand, ObjectType, str]],
+    ) -> None:
+        """Collect assigned references from active conditions in one tree."""
+        for condition in group.conditions:
+            if not condition.active_flag:
+                continue
+            self._collect_assigned_references(
+                condition.left,
+                ObjectType.CONDITION,
+                condition.condition_id,
+                references,
+            )
+            if condition.right is not None:
+                self._collect_assigned_references(
+                    condition.right,
+                    ObjectType.CONDITION,
+                    condition.condition_id,
+                    references,
+                )
+        for nested_group in group.groups:
+            self._collect_group_assigned_references(nested_group, references)
+
+    def _collect_assigned_references(
+        self,
+        operand: Operand,
+        object_type: ObjectType,
+        object_id: str,
+        references: list[tuple[AssignedOperand, ObjectType, str]],
+    ) -> None:
+        """Collect assigned references recursively through function arguments."""
+        if isinstance(operand, AssignedOperand):
+            references.append((operand, object_type, object_id))
+        elif isinstance(operand, CustomFunctionOperand):
+            for argument in operand.args.values():
+                if isinstance(argument, Operand):
+                    self._collect_assigned_references(
+                        argument,
+                        object_type,
+                        object_id,
+                        references,
+                    )
 
     def _validate_expectations(
         self,
@@ -400,7 +495,7 @@ class RulesetValidator:
 
     def _validate_condition(self, condition: Condition, result: ValidationResult) -> None:
         """
-        Validate one condition's tolerance, null handling, operands, and operator shape.
+        Validate one condition's tolerance, operands, and operator shape.
         """
         if not condition.tolerance_abs.is_finite():
             self._add(
@@ -418,24 +513,22 @@ class RulesetValidator:
                 ObjectType.CONDITION,
                 condition.condition_id,
             )
-        if condition.null_result_mode is NullResultMode.DEFAULT:
-            if condition.null_default_value is None:
-                self._add(
-                    result,
-                    "NULL_DEFAULT_REQUIRED",
-                    "null_default_value is required when null_result_mode is default.",
-                    ObjectType.CONDITION,
-                    condition.condition_id,
-                )
-            elif not isinstance(condition.null_default_value, bool):
-                self._add(
-                    result,
-                    "NULL_DEFAULT_BOOLEAN_REQUIRED",
-                    "null_default_value must be a YAML boolean when "
-                    "null_result_mode is default.",
-                    ObjectType.CONDITION,
-                    condition.condition_id,
-                )
+        if not isinstance(condition.error_on_null, bool):
+            self._add(
+                result,
+                "ERROR_ON_NULL_BOOLEAN_REQUIRED",
+                "error_on_null must be a boolean.",
+                ObjectType.CONDITION,
+                condition.condition_id,
+            )
+        if condition.error_on_null and condition.operator in UNARY_OPERATORS:
+            self._add(
+                result,
+                "ERROR_ON_NULL_UNARY_FORBIDDEN",
+                "error_on_null is not valid for is_null or is_not_null.",
+                ObjectType.CONDITION,
+                condition.condition_id,
+            )
         self._validate_operand(condition.left, result, condition.condition_id, in_assignment=False)
         if condition.right is not None:
             self._validate_operand(condition.right, result, condition.condition_id, in_assignment=False)
@@ -532,12 +625,54 @@ class RulesetValidator:
         Validate one operand according to its concrete operand type.
         """
         object_type = ObjectType.ASSIGNMENT if in_assignment else ObjectType.CONDITION
+        default = getattr(operand, "default_if_null", None)
+        if default is not None:
+            if not isinstance(default, LiteralOperand):
+                self._add(
+                    result,
+                    "DEFAULT_IF_NULL_LITERAL_REQUIRED",
+                    "default_if_null must be a literal operand.",
+                    object_type,
+                    object_id,
+                )
+            elif default.value is None:
+                self._add(
+                    result,
+                    "DEFAULT_IF_NULL_VALUE_REQUIRED",
+                    "default_if_null cannot itself be null.",
+                    object_type,
+                    object_id,
+                )
+            else:
+                self._validate_finite_decimals(
+                    default.value,
+                    result,
+                    object_type,
+                    object_id,
+                )
+                if default.default_if_null is not None:
+                    self._add(
+                        result,
+                        "DEFAULT_IF_NULL_NESTED_FORBIDDEN",
+                        "default_if_null cannot define another default_if_null.",
+                        object_type,
+                        object_id,
+                    )
         if isinstance(operand, FieldOperand):
             if not operand.field_name:
                 self._add(
                     result,
                     "FIELD_NAME_REQUIRED",
                     "field_name is required.",
+                    object_type,
+                    object_id,
+                )
+        elif isinstance(operand, AssignedOperand):
+            if not operand.target_field:
+                self._add(
+                    result,
+                    "ASSIGNED_TARGET_FIELD_REQUIRED",
+                    "assigned target_field is required.",
                     object_type,
                     object_id,
                 )

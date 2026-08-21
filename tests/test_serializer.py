@@ -21,7 +21,7 @@ def test_serializer_persists_canonical_payload_with_explicit_fields():
     """
     What: Serializes a ruleset and inspects explicit canonical payload fields.
     Why: Persisted payload_json is the audit source for runtime reconstruction.
-    Fails when: Operand, tolerance, or null fields are omitted or renamed.
+    Fails when: Operand, null-default, error, or tolerance fields are omitted or renamed.
     """
     ruleset = _compile(
         {
@@ -39,11 +39,13 @@ def test_serializer_persists_canonical_payload_with_explicit_fields():
                     "when": {
                         "all": [
                             {
-                                "left": {"field": "account_amount_sum"},
+                                "left": {
+                                    "field": "account_balance",
+                                    "default_if_null": 0,
+                                },
                                 "operator": "gt",
                                 "right": {"literal": 1},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
+                                "error_on_null": True,
                             }
                         ]
                     },
@@ -57,10 +59,12 @@ def test_serializer_persists_canonical_payload_with_explicit_fields():
     payload = json.loads(row.payload_json)
     condition = payload["rules"][0]["when"]["all"][0]
 
-    assert condition["left"] == {"field": "account_amount_sum"}
+    assert condition["left"] == {
+        "field": "account_balance",
+        "default_if_null": 0,
+    }
     assert condition["tolerance_abs"] == "0"
-    assert condition["null_input_mode"] == "propagate"
-    assert condition["null_result_mode"] == "null"
+    assert condition["error_on_null"] is True
 
 
 def test_serializer_stamps_provenance_hash_and_summary_counts():
@@ -88,8 +92,6 @@ def test_serializer_stamps_provenance_hash_and_summary_counts():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -148,8 +150,6 @@ def test_serializer_counts_nested_custom_function_operands():
                                 },
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -187,8 +187,6 @@ def test_content_hash_equals_sha256_of_payload_json():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -226,8 +224,6 @@ def test_content_hash_and_payload_json_are_deterministic():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -268,8 +264,6 @@ def test_deserializer_reconstructs_canonical_models():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -450,8 +444,6 @@ def test_persisted_payload_excludes_lifecycle_status():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -491,8 +483,6 @@ def test_serializer_accepts_explicit_effective_dates_outside_payload():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },
@@ -539,8 +529,6 @@ def test_serializer_defaults_effective_dates_from_publish_metadata():
                                 "left": {"field": "account"},
                                 "operator": "eq",
                                 "right": {"literal": "A"},
-                                "null_input_mode": "propagate",
-                                "null_result_mode": "null",
                             }
                         ]
                     },

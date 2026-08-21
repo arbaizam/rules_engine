@@ -112,7 +112,7 @@ def test_create_base_tables_uses_explicit_delta_ddl_with_not_null_columns():
 def test_create_base_tables_uses_if_not_exists_for_ignore_mode():
     """
     What: Uses CREATE TABLE IF NOT EXISTS for idempotent bootstrap.
-    Why: Deployment setup should be safely rerunnable when requested.
+    Why: Metadata initialization should be safely rerunnable when requested.
     Fails when: Ignore mode emits destructive or non-idempotent DDL.
     """
     spark = FakeSpark()

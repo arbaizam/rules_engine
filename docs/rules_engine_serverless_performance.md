@@ -17,7 +17,7 @@ The cases are:
 
 | Case | Purpose |
 | --- | --- |
-| `input_floor` | Reads every column the tested runtime serializes, computes one `xxhash64` value per row, and writes it. The baseline runtime reads all source columns; the optimized runtime reads only rule dependencies. This is context, not a value to subtract mechanically from other cases. |
+| `input_floor` | Reads every source dependency serialized by the runtime, computes one `xxhash64` value per row, and writes it. This is context, not a value to subtract mechanically from other cases. |
 | `assignment_only` | Evaluates the ruleset with `fail_on_error=False` and writes only the configured assignment field. This most closely represents leaf-key production use. |
 | `full_output` | Evaluates once with `full_audit=True` and writes every `rules_engine_` output, including trace/provenance and immutable ruleset/engine identity. Materialized output supplies error and first-match-distribution evidence. |
 | `assignment_only_fail_on_error` | Runs assignment-only output with the lazy single-pass `fail_on_error=True` contract. Its difference from `assignment_only` measures worker exception-checking overhead on clean data. |
@@ -34,7 +34,7 @@ globals before running the notebook.
 | `PERF_RULESET_NAME` | Yes |  | Published ruleset name. |
 | `PERF_RULESET_VERSION` | No | published-name resolution | Explicit published version. Prefer setting it. |
 | `PERF_OUTPUT_SCHEMA` | No | rules-engine schema | Writable schema for metrics and temporary Delta tables. |
-| `PERF_VARIANT` | No | `working_tree` | Stable comparison label such as `baseline_32fb617` or `optimized_054130a`. |
+| `PERF_VARIANT` | No | `working_tree` | Stable label for the implementation or configuration under test. |
 | `PERF_COMMIT_SHA` | No | `unknown` | Exact tested Git commit. |
 | `PERF_ASSIGNMENT_FIELD` | No | `leaf_key` | Child field selected from `rules_engine_assign` in assignment-only cases. Use an empty value to write the complete assignment struct. |
 | `PERF_WHERE_SQL` | No |  | Optional identical source filter applied to every case. |
@@ -46,10 +46,6 @@ globals before running the notebook.
 | `PERF_CLEANUP_OUTPUTS` | No | `true` | Drop temporary result tables after durable metrics are written. |
 | `PERF_METRICS_TABLE` | No | `<output_schema>.rules_engine_performance_results` | Durable Delta metrics table. |
 | `PERF_OUTPUT_PREFIX` | No | `rules_engine_perf` | Prefix for temporary managed tables. |
-
-The 0.4 notebook renames the persisted diagnostic field from
-`winner_counts_json` to `first_match_counts_json`. Migrate or recreate an
-existing `PERF_METRICS_TABLE` before appending 0.4 results.
 
 ## Comparison Procedure
 
@@ -68,13 +64,10 @@ existing `PERF_METRICS_TABLE` before appending 0.4 results.
 6. Treat `input_floor` as context only. Delta output shapes differ across cases,
    so durations are not algebraically interchangeable.
 
-To compare commit `32fb617` with `054130a`, retain a workspace copy of this
-benchmark notebook outside the Git folder before switching the Git folder to
-the older commit. Run both variants against the same source and metrics table.
-Do not rebuild or refresh the source snapshot between variants. The notebook
-contains its own dependency inspection for compatibility with `32fb617`; it
-records all source columns as serialized for that baseline and the dependency
-subset for optimized versions that expose `required_source_columns`.
+Run each variant against the same immutable source snapshot and metrics table.
+Do not rebuild or refresh the source snapshot between variants. Record the
+exact implementation with `PERF_COMMIT_SHA` and use distinct, meaningful
+`PERF_VARIANT` values.
 
 ## Acceptance Guidance
 

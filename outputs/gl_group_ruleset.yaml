@@ -18,16 +18,12 @@ rules:
       operator: eq
       right:
         literal: '10000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_001_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: CoreFirst_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: CashAndDueFromBanks-CoreFirst
     gl_crs_code: SC1000
@@ -51,16 +47,12 @@ rules:
       operator: eq
       right:
         literal: '10000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_002_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: FRB_KC
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: CashAndDueFromBanks-FRB_KC
     gl_crs_code: SC1000
@@ -84,16 +76,12 @@ rules:
       operator: eq
       right:
         literal: '10000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_003_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: JPM_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: CashAndDueFromBanks-JPMC
     gl_crs_code: SC1000
@@ -117,16 +105,12 @@ rules:
       operator: eq
       right:
         literal: '10500'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_004_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: ADP_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: CashAndDueFromBanks-ADP_Outsource_Bank
     gl_crs_code: SC1000
@@ -152,8 +136,6 @@ rules:
         literal:
         - '10000'
         - '10500'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: CashAndDueFromBanks-OtherFallBack
     gl_crs_code: SC1000
@@ -177,16 +159,12 @@ rules:
       operator: eq
       right:
         literal: '11000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_006_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: BOA_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-BANA
     gl_crs_code: SC1100
@@ -210,16 +188,12 @@ rules:
       operator: eq
       right:
         literal: '11000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_007_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: Citibank_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-CINY
     gl_crs_code: SC1100
@@ -243,16 +217,12 @@ rules:
       operator: eq
       right:
         literal: '11000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_008_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: GS_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-GOLD
     gl_crs_code: SC1100
@@ -276,16 +246,12 @@ rules:
       operator: eq
       right:
         literal: '11000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_009_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: JPM_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-JPMC
     gl_crs_code: SC1100
@@ -309,16 +275,12 @@ rules:
       operator: eq
       right:
         literal: '11000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_010_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: WF_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-WFBK
     gl_crs_code: SC1100
@@ -342,16 +304,12 @@ rules:
       operator: eq
       right:
         literal: '11000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_011_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: CoreFirst_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-CoreFirst
     gl_crs_code: SC1100
@@ -375,8 +333,6 @@ rules:
       operator: eq
       right:
         literal: '11000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_012_c2
       left:
         field: ProductID
@@ -385,8 +341,6 @@ rules:
         literal:
         - PRD0006
         - PRD0007
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-OtherFallBack
     gl_crs_code: SC1100
@@ -411,16 +365,12 @@ rules:
       operator: eq
       right:
         literal: '11000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_013_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0005
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-Interbank
     gl_crs_code: SC1150
@@ -444,24 +394,18 @@ rules:
       operator: eq
       right:
         literal: '11010'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_014_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0009
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_014_c3
       left:
         field: BookCode
       operator: ne
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-DerivativeCashCollateral-Cleared
     gl_crs_code: SC1100
@@ -486,24 +430,18 @@ rules:
       operator: eq
       right:
         literal: '11010'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_015_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0009
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_015_c3
       left:
         field: BookCode
       operator: eq
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-DerivativeCashCollateral-Cleared-Contra
     gl_crs_code: SC1100
@@ -528,24 +466,18 @@ rules:
       operator: eq
       right:
         literal: '11010'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_016_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0008
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_016_c3
       left:
         field: BookCode
       operator: ne
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-DerivativeCashCollateral-Uncleared
     gl_crs_code: SC1100
@@ -570,24 +502,18 @@ rules:
       operator: eq
       right:
         literal: '11010'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_017_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0008
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_017_c3
       left:
         field: BookCode
       operator: eq
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IBDDA-DerivativeCashCollateral-Uncleared-Contra
     gl_crs_code: SC1100
@@ -612,8 +538,6 @@ rules:
       operator: eq
       right:
         literal: '12000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: ReverseRepurchaseAgreement
     gl_crs_code: SC1200
@@ -636,8 +560,6 @@ rules:
       operator: eq
       right:
         literal: '13000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: FederalFundsSold
     gl_crs_code: SC1600
@@ -660,8 +582,6 @@ rules:
       operator: eq
       right:
         literal: '14200'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: HeldToMaturitySecurities
     gl_crs_code: SC1300
@@ -684,8 +604,6 @@ rules:
       operator: eq
       right:
         literal: '14100'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: AvailableForSaleSecurities
     gl_crs_code: SC1400
@@ -708,8 +626,6 @@ rules:
       operator: eq
       right:
         literal: '14110'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: AvailableForSaleSecurities-FvAdjustment
     gl_crs_code: SC1400
@@ -732,8 +648,6 @@ rules:
       operator: eq
       right:
         literal: '14000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: TradingSecurities
     gl_crs_code: SC1500
@@ -756,16 +670,12 @@ rules:
       operator: eq
       right:
         literal: '15000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_024_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0002
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: TermAdvances
     gl_crs_code: SC1800
@@ -789,16 +699,12 @@ rules:
       operator: eq
       right:
         literal: '15010'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_025_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0002
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: TermAdvances-FvAdjustment
     gl_crs_code: SC1800
@@ -822,16 +728,12 @@ rules:
       operator: eq
       right:
         literal: '15000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_026_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0001
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OvernightAdvances
     gl_crs_code: SC1800
@@ -857,24 +759,18 @@ rules:
         literal:
         - '15100'
         - '15105'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_027_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0003
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_027_c3
       left:
         field: BalanceType
       operator: ne
       right:
         literal: Mortgage Delivery Commitment Basis Adjustment
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: ConventionalMpfLoans
     gl_crs_code: SC2100
@@ -901,24 +797,18 @@ rules:
         literal:
         - '15100'
         - '15105'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_028_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0004
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_028_c3
       left:
         field: BalanceType
       operator: ne
       right:
         literal: Mortgage Delivery Commitment Basis Adjustment
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: GovernmentMpfLoans
     gl_crs_code: SC2100
@@ -943,24 +833,18 @@ rules:
       operator: eq
       right:
         literal: '15100'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_029_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0003
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_029_c3
       left:
         field: BalanceType
       operator: eq
       right:
         literal: Mortgage Delivery Commitment Basis Adjustment
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: ConventionalMpfLoans-FvAdjustment
     gl_crs_code: SC2100
@@ -984,24 +868,18 @@ rules:
       operator: eq
       right:
         literal: '15100'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_030_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0004
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_030_c3
       left:
         field: BalanceType
       operator: eq
       right:
         literal: Mortgage Delivery Commitment Basis Adjustment
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: GovernmentMpfLoans-FvAdjustment
     gl_crs_code: SC2100
@@ -1025,8 +903,6 @@ rules:
       operator: eq
       right:
         literal: '15110'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: MpfLoans-LLR
     gl_crs_code: SC2200
@@ -1049,8 +925,6 @@ rules:
       operator: eq
       right:
         literal: '15200'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OvernightLoans-Interbank
     gl_crs_code: SC2400
@@ -1073,24 +947,18 @@ rules:
       operator: eq
       right:
         literal: '16000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_033_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0009
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_033_c3
       left:
         field: BookCode
       operator: ne
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-DerivativeCashCollateral-Cleared
     gl_crs_code: SC2500
@@ -1115,24 +983,18 @@ rules:
       operator: eq
       right:
         literal: '16000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_034_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0008
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_034_c3
       left:
         field: BookCode
       operator: ne
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-DerivativeCashCollateral-Uncleared
     gl_crs_code: SC2500
@@ -1157,24 +1019,18 @@ rules:
       operator: eq
       right:
         literal: '16000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_035_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0009
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_035_c3
       left:
         field: BookCode
       operator: eq
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-DerivativeCashCollateral-Cleared-Contra
     gl_crs_code: SC2500
@@ -1199,24 +1055,18 @@ rules:
       operator: eq
       right:
         literal: '16000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_036_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0008
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_036_c3
       left:
         field: BookCode
       operator: eq
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-DerivativeCashCollateral-Uncleared-Contra
     gl_crs_code: SC2500
@@ -1241,8 +1091,6 @@ rules:
       operator: eq
       right:
         literal: '16110'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-Derivatives
     gl_crs_code: SC2500
@@ -1265,8 +1113,6 @@ rules:
       operator: eq
       right:
         literal: '16120'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-Derivatives-Contra
     gl_crs_code: SC2500
@@ -1289,8 +1135,6 @@ rules:
       operator: eq
       right:
         literal: '16010'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-FederalFundsSold
     gl_crs_code: SC2500
@@ -1313,8 +1157,6 @@ rules:
       operator: eq
       right:
         literal: '16020'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-ReverseRepurchaseAgreement
     gl_crs_code: SC2500
@@ -1337,8 +1179,6 @@ rules:
       operator: eq
       right:
         literal: '16030'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-TradingSecurities
     gl_crs_code: SC2500
@@ -1361,8 +1201,6 @@ rules:
       operator: eq
       right:
         literal: '16040'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-AvailableForSaleSecurities
     gl_crs_code: SC2500
@@ -1385,8 +1223,6 @@ rules:
       operator: eq
       right:
         literal: '16050'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-HeldToMaturitySecurities
     gl_crs_code: SC2500
@@ -1409,16 +1245,12 @@ rules:
       operator: eq
       right:
         literal: '16060'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_044_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0001
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-OvernightAdvances
     gl_crs_code: SC2500
@@ -1442,16 +1274,12 @@ rules:
       operator: eq
       right:
         literal: '16060'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_045_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0002
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-TermAdvances
     gl_crs_code: SC2500
@@ -1477,16 +1305,12 @@ rules:
         literal:
         - '16070'
         - '16075'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_046_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0003
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-ConventionalMpfLoans
     gl_crs_code: SC2500
@@ -1511,16 +1335,12 @@ rules:
       operator: eq
       right:
         literal: '16070'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_047_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0004
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-GovernmentMpfLoans
     gl_crs_code: SC2500
@@ -1544,8 +1364,6 @@ rules:
       operator: eq
       right:
         literal: '16080'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-IBDDA-Interbank
     gl_crs_code: SC2500
@@ -1568,8 +1386,6 @@ rules:
       operator: eq
       right:
         literal: '16090'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-OtherAssets-IndustrialRevenueBond
     gl_crs_code: SC2500
@@ -1592,16 +1408,12 @@ rules:
       operator: eq
       right:
         literal: '16100'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_050_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: Citibank_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-IBDDA-CINY
     gl_crs_code: SC2500
@@ -1625,16 +1437,12 @@ rules:
       operator: eq
       right:
         literal: '16100'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_051_c2
       left:
         field: BankAccountID
       operator: starts_with
       right:
         literal: JPM_
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntRec-IBDDA-JPMC
     gl_crs_code: SC2500
@@ -1658,16 +1466,12 @@ rules:
       operator: eq
       right:
         literal: '17000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_052_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0027
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeAssets-AccruedInterest
     gl_crs_code: SC2700
@@ -1691,16 +1495,12 @@ rules:
       operator: eq
       right:
         literal: '17000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_053_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0026
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeAssets-CleanFairValue
     gl_crs_code: SC2700
@@ -1724,16 +1524,12 @@ rules:
       operator: eq
       right:
         literal: '17000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_054_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0031
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeAssets-Collateral
     gl_crs_code: SC2700
@@ -1757,16 +1553,12 @@ rules:
       operator: eq
       right:
         literal: '17000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_055_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0030
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeAssets-Contra
     gl_crs_code: SC2700
@@ -1790,16 +1582,12 @@ rules:
       operator: eq
       right:
         literal: '17000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_056_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0028
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeAssets-MpfCommitments
     gl_crs_code: SC2700
@@ -1823,16 +1611,12 @@ rules:
       operator: eq
       right:
         literal: '17000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_057_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0029
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeAssets-VariationMargin
     gl_crs_code: SC2700
@@ -1856,8 +1640,6 @@ rules:
       operator: starts_with
       right:
         literal: '180'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-PremisesAndEquipment
     gl_crs_code: SC2900
@@ -1880,8 +1662,6 @@ rules:
       operator: eq
       right:
         literal: '18300'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-IndustrialRevenueBonds
     gl_crs_code: SC2900
@@ -1904,8 +1684,6 @@ rules:
       operator: eq
       right:
         literal: '18310'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-InvestmentCashAndSafekeepingWires
     gl_crs_code: SC2900
@@ -1928,8 +1706,6 @@ rules:
       operator: eq
       right:
         literal: '18320'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-DebtClearingWires
     gl_crs_code: SC2900
@@ -1952,8 +1728,6 @@ rules:
       operator: eq
       right:
         literal: '18330'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-ServiceFeesReceivable
     gl_crs_code: SC2900
@@ -1976,8 +1750,6 @@ rules:
       operator: eq
       right:
         literal: '18340'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-InvestmentReceivableItems
     gl_crs_code: SC2900
@@ -2000,8 +1772,6 @@ rules:
       operator: eq
       right:
         literal: '18350'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-FHLBankSharedExpenseReceivables
     gl_crs_code: SC2900
@@ -2024,8 +1794,6 @@ rules:
       operator: eq
       right:
         literal: '18360'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-AhpRepaymentAgreementReceivable
     gl_crs_code: SC2900
@@ -2048,8 +1816,6 @@ rules:
       operator: eq
       right:
         literal: '18370'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-SbpaCommitmentFeesReceivable
     gl_crs_code: SC2900
@@ -2072,8 +1838,6 @@ rules:
       operator: eq
       right:
         literal: '18380'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-LettersOfCreditFeesReceivable
     gl_crs_code: SC2900
@@ -2096,8 +1860,6 @@ rules:
       operator: eq
       right:
         literal: '18390'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-OtherReceivables
     gl_crs_code: SC2900
@@ -2120,8 +1882,6 @@ rules:
       operator: eq
       right:
         literal: '18400'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-OtherDeposits
     gl_crs_code: SC2900
@@ -2144,8 +1904,6 @@ rules:
       operator: eq
       right:
         literal: '18405'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-DownPayments
     gl_crs_code: SC2900
@@ -2168,8 +1926,6 @@ rules:
       operator: eq
       right:
         literal: '18410'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-PrepaidExpenses-AccountsPayable
     gl_crs_code: SC2900
@@ -2192,8 +1948,6 @@ rules:
       operator: eq
       right:
         literal: '18415'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-PrepaidExpenses-EmployeeBenefits
     gl_crs_code: SC2900
@@ -2216,8 +1970,6 @@ rules:
       operator: eq
       right:
         literal: '18420'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-FeesPaidOnDerivatives
     gl_crs_code: SC2900
@@ -2240,8 +1992,6 @@ rules:
       operator: eq
       right:
         literal: '18440'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-RightOfUseAssets
     gl_crs_code: SC2900
@@ -2264,8 +2014,6 @@ rules:
       operator: eq
       right:
         literal: '18450'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-RetirementAnnuityAsset
     gl_crs_code: SC2900
@@ -2292,8 +2040,6 @@ rules:
         - '18210'
         - '18220'
         - '18110'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-InvestmentPrincipalReceivable
     gl_crs_code: SC2900
@@ -2319,8 +2065,6 @@ rules:
       operator: eq
       right:
         literal: '18430'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherAssets-REO
     gl_crs_code: SC2900
@@ -2343,8 +2087,6 @@ rules:
       operator: eq
       right:
         literal: '22100'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: RepurchaseAgreement
     gl_crs_code: SC4400
@@ -2367,24 +2109,18 @@ rules:
       operator: eq
       right:
         literal: '24020'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_079_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0037
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_079_c3
       left:
         field: BookCode
       operator: ne
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-DerivativeCashCollateral-Uncleared
     gl_crs_code: SC5200
@@ -2409,24 +2145,18 @@ rules:
       operator: eq
       right:
         literal: '24020'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_080_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0037
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_080_c3
       left:
         field: BookCode
       operator: eq
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-DerivativeCashCollateral-Uncleared-Contra
     gl_crs_code: SC5200
@@ -2451,8 +2181,6 @@ rules:
       operator: eq
       right:
         literal: '24090'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-Derivatives
     gl_crs_code: SC5200
@@ -2475,8 +2203,6 @@ rules:
       operator: eq
       right:
         literal: '24100'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-Derivatives-Contra
     gl_crs_code: SC5200
@@ -2499,16 +2225,12 @@ rules:
       operator: eq
       right:
         literal: '24000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_083_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0032
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-DemandMemberDeposits
     gl_crs_code: SC5200
@@ -2532,16 +2254,12 @@ rules:
       operator: eq
       right:
         literal: '24000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_084_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0033
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-OvernightMemberDeposits
     gl_crs_code: SC5200
@@ -2565,16 +2283,12 @@ rules:
       operator: eq
       right:
         literal: '24000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_085_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0034
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-TermMemberDeposits
     gl_crs_code: SC5200
@@ -2598,8 +2312,6 @@ rules:
       operator: eq
       right:
         literal: '24030'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-Bonds
     gl_crs_code: SC5200
@@ -2622,8 +2334,6 @@ rules:
       operator: eq
       right:
         literal: '24040'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-IBDDA-Interbank
     gl_crs_code: SC5200
@@ -2646,8 +2356,6 @@ rules:
       operator: eq
       right:
         literal: '24050'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-RepurchaseAgreement
     gl_crs_code: SC5200
@@ -2670,8 +2378,6 @@ rules:
       operator: eq
       right:
         literal: '24060'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-OvernightLoansFromCommercialBanks
     gl_crs_code: SC5200
@@ -2694,8 +2400,6 @@ rules:
       operator: eq
       right:
         literal: '24070'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-ShawneeCountyLease
     gl_crs_code: SC5200
@@ -2718,8 +2422,6 @@ rules:
       operator: eq
       right:
         literal: '24080'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: IntPay-MandatorilyRedeemableCapitalStock
     gl_crs_code: SC5200
@@ -2742,8 +2444,6 @@ rules:
       operator: starts_with
       right:
         literal: '25'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: AffordableHousingProgram
     gl_crs_code: SC5300
@@ -2766,8 +2466,6 @@ rules:
       operator: eq
       right:
         literal: '21100'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: ConsolidatedObligationBonds
     gl_crs_code: SC4800
@@ -2790,8 +2488,6 @@ rules:
       operator: eq
       right:
         literal: '21110'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: ConsolidatedObligationBonds-FvAdjustment
     gl_crs_code: SC4800
@@ -2814,8 +2510,6 @@ rules:
       operator: eq
       right:
         literal: '21000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: ConsolidatedObligationDiscountNotes
     gl_crs_code: SC4800
@@ -2838,8 +2532,6 @@ rules:
       operator: eq
       right:
         literal: '21010'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: ConsolidatedObligationDiscountNotes-FvAdjustment
     gl_crs_code: SC4800
@@ -2862,16 +2554,12 @@ rules:
       operator: eq
       right:
         literal: '20000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_097_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0032
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DemandMemberDeposits
     gl_crs_code: SC4000
@@ -2895,16 +2583,12 @@ rules:
       operator: eq
       right:
         literal: '20000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_098_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0033
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OvernightMemberDeposits
     gl_crs_code: SC4000
@@ -2928,16 +2612,12 @@ rules:
       operator: eq
       right:
         literal: '20000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_099_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0034
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: TermMemberDeposits
     gl_crs_code: SC4100
@@ -2961,16 +2641,12 @@ rules:
       operator: eq
       right:
         literal: '20000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_100_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0036
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherDeposits-MRAA
     gl_crs_code: SC4200
@@ -2994,24 +2670,18 @@ rules:
       operator: eq
       right:
         literal: '20010'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_101_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0037
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_101_c3
       left:
         field: BookCode
       operator: ne
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeCashCollateral-Uncleared
     gl_crs_code: SC4200
@@ -3036,24 +2706,18 @@ rules:
       operator: eq
       right:
         literal: '20010'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_102_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0037
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_102_c3
       left:
         field: BookCode
       operator: eq
       right:
         literal: Average Balance Adjustments
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeCashCollateral-Uncleared-Contra
     gl_crs_code: SC4200
@@ -3078,16 +2742,12 @@ rules:
       operator: eq
       right:
         literal: '26000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_103_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0026
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeLiabilities-CleanFairValue
     gl_crs_code: SC5500
@@ -3111,16 +2771,12 @@ rules:
       operator: eq
       right:
         literal: '26000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_104_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0027
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeLiabilities-AccruedInterest
     gl_crs_code: SC5500
@@ -3144,16 +2800,12 @@ rules:
       operator: eq
       right:
         literal: '26000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_105_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0028
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeLiabilities-MpfCommitments
     gl_crs_code: SC5500
@@ -3177,16 +2829,12 @@ rules:
       operator: eq
       right:
         literal: '26000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_106_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0029
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeLiabilities-VariationMargin
     gl_crs_code: SC5500
@@ -3210,16 +2858,12 @@ rules:
       operator: eq
       right:
         literal: '26000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_107_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0030
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeLiabilities-Contra
     gl_crs_code: SC5500
@@ -3243,16 +2887,12 @@ rules:
       operator: eq
       right:
         literal: '26000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
     - condition_id: gl_group_id_108_c2
       left:
         field: ProductID
       operator: eq
       right:
         literal: PRD0031
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: DerivativeLiabilities-Collateral
     gl_crs_code: SC5500
@@ -3276,8 +2916,6 @@ rules:
       operator: eq
       right:
         literal: '23000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: ManditorilyRedeemableCapitalStock
     gl_crs_code: SC8000
@@ -3300,8 +2938,6 @@ rules:
       operator: eq
       right:
         literal: '27100'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-SupplierPayable
     gl_crs_code: SC5700
@@ -3324,8 +2960,6 @@ rules:
       operator: eq
       right:
         literal: '27105'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-EmployeeExpensePayable
     gl_crs_code: SC5700
@@ -3348,8 +2982,6 @@ rules:
       operator: eq
       right:
         literal: '27110'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-AccruedPayroll
     gl_crs_code: SC5700
@@ -3372,8 +3004,6 @@ rules:
       operator: eq
       right:
         literal: '27115'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-CreditCardsPayable
     gl_crs_code: SC5700
@@ -3396,8 +3026,6 @@ rules:
       operator: eq
       right:
         literal: '27120'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-PayrollTaxLiabilities
     gl_crs_code: SC5700
@@ -3420,8 +3048,6 @@ rules:
       operator: eq
       right:
         literal: '27130'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-PayrollWitholdingLiabilities
     gl_crs_code: SC5700
@@ -3444,8 +3070,6 @@ rules:
       operator: eq
       right:
         literal: '27140'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-AccruedCompensation
     gl_crs_code: SC5700
@@ -3468,8 +3092,6 @@ rules:
       operator: eq
       right:
         literal: '27150'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-AccruedExpenses
     gl_crs_code: SC5700
@@ -3492,8 +3114,6 @@ rules:
       operator: eq
       right:
         literal: '27160'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-DueToPfis
     gl_crs_code: SC5700
@@ -3516,8 +3136,6 @@ rules:
       operator: eq
       right:
         literal: '27170'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-ReoClearing
     gl_crs_code: SC5700
@@ -3540,8 +3158,6 @@ rules:
       operator: eq
       right:
         literal: '27180'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-OtherLiabilities
     gl_crs_code: SC5700
@@ -3564,8 +3180,6 @@ rules:
       operator: eq
       right:
         literal: '27190'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-InvestmentPayableItems
     gl_crs_code: SC5700
@@ -3588,8 +3202,6 @@ rules:
       operator: eq
       right:
         literal: '27200'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-MiscPayable
     gl_crs_code: SC5700
@@ -3612,8 +3224,6 @@ rules:
       operator: eq
       right:
         literal: '27210'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-AhpRepaymentAgreementPayable
     gl_crs_code: SC5700
@@ -3636,8 +3246,6 @@ rules:
       operator: eq
       right:
         literal: '27220'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-AccruedPayable-RecNotInvoiced
     gl_crs_code: SC5700
@@ -3660,8 +3268,6 @@ rules:
       operator: eq
       right:
         literal: '27240'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-DividendsPayable
     gl_crs_code: SC5700
@@ -3684,8 +3290,6 @@ rules:
       operator: eq
       right:
         literal: '27250'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-DefinedBenefitPlan-BEP
     gl_crs_code: SC5700
@@ -3708,8 +3312,6 @@ rules:
       operator: eq
       right:
         literal: '27260'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-DefinedContributionPlan-BEP
     gl_crs_code: SC5700
@@ -3732,8 +3334,6 @@ rules:
       operator: eq
       right:
         literal: '27270'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-FeesRecOnDerivatives
     gl_crs_code: SC5700
@@ -3756,8 +3356,6 @@ rules:
       operator: eq
       right:
         literal: '27280'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-UnearnedLettersOfCreditFees
     gl_crs_code: SC5700
@@ -3780,8 +3378,6 @@ rules:
       operator: eq
       right:
         literal: '27290'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-LettersOfCreditFvAdjustment
     gl_crs_code: SC5700
@@ -3804,8 +3400,6 @@ rules:
       operator: eq
       right:
         literal: '27300'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-DeferredSbpaCommitmentFees
     gl_crs_code: SC5700
@@ -3828,8 +3422,6 @@ rules:
       operator: eq
       right:
         literal: '27310'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-ShawneeCountyLease
     gl_crs_code: SC5700
@@ -3852,8 +3444,6 @@ rules:
       operator: eq
       right:
         literal: '27320'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-LeaseLiability
     gl_crs_code: SC5700
@@ -3876,8 +3466,6 @@ rules:
       operator: eq
       right:
         literal: '27330'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-RetirementAnnuityLiability
     gl_crs_code: SC5700
@@ -3900,8 +3488,6 @@ rules:
       operator: eq
       right:
         literal: '28000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-OpenDeliveryCommitments
     gl_crs_code: SC5700
@@ -3924,8 +3510,6 @@ rules:
       operator: eq
       right:
         literal: '28010'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-OpenDeliveryCommitments-Contra
     gl_crs_code: SC5700
@@ -3948,8 +3532,6 @@ rules:
       operator: eq
       right:
         literal: '27010'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-TnsInvestments-AfsSecurities
     gl_crs_code: SC5700
@@ -3972,8 +3554,6 @@ rules:
       operator: eq
       right:
         literal: '29000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OtherLiabilities-VoluntaryHousingProgramContPayable
     gl_crs_code: SC5700
@@ -3996,8 +3576,6 @@ rules:
       operator: eq
       right:
         literal: '22200'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OvernightLoansFromCommercialBanks
     gl_crs_code: SC4600
@@ -4020,8 +3598,6 @@ rules:
       operator: eq
       right:
         literal: '22000'
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: OvernightLoans-Interbank
     gl_crs_code: SC4500
@@ -4044,8 +3620,6 @@ rules:
       operator: eq
       right:
         literal: true
-      null_input_mode: propagate
-      null_result_mode: 'null'
   assign:
     gl_group_id: Unmatched
     gl_crs_code: null
