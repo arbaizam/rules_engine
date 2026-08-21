@@ -1,7 +1,6 @@
 ruleset_id: gl_group_ruleset
 ruleset_name: GL Group Mapping
 version: '1'
-status: published
 owner: Rules Team
 owner_department: ALM Engineering
 description: Canonical YAML translation of GL grouping rules with structured derivation trace assignments.

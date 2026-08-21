@@ -26,7 +26,6 @@ from rules_engine.enums import (
     LogicalOperator,
     ObjectType,
     OperandKind,
-    RulesetStatus,
     ValidationSeverity,
 )
 
@@ -282,7 +281,6 @@ class Ruleset:
     ruleset_id: str
     ruleset_name: str
     version: str
-    status: RulesetStatus
     rules: tuple[Rule, ...]
     description: str | None = None
     owner: str | None = None
@@ -298,8 +296,6 @@ class RulesetVersionRow:
     ruleset_name: str
     version: str
     status: str
-    effective_start_date: str
-    effective_end_date: str
     description: str | None
     payload_json: str
     content_hash: str

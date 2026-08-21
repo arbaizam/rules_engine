@@ -3,11 +3,9 @@ from decimal import Decimal
 import pytest
 from pyspark.sql import types as T
 
-from rules_engine.change_control import RulesetDiffer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.exporter_yaml import YamlRulesetExporter
-from rules_engine.normalizer import RulesetNormalizer
 from rules_engine.publish import PublishService
 from rules_engine.registry import FunctionRegistry
 from rules_engine.runtime import SparkRowEvaluator
@@ -140,7 +138,6 @@ def test_expected_case_failure_blocks_publish_before_repository_write():
     service = PublishService(
         repository,
         RulesetValidator(FunctionRegistry()),
-        RulesetNormalizer(),
         RulesetTester(FunctionRegistry()),
     )
 
@@ -159,7 +156,6 @@ def test_passing_expected_cases_publish_normally():
     service = PublishService(
         repository,
         RulesetValidator(FunctionRegistry()),
-        RulesetNormalizer(),
         RulesetTester(FunctionRegistry()),
     )
 
@@ -199,7 +195,6 @@ def test_expected_case_rejects_misspelled_assignment_keys():
     publish_service = PublishService(
         repository,
         RulesetValidator(FunctionRegistry()),
-        RulesetNormalizer(),
         RulesetTester(FunctionRegistry()),
     )
     with pytest.raises(
@@ -221,112 +216,6 @@ def test_reserved_result_name_can_be_asserted_as_explicit_assignment():
 
     assert RulesetValidator(FunctionRegistry()).validate(ruleset).passed
     assert RulesetTester(FunctionRegistry()).test(ruleset).passed
-
-
-# Coverage diagnostics
-
-
-def test_closest_rule_diagnostic_reports_failed_condition_ids():
-    ruleset = YamlRulesetCompiler().compile_payload(_payload())
-    evaluator = SparkRowEvaluator(NoOpRepository(), FunctionRegistry())
-
-    diagnostic = evaluator.closest_rule_diagnostic(ruleset, {"fico": 650})
-
-    assert diagnostic == {
-        "closest_rule_id": "prime",
-        "closest_rule_name": "Prime loans",
-        "closest_rule_score": 0.0,
-        "passed_condition_count": 0,
-        "condition_count": 1,
-        "failed_condition_ids": ["fico-prime"],
-    }
-
-
-# Semantic change control
-
-
-def test_semantic_diff_highlights_order_logic_and_assignment_changes():
-    baseline_payload = _payload()
-    candidate_payload = _payload(version="2")
-    candidate_payload["rules"][0]["rule_order"] = 2
-    candidate_payload["rules"][1]["rule_order"] = 1
-    candidate_payload["rules"][0]["when"]["all"][0]["right"] = {"literal": 740}
-    candidate_payload["rules"][0]["assign"]["bucket"] = "super-prime"
-    baseline = YamlRulesetCompiler().compile_payload(baseline_payload)
-    candidate = YamlRulesetCompiler().compile_payload(candidate_payload)
-
-    result = RulesetDiffer().diff(baseline, candidate)
-    prime = next(item for item in result.rule_diffs if item.rule_id == "prime")
-    fields = {change.field for change in prime.changes}
-
-    assert {"rule_order", "when", "assign"} <= fields
-    assert "fico >= 720" in result.to_text()
-    assert "fico >= 740" in result.to_text()
-    assert "bucket = 'super-prime'" in result.to_text()
-
-
-def test_semantic_diff_detects_operand_default_and_identity_changes():
-    baseline_payload = _payload()
-    candidate_payload = _payload(version="2")
-    candidate_condition = candidate_payload["rules"][0]["when"]["all"][0]
-    candidate_condition["condition_id"] = "fico-prime-v2"
-    candidate_condition["left"]["default_if_null"] = 720
-    baseline = YamlRulesetCompiler().compile_payload(baseline_payload)
-    candidate = YamlRulesetCompiler().compile_payload(candidate_payload)
-
-    result = RulesetDiffer().diff(baseline, candidate)
-    prime = next(item for item in result.rule_diffs if item.rule_id == "prime")
-    fields = {change.field for change in prime.changes}
-
-    assert "condition[fico-prime]" in fields
-    assert "condition[fico-prime-v2]" in fields
-    assert result.baseline_content_hash == DeltaRowSerializer().content_hash(
-        baseline
-    )
-    assert result.candidate_content_hash == DeltaRowSerializer().content_hash(
-        candidate
-    )
-    assert "default_if_null" in result.to_text()
-
-
-def test_semantic_diff_renders_only_changed_condition_leaves():
-    baseline_payload = _payload()
-    candidate_payload = _payload(version="2")
-    candidate_payload["rules"][0]["when"]["all"][0]["left"][
-        "default_if_null"
-    ] = 0
-    baseline = YamlRulesetCompiler().compile_payload(baseline_payload)
-    candidate = YamlRulesetCompiler().compile_payload(candidate_payload)
-
-    result = RulesetDiffer().diff(baseline, candidate)
-    prime = next(item for item in result.rule_diffs if item.rule_id == "prime")
-    condition_changes = [
-        change
-        for change in prime.changes
-        if change.field.startswith("condition[fico-prime]")
-    ]
-
-    assert [change.field for change in condition_changes] == [
-        "condition[fico-prime].left.default_if_null"
-    ]
-    assert (
-        "condition[fico-prime].left.default_if_null: None ->"
-        in result.to_text()
-    )
-
-
-def test_semantic_diff_reports_expected_cases_individually_by_name():
-    baseline_payload = _payload()
-    candidate_payload = _payload(version="2")
-    candidate_payload["expect"][0]["then"]["bucket"] = "changed"
-    baseline = YamlRulesetCompiler().compile_payload(baseline_payload)
-    candidate = YamlRulesetCompiler().compile_payload(candidate_payload)
-
-    result = RulesetDiffer().diff(baseline, candidate)
-    fields = {change.field for change in result.metadata_changes}
-
-    assert "expect[prime example].then" in fields
-    assert "expected_cases" not in fields
 
 
 # Audit contracts and production/publish differential behavior

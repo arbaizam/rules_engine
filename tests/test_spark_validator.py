@@ -22,7 +22,6 @@ def test_spark_validator_allows_error_on_null_for_udf_row_path():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "published",
             "owner": "Rules Team",
             "owner_department": "ALM Engineering",
             "rules": [
@@ -57,7 +56,6 @@ def _payload(assign, *, condition_field="status"):
         "ruleset_id": "rs1",
         "ruleset_name": "Ruleset",
         "version": "1",
-        "status": "published",
         "owner": "Rules Team",
         "owner_department": "ALM Engineering",
         "rules": [

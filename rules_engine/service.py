@@ -9,11 +9,9 @@ from pathlib import Path
 from pyspark.sql import DataFrame, SparkSession
 
 from rules_engine.analytics import CoverageReport, RulesetCoverageAnalyzer
-from rules_engine.change_control import RulesetDiff, RulesetDiffer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.human_readable import HumanReadableRulesetFormatter
 from rules_engine.models import FunctionRegistryRow, Ruleset
-from rules_engine.normalizer import RulesetNormalizer
 from rules_engine.publish import PublishService
 from rules_engine.registry import FunctionRegistry
 from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository
@@ -30,8 +28,8 @@ class RulesEngineService:
     """
     Convenience facade for package-owned Spark/Delta rules engine workflows.
 
-    The service wires the standard repository, registry, validator, normalizer,
-    publish service, and Spark runtime. It does not own external logging,
+    The service wires the standard repository, registry, validator, publish
+    service, and Spark runtime. It does not own external logging,
     archive/drop-zone orchestration, or implicit table creation.
     """
 
@@ -40,7 +38,6 @@ class RulesEngineService:
         *,
         repository: SparkDeltaRulesetRepository,
         registry: FunctionRegistry,
-        normalizer: RulesetNormalizer | None = None,
         validator: SparkRulesetCompatibilityValidator | None = None,
     ) -> None:
         """
@@ -48,13 +45,11 @@ class RulesEngineService:
         """
         self.repository = repository
         self.registry = registry
-        self.normalizer = normalizer or RulesetNormalizer()
         self.validator = validator or SparkRulesetCompatibilityValidator(registry)
         self.tester = RulesetTester(registry)
         self.publish_service = PublishService(
             repository=repository,
             validator=self.validator,
-            normalizer=self.normalizer,
             tester=self.tester,
         )
         self.runtime = SparkRulesEngineRuntime(
@@ -64,8 +59,7 @@ class RulesEngineService:
         )
         self.compiler = YamlRulesetCompiler()
         self.rule_formatter = HumanReadableRulesetFormatter()
-        self.ruleset_differ = RulesetDiffer()
-        self.coverage_analyzer = RulesetCoverageAnalyzer(self.runtime, registry)
+        self.coverage_analyzer = RulesetCoverageAnalyzer(self.runtime)
 
     @classmethod
     def from_schema(
@@ -151,17 +145,13 @@ class RulesEngineService:
         ruleset: Ruleset,
         *,
         published_by: str | None = None,
-        effective_start_date: str | None = None,
-        effective_end_date: str | None = None,
     ) -> None:
         """
-        Validate, normalize, and persist a published ruleset.
+        Validate and persist a published ruleset.
         """
         self.publish_service.publish(
             ruleset,
             published_by=published_by,
-            effective_start_date=effective_start_date,
-            effective_end_date=effective_end_date,
         )
 
     def test_ruleset(self, ruleset: Ruleset) -> RulesetTestResult:
@@ -173,8 +163,6 @@ class RulesEngineService:
         yaml_text: str,
         *,
         published_by: str | None = None,
-        effective_start_date: str | None = None,
-        effective_end_date: str | None = None,
     ) -> Ruleset:
         """
         Compile YAML text, publish it, and return the compiled ruleset.
@@ -183,8 +171,6 @@ class RulesEngineService:
         self.publish(
             ruleset,
             published_by=published_by,
-            effective_start_date=effective_start_date,
-            effective_end_date=effective_end_date,
         )
         return ruleset
 
@@ -193,8 +179,6 @@ class RulesEngineService:
         path: str | Path,
         *,
         published_by: str | None = None,
-        effective_start_date: str | None = None,
-        effective_end_date: str | None = None,
     ) -> Ruleset:
         """
         Compile a YAML file, publish it, and return the compiled ruleset.
@@ -203,8 +187,6 @@ class RulesEngineService:
         self.publish(
             ruleset,
             published_by=published_by,
-            effective_start_date=effective_start_date,
-            effective_end_date=effective_end_date,
         )
         return ruleset
 
@@ -229,26 +211,6 @@ class RulesEngineService:
                 raise ValueError("ruleset or ruleset_name is required.")
             ruleset = self.load_published(ruleset_name, version)
         return self.rule_formatter.describe_rules(ruleset)
-
-    def diff_rulesets(
-        self,
-        baseline: Ruleset,
-        candidate: Ruleset,
-    ) -> RulesetDiff:
-        """Compare two supplied rulesets using author-facing rule syntax."""
-        return self.ruleset_differ.diff(baseline, candidate)
-
-    def diff_versions(
-        self,
-        ruleset_name: str,
-        baseline_version: str,
-        candidate_version: str,
-    ) -> RulesetDiff:
-        """Load and compare two published versions of the same ruleset."""
-        return self.diff_rulesets(
-            self.load_published(ruleset_name, baseline_version),
-            self.load_published(ruleset_name, candidate_version),
-        )
 
     def evaluate_dataframe(
         self,
@@ -288,11 +250,10 @@ class RulesEngineService:
         broad_match_threshold: float = 0.40,
         column_prefix: str = "rules_engine_coverage",
     ) -> CoverageReport:
-        """Report coverage and reevaluated closest-rule diagnostics.
+        """Report match coverage and clean no-match rows.
 
         Computing aggregate counts starts one Spark action. The returned
-        no-match DataFrame is lazy; materializing it reevaluates the rules and
-        invokes custom condition functions again for closest-rule scoring.
+        no-match DataFrame is a filtered view of that evaluation.
         """
         if ruleset is None:
             if ruleset_name is None:
@@ -311,7 +272,6 @@ class RulesEngineService:
         version: str,
         *,
         retired_by: str | None = None,
-        effective_end_date: str | None = None,
     ) -> None:
         """
         Retire a persisted ruleset version.
@@ -320,5 +280,4 @@ class RulesEngineService:
             ruleset_id,
             version,
             retired_by=retired_by,
-            effective_end_date=effective_end_date,
         )

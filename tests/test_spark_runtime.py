@@ -70,7 +70,6 @@ def _compile(condition, assign=None):
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "published",
             "owner": "Engineering",
             "owner_department": "Technology",
             "rules": [
@@ -149,7 +148,6 @@ def test_spark_runtime_evaluates_row_rule(spark):
             "ruleset_id": "multi",
             "ruleset_name": "Multi-match",
             "version": "1",
-            "status": "published",
             "owner": "Engineering",
             "owner_department": "Technology",
             "rules": [
@@ -446,7 +444,6 @@ def test_spark_runtime_evaluates_literal_only_rule_without_source_dependencies(s
             "ruleset_id": "literal_only",
             "ruleset_name": "Literal only",
             "version": "1",
-            "status": "published",
             "owner": "Engineering",
             "owner_department": "Technology",
             "rules": [
@@ -913,8 +910,8 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
     assert compact_row["rules_engine_engine_version"]
 
 
-def test_coverage_report_finds_dead_broad_and_closest_rules(spark):
-    """Coverage aggregates matches and diagnoses clean no-match rows."""
+def test_coverage_report_finds_dead_broad_and_clean_no_match_rows(spark):
+    """Coverage aggregates matches and returns clean no-match rows."""
     ruleset = YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "coverage",
@@ -979,7 +976,7 @@ def test_coverage_report_finds_dead_broad_and_closest_rules(spark):
     original_ansi = spark.conf.get("spark.sql.ansi.enabled")
     spark.conf.set("spark.sql.ansi.enabled", "true")
     try:
-        report = RulesetCoverageAnalyzer(runtime, registry).analyze(
+        report = RulesetCoverageAnalyzer(runtime).analyze(
             spark.createDataFrame(
                 [(1, 740), (2, 690), (3, 600)],
                 ["loan_id", "fico"],
@@ -997,5 +994,3 @@ def test_coverage_report_finds_dead_broad_and_closest_rules(spark):
     assert report.dead_rule_ids == ("impossible",)
     assert report.suspiciously_broad_rule_ids == ("near",)
     assert no_match["loan_id"] == 3
-    assert no_match["rules_engine_coverage_closest_rule_id"] == "prime"
-    assert no_match["rules_engine_coverage_failed_condition_ids"] == ["prime-fico"]

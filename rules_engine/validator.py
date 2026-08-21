@@ -2,13 +2,11 @@
 Ruleset validator.
 
 Validation is intentionally explicit and conservative. The validator enforces
-the semantic contract shared by YAML and code-based authoring before metadata
-can be published.
+the semantic contract on compiled YAML metadata before publication.
 """
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
@@ -344,19 +342,6 @@ class RulesetValidator:
                         "known_target_fields": sorted(assignment_targets),
                     },
                 )
-            self._validate_finite_decimals(
-                expectation.given,
-                result,
-                ObjectType.EXPECTED_CASE,
-                object_id,
-            )
-            self._validate_finite_decimals(
-                expectation.then,
-                result,
-                ObjectType.EXPECTED_CASE,
-                object_id,
-            )
-
     def _validate_rule(
         self,
         rule: Rule,
@@ -497,15 +482,7 @@ class RulesetValidator:
         """
         Validate one condition's tolerance, operands, and operator shape.
         """
-        if not condition.tolerance_abs.is_finite():
-            self._add(
-                result,
-                "TOLERANCE_FINITE_REQUIRED",
-                "tolerance_abs must be finite.",
-                ObjectType.CONDITION,
-                condition.condition_id,
-            )
-        elif condition.tolerance_abs < Decimal(0):
+        if condition.tolerance_abs < Decimal(0):
             self._add(
                 result,
                 "TOLERANCE_NEGATIVE",
@@ -643,21 +620,14 @@ class RulesetValidator:
                     object_type,
                     object_id,
                 )
-            else:
-                self._validate_finite_decimals(
-                    default.value,
+            elif default.default_if_null is not None:
+                self._add(
                     result,
+                    "DEFAULT_IF_NULL_NESTED_FORBIDDEN",
+                    "default_if_null cannot define another default_if_null.",
                     object_type,
                     object_id,
                 )
-                if default.default_if_null is not None:
-                    self._add(
-                        result,
-                        "DEFAULT_IF_NULL_NESTED_FORBIDDEN",
-                        "default_if_null cannot define another default_if_null.",
-                        object_type,
-                        object_id,
-                    )
         if isinstance(operand, FieldOperand):
             if not operand.field_name:
                 self._add(
@@ -677,12 +647,7 @@ class RulesetValidator:
                     object_id,
                 )
         elif isinstance(operand, LiteralOperand):
-            self._validate_finite_decimals(
-                operand.value,
-                result,
-                object_type,
-                object_id,
-            )
+            pass
         elif isinstance(operand, CustomFunctionOperand):
             self._validate_custom_function(operand, result, object_id, in_assignment=in_assignment)
         else:
@@ -773,55 +738,6 @@ class RulesetValidator:
                     f"{object_id}.{operand.function_name}.{arg_name}",
                     in_assignment=in_assignment,
                 )
-            else:
-                self._validate_finite_decimals(
-                    arg_value,
-                    result,
-                    object_type,
-                    f"{object_id}.{operand.function_name}.{arg_name}",
-                )
-
-    def _validate_finite_decimals(
-        self,
-        value: Any,
-        result: ValidationResult,
-        object_type: ObjectType,
-        object_id: str,
-    ) -> None:
-        """Reject non-finite numeric values in code-authored literal trees."""
-        if isinstance(value, Decimal):
-            if not value.is_finite():
-                self._add(
-                    result,
-                    "LITERAL_DECIMAL_FINITE_REQUIRED",
-                    "Decimal literal values must be finite.",
-                    object_type,
-                    object_id,
-                )
-            return
-        if isinstance(value, float):
-            if not math.isfinite(value):
-                self._add(
-                    result,
-                    "LITERAL_FLOAT_FINITE_REQUIRED",
-                    "Floating-point literal values must be finite.",
-                    object_type,
-                    object_id,
-                )
-            return
-        if isinstance(value, dict):
-            values = value.values()
-        elif isinstance(value, (list, tuple, set)):
-            values = value
-        else:
-            return
-        for item in values:
-            self._validate_finite_decimals(
-                item,
-                result,
-                object_type,
-                object_id,
-            )
 
     def _add(
         self,

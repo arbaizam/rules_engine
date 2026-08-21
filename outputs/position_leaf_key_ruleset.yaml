@@ -1,7 +1,6 @@
 ruleset_id: position_leaf_key_ruleset
 ruleset_name: Position Leaf Key Mapping
 version: '1'
-status: published
 owner: Rules Team
 owner_department: ALM Engineering
 description: Canonical YAML translation of position leaf_key mapping from df_positions.

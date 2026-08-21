@@ -1,7 +1,6 @@
 ruleset_id: leaf_key_ruleset
 ruleset_name: Leaf Key Mapping
 version: '1'
-status: published
 owner: Rules Team
 owner_department: ALM Engineering
 description: Canonical YAML translation of leaf_key mapping from gl_group_id and AccountType.

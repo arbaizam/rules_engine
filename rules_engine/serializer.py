@@ -7,11 +7,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.enums import RulesetStatus
 from rules_engine.exporter_yaml import YamlRulesetExporter
 from rules_engine.models import (
     AssignedOperand,
@@ -33,8 +34,6 @@ class DeltaRowSerializer:
     Convert canonical ruleset models to and from persisted row objects.
     """
 
-    DEFAULT_EFFECTIVE_END_DATE = "2999-12-31"
-
     def serialize_ruleset_version(
         self,
         ruleset: Ruleset,
@@ -43,25 +42,19 @@ class DeltaRowSerializer:
         published_at: str | None = None,
         retired_by: str | None = None,
         retired_at: str | None = None,
-        effective_start_date: str | None = None,
-        effective_end_date: str | None = None,
     ) -> RulesetVersionRow:
         """
         Serialize one ruleset version to the authoritative Delta row shape.
 
-        The payload intentionally excludes lifecycle status and effective
-        dates. The table row metadata is authoritative, which lets publish and
-        retire update lifecycle fields without rewriting rule content.
+        Lifecycle status belongs to the table row rather than authored rule
+        content, so retirement never rewrites the canonical payload.
         """
         payload_json = self._payload_json(ruleset)
         return RulesetVersionRow(
             ruleset_id=ruleset.ruleset_id,
             ruleset_name=ruleset.ruleset_name,
             version=ruleset.version,
-            status=ruleset.status.value,
-            effective_start_date=effective_start_date
-            or self._date_from_timestamp(published_at),
-            effective_end_date=effective_end_date or self.DEFAULT_EFFECTIVE_END_DATE,
+            status=RulesetStatus.PUBLISHED.value,
             description=ruleset.description,
             payload_json=payload_json,
             content_hash=self.content_hash_from_payload_json(payload_json),
@@ -84,7 +77,6 @@ class DeltaRowSerializer:
         payload = _decode_json_types(
             json.loads(row.payload_json, parse_float=Decimal)
         )
-        payload["status"] = row.status
         return YamlRulesetCompiler().compile_payload(payload)
 
     def content_hash(self, ruleset: Ruleset) -> str:
@@ -168,16 +160,7 @@ class DeltaRowSerializer:
         Serialize the canonical authoring payload used for persistence.
         """
         payload = YamlRulesetExporter().export_payload(ruleset)
-        payload.pop("status", None)
         return _canonical_json_dumps(payload)
-
-    def _date_from_timestamp(self, value: str | None) -> str:
-        """
-        Return a non-null effective date from a timestamp-like string.
-        """
-        if value:
-            return value[:10]
-        return datetime.now(timezone.utc).date().isoformat()
 
 
 def _canonical_json_dumps(value: Any) -> str:

@@ -68,8 +68,6 @@ class RulesetRepository(Protocol):
         ruleset: Ruleset,
         *,
         published_by: str | None = None,
-        effective_start_date: str | None = None,
-        effective_end_date: str | None = None,
     ) -> None:
         """Persist published metadata."""
 
@@ -79,7 +77,6 @@ class RulesetRepository(Protocol):
         version: str,
         *,
         retired_by: str | None = None,
-        effective_end_date: str | None = None,
     ) -> None:
         """Mark a persisted ruleset version as retired."""
 
@@ -113,8 +110,6 @@ class SparkDeltaRulesetRepository:
                 StructField("ruleset_name", StringType(), False),
                 StructField("version", StringType(), False),
                 StructField("status", StringType(), False),
-                StructField("effective_start_date", StringType(), False),
-                StructField("effective_end_date", StringType(), False),
                 StructField("description", StringType(), True),
                 StructField("payload_json", StringType(), False),
                 StructField("content_hash", StringType(), False),
@@ -201,8 +196,6 @@ class SparkDeltaRulesetRepository:
             "ruleset_name STRING NOT NULL",
             "version STRING NOT NULL",
             "status STRING NOT NULL",
-            "effective_start_date STRING NOT NULL",
-            "effective_end_date STRING NOT NULL",
             "description STRING",
             "payload_json STRING NOT NULL",
             "content_hash STRING NOT NULL",
@@ -237,8 +230,6 @@ class SparkDeltaRulesetRepository:
         ruleset: Ruleset,
         *,
         published_by: str | None = None,
-        effective_start_date: str | None = None,
-        effective_end_date: str | None = None,
     ) -> None:
         """
         Persist a published ruleset version.
@@ -267,8 +258,6 @@ class SparkDeltaRulesetRepository:
             ruleset,
             published_by=self._actor_or_system(published_by),
             published_at=self._utc_now(),
-            effective_start_date=effective_start_date,
-            effective_end_date=effective_end_date,
         )
         self._write_rows(
             self.table_names.ruleset_versions,
@@ -288,7 +277,6 @@ class SparkDeltaRulesetRepository:
         version: str,
         *,
         retired_by: str | None = None,
-        effective_end_date: str | None = None,
     ) -> None:
         """
         Mark a persisted ruleset version as retired.
@@ -301,7 +289,6 @@ class SparkDeltaRulesetRepository:
             RulesetStatus.RETIRED,
             retired_by=self._actor_or_system(retired_by),
             retired_at=retired_at,
-            effective_end_date=effective_end_date or self._date_from_timestamp(retired_at),
         )
 
     def load_published(self, ruleset_name: str, version: str | None = None) -> Ruleset:
@@ -428,7 +415,6 @@ class SparkDeltaRulesetRepository:
         *,
         retired_by: str | None = None,
         retired_at: str | None = None,
-        effective_end_date: str | None = None,
     ) -> None:
         """
         Update lifecycle status fields for one version.
@@ -449,7 +435,6 @@ class SparkDeltaRulesetRepository:
         if status is RulesetStatus.RETIRED:
             assignments.append(f"retired_by = {self._sql_nullable(retired_by)}")
             assignments.append(f"retired_at = {self._sql_nullable(retired_at)}")
-            assignments.append(f"effective_end_date = {self._sql_nullable(effective_end_date)}")
 
         self.spark.sql(
             f"""
@@ -560,12 +545,6 @@ class SparkDeltaRulesetRepository:
             return "system"
         stripped = value.strip()
         return stripped or "system"
-
-    def _date_from_timestamp(self, value: str) -> str:
-        """
-        Return the ISO date prefix from a timestamp-like string.
-        """
-        return value[:10]
 
     def _function_to_spark_dict(self, row: FunctionRegistryRow) -> dict:
         """

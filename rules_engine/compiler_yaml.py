@@ -2,8 +2,7 @@
 YAML compiler for canonical ruleset metadata.
 
 The compiler performs shape checks and enum parsing. Semantic checks remain in
-``validator.py`` so that YAML and code-based authoring share one validation
-gate before publishing.
+``validator.py`` so compiled rulesets pass one validation gate before publishing.
 """
 
 from __future__ import annotations
@@ -18,11 +17,7 @@ from typing import Any
 import yaml
 from yaml.constructor import ConstructorError
 
-from rules_engine.enums import (
-    ComparisonOperator,
-    LogicalOperator,
-    RulesetStatus,
-)
+from rules_engine.enums import ComparisonOperator, LogicalOperator
 from rules_engine.exceptions import CompilationError
 from rules_engine.models import (
     AssignedOperand,
@@ -180,7 +175,6 @@ class YamlRulesetCompiler:
                 "ruleset_id",
                 "ruleset_name",
                 "version",
-                "status",
                 "description",
                 "owner",
                 "owner_department",
@@ -193,10 +187,6 @@ class YamlRulesetCompiler:
         ruleset_id = self._require_str(payload, "ruleset_id")
         ruleset_name = self._require_str(payload, "ruleset_name")
         version = self._require_str(payload, "version")
-        status_value = payload.get("status", RulesetStatus.PUBLISHED.value)
-        if not isinstance(status_value, str) or not status_value:
-            raise CompilationError("status must be a non-empty string when provided.")
-        status = self._enum(RulesetStatus, status_value, "status")
 
         raw_rules = payload.get("rules")
         if not isinstance(raw_rules, list):
@@ -217,7 +207,6 @@ class YamlRulesetCompiler:
             ruleset_id=ruleset_id,
             ruleset_name=ruleset_name,
             version=version,
-            status=status,
             rules=rules,
             description=self._optional_str(payload, "description"),
             owner=self._optional_str(payload, "owner"),

@@ -46,7 +46,6 @@ def _compile(condition, assign=None):
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "published",
             "rules": [
                 {
                     "rule_id": "r1",
@@ -66,7 +65,6 @@ def _compile_when(when, assign=None):
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "published",
             "rules": [
                 {
                     "rule_id": "r1",
@@ -634,7 +632,6 @@ def test_required_source_columns_returns_only_active_runtime_dependencies():
             "ruleset_id": "dependencies",
             "ruleset_name": "Dependencies",
             "version": "1",
-            "status": "published",
             "rules": [
                 {
                     "rule_id": "later",
@@ -805,7 +802,6 @@ def test_spark_row_evaluator_assignment_struct_includes_unassigned_fields_as_nul
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "published",
             "rules": [
                 {
                     "rule_id": "a_rule",
@@ -1086,7 +1082,6 @@ def test_spark_assignment_schema_ignores_inactive_rules():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "published",
             "rules": [
                 {
                     "rule_id": "active_struct",
@@ -1158,7 +1153,6 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "published",
             "rules": [
                 {
                     "rule_id": "first_match",
@@ -1456,7 +1450,6 @@ def test_full_audit_evaluates_each_condition_once_and_emits_only_matched_traces(
             "ruleset_id": "trace_efficiency",
             "ruleset_name": "Trace Efficiency",
             "version": "1",
-            "status": "published",
             "rules": [
                 {
                     "rule_id": "loser",
@@ -1545,7 +1538,6 @@ def test_losing_custom_condition_is_invoked_once_during_full_audit():
             "ruleset_id": "custom_call_count",
             "ruleset_name": "Custom Call Count",
             "version": "1",
-            "status": "published",
             "rules": [
                 {
                     "rule_id": "custom_loser",
@@ -1705,7 +1697,6 @@ def test_spark_assignment_schema_rejects_incompatible_same_target_assignments():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "published",
             "rules": [
                 {
                     "rule_id": "string_shape",

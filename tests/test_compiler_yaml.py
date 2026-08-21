@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.enums import ComparisonOperator, RulesetStatus
+from rules_engine.enums import ComparisonOperator
 from rules_engine.exceptions import CompilationError
 from rules_engine.models import AssignedOperand
 
@@ -100,7 +100,6 @@ def test_valid_simple_row_rule_compiles_and_validates():
     )
 
     condition = ruleset.rules[0].root_group.conditions[0]
-    assert ruleset.status is RulesetStatus.PUBLISHED
     assert ruleset.owner == "Rules Team"
     assert ruleset.owner_department == "ALM Engineering"
     assert condition.operator is ComparisonOperator.EQ
@@ -421,7 +420,6 @@ def test_canonical_string_operators_compile():
         "ruleset_id": "rs1",
         "ruleset_name": "Ruleset",
         "version": "1",
-        "status": "published",
         "rules": [
             {
                 "rule_name": "Strings",

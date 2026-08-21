@@ -93,7 +93,6 @@ def _ruleset(*, ruleset_id="rs1", ruleset_name="Ruleset", version="1"):
             "ruleset_id": ruleset_id,
             "ruleset_name": ruleset_name,
             "version": version,
-            "status": "published",
             "owner": "Rules Team",
             "owner_department": "ALM Engineering",
             "rules": [
@@ -162,28 +161,6 @@ def test_save_published_allows_distinct_versions_for_same_ruleset_name():
     assert saved_versions == ["2"]
 
 
-def test_save_published_persists_effective_dates():
-    """
-    What: Persists explicit effective dates on the ruleset version row.
-    Why: Effective dating is queryable lifecycle metadata for published versions.
-    Fails when: Publish drops effective-date overrides before serialization.
-    """
-    repo = _repository()
-    saved_rows = []
-    repo._existing_ruleset_status = lambda ruleset_name, version: None
-    repo._utc_now = lambda: "2026-04-26T12:00:00+00:00"
-    repo._write_rows = lambda table_name, rows, schema: saved_rows.extend(rows)
-
-    repo.save_published(
-        _ruleset(ruleset_name="Ruleset", version="2"),
-        effective_start_date="2026-05-01",
-        effective_end_date="2026-12-31",
-    )
-
-    assert saved_rows[0]["effective_start_date"] == "2026-05-01"
-    assert saved_rows[0]["effective_end_date"] == "2026-12-31"
-
-
 def test_load_published_rejects_duplicate_rows_for_explicit_version(monkeypatch):
     """Pinned loads fail loudly when the immutable version key is not unique."""
     monkeypatch.setattr(
@@ -206,11 +183,11 @@ def test_load_published_rejects_duplicate_rows_for_explicit_version(monkeypatch)
         repo.load_published("Ruleset", version="1")
 
 
-def test_retire_closes_effective_window():
+def test_retire_records_lifecycle_state_and_actor():
     """
-    What: Retirement updates lifecycle status and effective_end_date.
-    Why: Retired versions should retain the date their effective window closed.
-    Fails when: Retirement leaves effective_end_date open-ended.
+    What: Retirement updates lifecycle status and audit fields.
+    Why: Retired versions should retain who retired them and when.
+    Fails when: Retirement omits lifecycle audit metadata.
     """
     spark = FakeSpark()
     repo = SparkDeltaRulesetRepository(
@@ -230,37 +207,13 @@ def test_retire_closes_effective_window():
     assert "status = 'retired'" in update_sql
     assert "retired_by = 'engineer'" in update_sql
     assert "retired_at = '2026-04-30T23:59:59+00:00'" in update_sql
-    assert "effective_end_date = '2026-04-30'" in update_sql
-
-
-def test_retire_allows_explicit_effective_end_date():
-    """
-    What: Allows retirement callers to close the effective window explicitly.
-    Why: Backdated or end-of-business retirements may differ from the audit timestamp.
-    Fails when: Explicit retirement effective_end_date is ignored.
-    """
-    spark = FakeSpark()
-    repo = SparkDeltaRulesetRepository(
-        spark,
-        RulesEngineTableNames(
-            ruleset_versions="ruleset_versions",
-            function_registry="function_registry",
-        ),
-    )
-    rows = iter([{"status": "published"}, {"status": "retired"}])
-    repo._ruleset_row_dict = lambda ruleset_id, version: next(rows)
-    repo._utc_now = lambda: "2026-04-30T23:59:59+00:00"
-
-    repo.retire("rs1", "1", effective_end_date="2026-04-25")
-
-    assert "effective_end_date = '2026-04-25'" in "\n".join(spark.queries)
 
 
 def test_retire_rejects_already_retired_version():
     """
     What: Rejects a second retirement for an already retired version.
     Why: Retirement audit fields should preserve the original retirement event.
-    Fails when: A second retirement silently overwrites retired_at or effective_end_date.
+    Fails when: A second retirement silently overwrites retirement audit fields.
     """
     spark = FakeSpark()
     repo = SparkDeltaRulesetRepository(

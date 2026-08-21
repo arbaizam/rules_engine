@@ -13,11 +13,9 @@ build/
 .venv/
 venv/
 *.log
-.databricks/
 ~$*
 README.html
 README_files/
-manual_pyspark_logic.xlsx
 rules_engine_package_scaffold.py
 handoff_plan.md
 

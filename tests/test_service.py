@@ -30,21 +30,17 @@ class RecordingRepository:
         ruleset,
         *,
         published_by=None,
-        effective_start_date=None,
-        effective_end_date=None,
     ):
         self.saved_ruleset = ruleset
         self.published_by = published_by
-        self.effective_start_date = effective_start_date
-        self.effective_end_date = effective_end_date
 
     def load_published(self, ruleset_name, version=None):
         if self.saved_ruleset is None or self.saved_ruleset.ruleset_name != ruleset_name:
             raise RepositoryError(f"Published ruleset not found: {ruleset_name}")
         return self.saved_ruleset
 
-    def retire(self, ruleset_id, version, *, retired_by=None, effective_end_date=None):
-        self.retired = (ruleset_id, version, retired_by, effective_end_date)
+    def retire(self, ruleset_id, version, *, retired_by=None):
+        self.retired = (ruleset_id, version, retired_by)
 
 
 def _yaml_text():
@@ -151,7 +147,7 @@ def test_service_create_tables_save_standard_functions_and_retire():
     assert repository.created_mode == "ignore"
     assert any(row.function_name == "substring" for row in repository.saved_function_rows)
     assert repository.update_existing is True
-    assert repository.retired == ("rs1", "1", "tester", None)
+    assert repository.retired == ("rs1", "1", "tester")
 
 
 def test_service_saves_supplied_function_registry_rows():
@@ -325,7 +321,7 @@ def test_service_describe_rules_requires_ruleset_or_name():
 def test_service_publish_accepts_compiled_ruleset():
     """
     What: Publishes an already compiled ruleset through the facade.
-    Why: Code-authored and precompiled YAML workflows should share the same service.
+    Why: Callers may compile YAML before using the service.
     Fails when: service.publish only supports YAML text/path entry points.
     """
     repository = RecordingRepository()
@@ -337,28 +333,14 @@ def test_service_publish_accepts_compiled_ruleset():
     assert repository.saved_ruleset.ruleset_id == "service_ruleset"
 
 
-def test_service_publish_and_retire_pass_effective_dates():
+def test_service_retire_passes_actor_to_repository():
     """
-    What: Passes effective date overrides through the facade.
-    Why: Notebook callers should not need to reach into lower-level services for lifecycle dating.
-    Fails when: Service methods drop effective-date arguments.
+    What: Passes the retirement actor through the facade.
+    Why: Repository lifecycle records should identify the caller.
+    Fails when: Service methods drop the retirement actor.
     """
     repository = RecordingRepository()
     service = _service(repository)
-    ruleset = YamlRulesetCompiler().compile_text(_yaml_text())
+    service.retire("rs1", "1", retired_by="tester")
 
-    service.publish(
-        ruleset,
-        effective_start_date="2026-05-01",
-        effective_end_date="2026-12-31",
-    )
-    service.retire(
-        "rs1",
-        "1",
-        retired_by="tester",
-        effective_end_date="2026-10-31",
-    )
-
-    assert repository.effective_start_date == "2026-05-01"
-    assert repository.effective_end_date == "2026-12-31"
-    assert repository.retired == ("rs1", "1", "tester", "2026-10-31")
+    assert repository.retired == ("rs1", "1", "tester")

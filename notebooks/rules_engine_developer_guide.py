@@ -11,13 +11,12 @@
 # MAGIC 1. Author canonical YAML.
 # MAGIC 2. Compile YAML into immutable dataclasses.
 # MAGIC 3. Validate semantic rules.
-# MAGIC 4. Normalize metadata for persistence.
-# MAGIC 5. Export canonical YAML for round-trip governance.
-# MAGIC 6. Prepare sample input data.
-# MAGIC 7. Run Spark compatibility validation.
-# MAGIC 8. Create Delta metadata tables.
-# MAGIC 9. Test, publish, load, evaluate, and retire a ruleset.
-# MAGIC 10. Inspect audit identity, semantic differences, and rule coverage.
+# MAGIC 4. Export canonical YAML for round-trip review.
+# MAGIC 5. Prepare sample input data.
+# MAGIC 6. Run Spark compatibility validation.
+# MAGIC 7. Create Delta metadata tables.
+# MAGIC 8. Test, publish, load, evaluate, and retire a ruleset.
+# MAGIC 9. Inspect audit identity and rule coverage.
 # MAGIC
 # MAGIC This guide intentionally uses small examples. Production workflows should
 # MAGIC add environment-specific catalog names, permissions, logging, and approval
@@ -52,7 +51,6 @@ import re
 import rules_engine
 from rules_engine import (
     FunctionRegistry,
-    RulesetNormalizer,
     RulesEngineService,
     RulesetValidator,
     SparkRulesetCompatibilityValidator,
@@ -161,28 +159,22 @@ print(ruleset_yaml)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Compile, Validate, Normalize
+# MAGIC ## 3. Compile And Validate
 # MAGIC
 # MAGIC `YamlRulesetCompiler` performs shape checks and enum parsing.
 # MAGIC `RulesetValidator` enforces semantic validity.
-# MAGIC `RulesetNormalizer` materializes explicit persisted defaults.
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
 # MAGIC 1. `compile_text()` parses YAML and builds immutable dataclasses.
 # MAGIC 2. The compiler rejects malformed YAML shape and unsupported enum values.
-# MAGIC 3. `RulesetValidator.validate()` checks semantic rules that apply to both
-# MAGIC    YAML-authored and code-authored rulesets.
+# MAGIC 3. `RulesetValidator.validate()` checks the ruleset's semantic contract.
 # MAGIC 4. `validation.to_text()` renders validation output for humans.
-# MAGIC 5. `RulesetNormalizer.normalize_ruleset()` materializes publish-ready
-# MAGIC    explicit values.
 # MAGIC
 # MAGIC Important distinction:
 # MAGIC
 # MAGIC - compilation answers "Can this YAML become a ruleset model?"
 # MAGIC - validation answers "Does this ruleset obey the semantic contract?"
-# MAGIC - normalization answers "Is this ruleset fully explicit for persistence
-# MAGIC   and runtime?"
 # MAGIC
 # MAGIC No Delta tables are touched in this cell.
 
@@ -197,8 +189,7 @@ print(semantic_validation.to_text())
 if semantic_validation.has_errors():
     raise ValueError(semantic_validation.to_text())
 
-normalized_ruleset = RulesetNormalizer().normalize_ruleset(ruleset)
-normalized_ruleset
+ruleset
 
 # COMMAND ----------
 
@@ -211,14 +202,12 @@ normalized_ruleset
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
-# MAGIC - Converts the normalized dataclass model back into canonical YAML.
+# MAGIC - Converts the compiled dataclass model back into canonical YAML.
 # MAGIC - Recompiles the exported YAML.
-# MAGIC - Asserts the recompiled model equals the normalized model.
+# MAGIC - Asserts the recompiled model equals the compiled model.
 # MAGIC
 # MAGIC Why this matters:
 # MAGIC
-# MAGIC - Engineers can author or refine rules through code, then export canonical
-# MAGIC   YAML for review and source control.
 # MAGIC - Governance workflows can compare YAML artifacts rather than relying only
 # MAGIC   on in-memory objects.
 # MAGIC - Exported YAML includes IDs so round-trip equality is preserved, not just
@@ -227,10 +216,10 @@ normalized_ruleset
 # COMMAND ----------
 
 exporter = YamlRulesetExporter()
-exported_yaml = exporter.export_text(normalized_ruleset)
+exported_yaml = exporter.export_text(ruleset)
 round_tripped = compiler.compile_text(exported_yaml)
 
-assert round_tripped == normalized_ruleset
+assert round_tripped == ruleset
 print(exported_yaml)
 
 # COMMAND ----------
@@ -277,7 +266,7 @@ input_rows
 # COMMAND ----------
 
 spark_validation = SparkRulesetCompatibilityValidator(FunctionRegistry()).validate(
-    normalized_ruleset,
+    ruleset,
     spark.createDataFrame(input_rows).schema,
 )
 print(spark_validation.to_text())
@@ -509,30 +498,14 @@ assert all(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 11. Exercise Change Control And Coverage
+# MAGIC ## 11. Inspect Coverage
 # MAGIC
-# MAGIC Embedded expected cases protect known examples before publish. Semantic
-# MAGIC diffs show author-facing changes between candidates, while coverage reports
-# MAGIC expose dead, broad, and clean no-match behavior on representative data.
-# MAGIC Coverage starts a Spark action; materializing `no_match_rows` starts a
-# MAGIC second diagnostic evaluation.
+# MAGIC Embedded expected cases protect known examples before publish. Coverage
+# MAGIC reports expose dead, broad, and clean no-match behavior on representative
+# MAGIC data. Coverage starts one Spark action for aggregate counts; the returned
+# MAGIC `no_match_rows` is a filtered view of the same evaluation.
 
 # COMMAND ----------
-
-candidate_yaml = (
-    ruleset_yaml
-    .replace('version: "1"', 'version: "2"', 1)
-    .replace(
-        'right: { literal: 100, value_type: number }',
-        'right: { literal: 125, value_type: number }',
-        1,
-    )
-)
-candidate_ruleset = compiler.compile_text(candidate_yaml)
-semantic_diff = service.diff_rulesets(ruleset, candidate_ruleset)
-print(semantic_diff.to_text())
-assert semantic_diff.has_changes
-assert "125" in semantic_diff.to_text()
 
 coverage = service.coverage_report(
     input_df,

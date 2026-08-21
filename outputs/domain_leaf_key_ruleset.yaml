@@ -1,7 +1,6 @@
 ruleset_id: domain_leaf_key_ruleset
 ruleset_name: Domain Leaf Key Mapping
 version: '1'
-status: published
 owner: Rules Team
 owner_department: ALM Engineering
 description: Canonical YAML translation of domain-based leaf_key mapping.

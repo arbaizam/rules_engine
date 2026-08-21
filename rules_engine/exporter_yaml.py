@@ -2,8 +2,7 @@
 YAML exporter for canonical ruleset metadata.
 
 The exporter writes the same authoring vocabulary accepted by
-``YamlRulesetCompiler``. It is intended for governance workflows that need to
-round-trip compiled or code-authored metadata back into reviewable YAML.
+``YamlRulesetCompiler`` for deterministic persistence and review.
 """
 
 from __future__ import annotations

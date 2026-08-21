@@ -1,9 +1,4 @@
-from dataclasses import replace
-from decimal import Decimal
-
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.models import LiteralOperand
-from rules_engine.normalizer import RulesetNormalizer
 from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 from rules_engine.validator import RulesetValidator
 
@@ -13,7 +8,6 @@ def _base_payload(condition):
         "ruleset_id": "rs1",
         "ruleset_name": "Ruleset",
         "version": "1",
-        "status": "published",
         "owner": "Rules Team",
         "owner_department": "ALM Engineering",
         "rules": [
@@ -84,82 +78,6 @@ def test_custom_function_args_mismatch_fails_validation():
     )
 
     assert any(issue.check_name == "CUSTOM_FUNCTION_ARGS_MISMATCH" for issue in result.issues)
-
-
-def test_code_authored_null_default_cannot_itself_be_null():
-    """Direct dataclass authors cannot bypass the non-null fallback contract."""
-    ruleset = YamlRulesetCompiler().compile_payload(
-        _base_payload(
-            {
-                "left": {"field": "account"},
-                "operator": "eq",
-                "right": {"literal": "A"},
-            }
-        )
-    )
-    condition = ruleset.rules[0].root_group.conditions[0]
-    invalid_left = replace(
-        condition.left,
-        default_if_null=LiteralOperand(None),
-    )
-    invalid_ruleset = replace(
-        ruleset,
-        rules=(
-            replace(
-                ruleset.rules[0],
-                root_group=replace(
-                    ruleset.rules[0].root_group,
-                    conditions=(replace(condition, left=invalid_left),),
-                ),
-            ),
-        ),
-    )
-
-    result = RulesetValidator().validate(invalid_ruleset)
-
-    assert "DEFAULT_IF_NULL_VALUE_REQUIRED" in {
-        issue.check_name for issue in result.issues
-    }
-
-
-def test_normalizer_does_not_hide_nested_null_default_validation_error():
-    """Publish normalization preserves invalid nesting for validation to reject."""
-    ruleset = YamlRulesetCompiler().compile_payload(
-        _base_payload(
-            {
-                "left": {"field": "account"},
-                "operator": "eq",
-                "right": {"literal": "A"},
-            }
-        )
-    )
-    condition = ruleset.rules[0].root_group.conditions[0]
-    invalid_left = replace(
-        condition.left,
-        default_if_null=LiteralOperand(
-            "UNKNOWN",
-            default_if_null=LiteralOperand("SECOND"),
-        ),
-    )
-    invalid_ruleset = replace(
-        ruleset,
-        rules=(
-            replace(
-                ruleset.rules[0],
-                root_group=replace(
-                    ruleset.rules[0].root_group,
-                    conditions=(replace(condition, left=invalid_left),),
-                ),
-            ),
-        ),
-    )
-
-    normalized = RulesetNormalizer().normalize_ruleset(invalid_ruleset)
-    result = RulesetValidator().validate(normalized)
-
-    assert "DEFAULT_IF_NULL_NESTED_FORBIDDEN" in {
-        issue.check_name for issue in result.issues
-    }
 
 
 def test_error_on_null_is_rejected_for_unary_null_operators():
@@ -276,7 +194,6 @@ def test_duplicate_condition_ids_fail_validation():
         "ruleset_id": "rs1",
         "ruleset_name": "Ruleset",
         "version": "1",
-        "status": "published",
         "owner": "Rules Team",
         "owner_department": "ALM Engineering",
         "rules": [
@@ -314,7 +231,7 @@ def test_duplicate_condition_ids_fail_validation():
 def test_duplicate_condition_group_ids_fail_validation():
     """
     What: Validates that condition_group_id values are unique within a ruleset.
-    Why: Duplicate group IDs make audit diagnostics ambiguous for code-authored rulesets.
+    Why: Duplicate group IDs make audit diagnostics ambiguous.
     Fails when: Nested condition groups can reuse the same identifier.
     """
     payload = {
@@ -502,87 +419,3 @@ def test_assignment_id_may_be_reused_when_versions_are_validated_independently()
     assert RulesetValidator().validate(
         YamlRulesetCompiler().compile_payload(next_version)
     ).passed
-
-
-def test_code_authored_nonfinite_decimal_literal_fails_validation():
-    """Dataclass authoring cannot bypass the compiler's finite-number guard."""
-    ruleset = YamlRulesetCompiler().compile_payload(
-        _base_payload(
-            {
-                "left": {"field": "rate"},
-                "operator": "eq",
-                "right": {"literal": 1},
-            }
-        )
-    )
-    rule = ruleset.rules[0]
-    group = rule.root_group
-    bad_condition = replace(
-        group.conditions[0],
-        right=LiteralOperand(Decimal("NaN")),
-    )
-    bad_ruleset = replace(
-        ruleset,
-        rules=(replace(rule, root_group=replace(group, conditions=(bad_condition,))),),
-    )
-
-    result = RulesetValidator().validate(bad_ruleset)
-
-    assert "LITERAL_DECIMAL_FINITE_REQUIRED" in {
-        issue.check_name for issue in result.issues
-    }
-
-
-def test_code_authored_nonfinite_tolerance_fails_validation_cleanly():
-    """NaN tolerances produce a validation issue instead of Decimal failure."""
-    ruleset = YamlRulesetCompiler().compile_payload(
-        _base_payload(
-            {
-                "left": {"field": "rate"},
-                "operator": "eq",
-                "right": {"literal": 1},
-            }
-        )
-    )
-    rule = ruleset.rules[0]
-    group = rule.root_group
-    bad_condition = replace(group.conditions[0], tolerance_abs=Decimal("NaN"))
-    bad_ruleset = replace(
-        ruleset,
-        rules=(replace(rule, root_group=replace(group, conditions=(bad_condition,))),),
-    )
-
-    result = RulesetValidator().validate(bad_ruleset)
-
-    assert "TOLERANCE_FINITE_REQUIRED" in {
-        issue.check_name for issue in result.issues
-    }
-
-
-def test_code_authored_nonfinite_float_literal_fails_validation():
-    """Dataclass authoring cannot bypass finite floating-point validation."""
-    ruleset = YamlRulesetCompiler().compile_payload(
-        _base_payload(
-            {
-                "left": {"field": "rate"},
-                "operator": "eq",
-                "right": {"literal": 1},
-            }
-        )
-    )
-    rule = ruleset.rules[0]
-    group = rule.root_group
-    bad_condition = replace(
-        group.conditions[0],
-        right=LiteralOperand(float("inf"), "double"),
-    )
-    bad_ruleset = replace(
-        ruleset,
-        rules=(replace(rule, root_group=replace(group, conditions=(bad_condition,))),),
-    )
-
-    result = RulesetValidator().validate(bad_ruleset)
-
-    assert "LITERAL_FLOAT_FINITE_REQUIRED" in {
-        issue.check_name for issue in result.issues
-    }

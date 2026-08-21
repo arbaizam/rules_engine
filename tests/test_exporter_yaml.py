@@ -20,7 +20,6 @@ def test_yaml_export_round_trips_compiled_ruleset():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "published",
             "description": "Round-trip fixture",
             "owner": "Rules Team",
             "owner_department": "ALM Engineering",
@@ -214,7 +213,6 @@ def test_yaml_export_emits_the_exact_rule_contract():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
-            "status": "published",
             "rules": [
                 {
                     "rule_id": "r1",

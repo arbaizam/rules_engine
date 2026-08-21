@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
-from pyspark.sql import types as T
 
 from rules_engine.models import Ruleset
-from rules_engine.registry import FunctionRegistry
-from rules_engine.runtime import SparkRowEvaluator
-from rules_engine.spark_runtime import SparkRulesEngineRuntime, required_source_columns
+from rules_engine.spark_runtime import SparkRulesEngineRuntime
 
 
 @dataclass(frozen=True)
@@ -51,22 +47,6 @@ class CoverageReport:
         )
 
 
-_CLOSEST_RULE_STRUCT = T.StructType(
-    [
-        T.StructField("closest_rule_id", T.StringType(), True),
-        T.StructField("closest_rule_name", T.StringType(), True),
-        T.StructField("closest_rule_score", T.DoubleType(), True),
-        T.StructField("passed_condition_count", T.LongType(), True),
-        T.StructField("condition_count", T.LongType(), True),
-        T.StructField(
-            "failed_condition_ids",
-            T.ArrayType(T.StringType(), False),
-            True,
-        ),
-    ]
-)
-
-
 class RulesetCoverageAnalyzer:
     """Build a coverage report using the production Spark evaluator."""
 
@@ -75,10 +55,8 @@ class RulesetCoverageAnalyzer:
     def __init__(
         self,
         runtime: SparkRulesEngineRuntime,
-        function_registry: FunctionRegistry,
     ) -> None:
         self._runtime = runtime
-        self._function_registry = function_registry
 
     def analyze(
         self,
@@ -158,11 +136,7 @@ class RulesetCoverageAnalyzer:
                 )
             )
             first_distribution[rule.rule_id] = first_count
-        no_match_rows = self._with_closest_rule(
-            evaluated.filter(clean_no_match),
-            ruleset,
-            column_prefix,
-        )
+        no_match_rows = evaluated.filter(clean_no_match)
         return CoverageReport(
             total_row_count=total_count,
             no_match_count=int(counts["no_match_count"] or 0),
@@ -171,39 +145,3 @@ class RulesetCoverageAnalyzer:
             first_match_distribution=first_distribution,
             no_match_rows=no_match_rows,
         )
-
-    def _with_closest_rule(
-        self,
-        no_match_rows: DataFrame,
-        ruleset: Ruleset,
-        column_prefix: str,
-    ) -> DataFrame:
-        evaluator = SparkRowEvaluator.for_embedded_ruleset(
-            self._function_registry
-        )
-
-        def diagnose(row: Any) -> dict[str, Any] | None:
-            return evaluator.closest_rule_diagnostic(
-                ruleset,
-                row.asDict(recursive=True),
-            )
-
-        self._runtime.validate_worker_serializable(diagnose)
-        diagnostic_udf = F.udf(diagnose, _CLOSEST_RULE_STRUCT)
-        source_columns = required_source_columns(ruleset)
-        row_struct = F.struct(
-            *(
-                [F.col(f"`{name.replace('`', '``')}`").alias(name) for name in source_columns]
-                or [F.lit(None).alias("__rules_engine_empty")]
-            )
-        )
-        diagnostic_col = f"{column_prefix}_closest_rule"
-        result = no_match_rows.withColumn(diagnostic_col, diagnostic_udf(row_struct))
-        return result.withColumns(
-            {
-                f"{column_prefix}_{field.name}": F.col(diagnostic_col).getField(
-                    field.name
-                )
-                for field in _CLOSEST_RULE_STRUCT.fields
-            }
-        ).drop(diagnostic_col)
