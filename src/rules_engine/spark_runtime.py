@@ -18,6 +18,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
+from uuid import uuid4
 
 from pyspark.serializers import CloudPickleSerializer
 from pyspark.sql import DataFrame
@@ -123,6 +124,10 @@ OPERAND_TRACE_STRUCT = T.StructType(
 
 CONDITION_TRACE_STRUCT = T.StructType(
     [
+        T.StructField("condition_id", T.StringType(), False),
+        T.StructField("condition_group_id", T.StringType(), False),
+        T.StructField("condition_group_operator", T.StringType(), False),
+        T.StructField("active_flag", T.BooleanType(), False),
         T.StructField("columns", T.ArrayType(T.StringType(), False), True),
         T.StructField("left", OPERAND_TRACE_STRUCT, True),
         T.StructField("right", OPERAND_TRACE_STRUCT, True),
@@ -309,7 +314,6 @@ class SparkRulesEngineRuntime:
             },
             f"{column_prefix}_ruleset",
             f"{column_prefix}_engine_version",
-            f"{column_prefix}_result",
         }
         conflicts = sorted(output_names & set(df.columns))
         if conflicts:
@@ -378,7 +382,7 @@ class SparkRulesEngineRuntime:
                 or [F.lit(None).alias("__rules_engine_empty")]
             )
         )
-        result_col = f"{column_prefix}_result"
+        result_col = f"__rules_engine_result_{uuid4().hex}"
         evaluated = df.withColumn(result_col, result_udf(row_struct))
         output = self._append_output_columns(
             evaluated,
@@ -610,6 +614,12 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
             row,
             assigned_values,
         )
+        assigned_value = (assigned_values or {}).get(assignment.target_field)
+        old_value = (
+            assigned_value.value
+            if assigned_value is not None
+            else row.get(assignment.target_field)
+        )
         return {
             "assignment_id": assignment.assignment_id,
             "rule_id": rule.rule_id,
@@ -617,10 +627,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
             "rule_order": rule.rule_order,
             "target_field": assignment.target_field,
             "authored_expression": authored_expression,
-            "old_value": self._spark_assignment_value(
-                row.get(assignment.target_field),
-                data_type,
-            ),
+            "old_value": self._spark_assignment_value(old_value, data_type),
             "proposed_value": self._spark_assignment_value(
                 proposed_value,
                 data_type,
@@ -867,6 +874,10 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
     def _spark_condition_trace(self, trace: ResolvedConditionTrace) -> dict[str, Any]:
         """Convert a condition trace to the declared Spark struct schema."""
         return {
+            "condition_id": trace.condition_id,
+            "condition_group_id": trace.condition_group_id,
+            "condition_group_operator": trace.condition_group_operator,
+            "active_flag": trace.active_flag,
             "columns": self._spark_condition_columns(trace),
             "left": self._spark_operand_trace(trace.left),
             "right": self._spark_operand_trace(trace.right),
@@ -895,8 +906,8 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         """Convert one operand trace to the declared Spark struct schema."""
         if not isinstance(trace, Mapping):
             return None
-        column = trace.get("column") or trace.get("field_name")
-        source_columns = trace.get("source_columns") or trace.get("columns")
+        column = trace.get("field_name")
+        source_columns = trace.get("columns")
         if source_columns is None and column is not None:
             source_columns = [column]
         return {

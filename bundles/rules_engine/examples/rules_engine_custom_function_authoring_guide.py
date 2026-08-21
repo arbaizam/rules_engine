@@ -1,4 +1,5 @@
 # Databricks notebook source
+# ruff: noqa: E402
 # MAGIC %md
 # MAGIC # Custom Function Authoring Guide
 # MAGIC
@@ -12,7 +13,20 @@
 
 # COMMAND ----------
 
+import os
+import sys
 from datetime import date
+from pathlib import Path
+
+root = next(
+    (p for p in [Path.cwd(), *Path.cwd().parents] if (p / "databricks.yml").exists()),
+    None,
+)
+if root:
+    src_path = os.path.normpath(root / "src")
+    if src_path not in sys.path:
+        print(f"Adding to sys.path: {src_path}")
+        sys.path.append(src_path)
 
 import rules_engine
 from rules_engine import (  # noqa: E402

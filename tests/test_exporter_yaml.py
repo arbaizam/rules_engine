@@ -1,11 +1,48 @@
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
+import pytest
 import yaml
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exporter_yaml import YamlRulesetExporter
 from rules_engine.serializer import DeltaRowSerializer
+from rules_engine.validator import RulesetValidator
+
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+_SHIPPED_RULESETS = tuple(
+    sorted(
+        [
+            *_REPOSITORY_ROOT.joinpath("bundles", "rules_engine", "rulesets").glob(
+                "*.yaml"
+            )
+        ]
+        + [
+            *_REPOSITORY_ROOT.joinpath(
+                "bundles", "rules_engine", "examples", "rulesets"
+            ).glob("*.yaml")
+        ]
+        + [*_REPOSITORY_ROOT.joinpath("outputs").glob("*.yaml")]
+    )
+)
+
+
+@pytest.mark.parametrize("path", _SHIPPED_RULESETS, ids=lambda path: path.name)
+def test_shipped_rulesets_validate_and_round_trip_hash_stably(path):
+    """Every shipped YAML artifact stays aligned with the canonical contract."""
+    compiler = YamlRulesetCompiler()
+    serializer = DeltaRowSerializer()
+    ruleset = compiler.compile_path(path)
+
+    assert RulesetValidator().validate(ruleset).passed
+
+    reconstructed = compiler.compile_text(
+        YamlRulesetExporter().export_text(ruleset)
+    )
+
+    assert reconstructed == ruleset
+    assert serializer.content_hash(reconstructed) == serializer.content_hash(ruleset)
 
 
 def test_yaml_export_round_trips_compiled_ruleset():

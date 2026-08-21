@@ -40,8 +40,6 @@ class DeltaRowSerializer:
         *,
         published_by: str | None = None,
         published_at: str | None = None,
-        retired_by: str | None = None,
-        retired_at: str | None = None,
     ) -> RulesetVersionRow:
         """
         Serialize one ruleset version to the authoritative Delta row shape.
@@ -66,8 +64,8 @@ class DeltaRowSerializer:
             owner_department=ruleset.owner_department,
             published_by=published_by,
             published_at=published_at,
-            retired_by=retired_by,
-            retired_at=retired_at,
+            retired_by=None,
+            retired_at=None,
         )
 
     def deserialize_ruleset_version(self, row: RulesetVersionRow) -> Ruleset:

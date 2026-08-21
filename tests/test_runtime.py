@@ -388,7 +388,6 @@ def test_result_payload_keys_match_the_declared_schema(
         "assign",
         "ruleset",
         "engine_version",
-        "result",
     ),
 )
 def test_dataframe_evaluation_reserves_every_output_name_in_compact_mode(
@@ -761,9 +760,55 @@ def test_spark_row_evaluator_returns_native_matched_rule_trace():
     assert match_trace["rule_name"] == "Rule 1"
     assert match_trace["rule_order"] == 1
     assert match_trace["explanation"] == "account == 'A'"
+    assert match_trace["conditions"][0]["condition_id"] == "cg:r1:root:c1"
+    assert match_trace["conditions"][0]["condition_group_id"] == "cg:r1:root"
+    assert match_trace["conditions"][0]["condition_group_operator"] == "all"
+    assert match_trace["conditions"][0]["active_flag"] is True
     assert match_trace["conditions"][0]["columns"] == ["account"]
     assert match_trace["conditions"][0]["left"]["column"] == "account"
     assert match_trace["conditions"][0]["left"]["value"] == "A"
+
+
+def test_full_audit_distinguishes_inactive_conditions():
+    """Trace identity and activity explain why an inactive branch did not pass."""
+    ruleset = _compile_when(
+        {
+            "condition_group_id": "eligibility",
+            "any": [
+                {
+                    "condition_id": "inactive_branch",
+                    "left": {"field": "account"},
+                    "operator": "eq",
+                    "right": {"literal": "A"},
+                    "active_flag": False,
+                },
+                {
+                    "condition_id": "active_branch",
+                    "left": {"field": "account"},
+                    "operator": "eq",
+                    "right": {"literal": "A"},
+                },
+            ],
+        }
+    )
+
+    conditions = _evaluate_worker(ruleset, {"account": "A"})[
+        "matched_rules"
+    ][0]["conditions"]
+
+    assert [condition["condition_id"] for condition in conditions] == [
+        "inactive_branch",
+        "active_branch",
+    ]
+    assert conditions[0]["active_flag"] is False
+    assert conditions[0]["comparison_result"] is None
+    assert conditions[1]["active_flag"] is True
+    assert conditions[1]["comparison_result"] is True
+    assert all(
+        condition["condition_group_id"] == "eligibility"
+        and condition["condition_group_operator"] == "any"
+        for condition in conditions
+    )
 
 
 def test_spark_row_evaluator_trace_shows_operand_default_application():
@@ -1260,12 +1305,15 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
         for item in result["assignment_results"]
     }
     assert assignment_results["first_bucket"]["effective"] is False
+    assert assignment_results["first_bucket"]["old_value"] == "original"
     assert assignment_results["first_bucket"]["overridden_by_rule_id"] == "second_match"
     assert (
         assignment_results["first_bucket"]["overridden_by_assignment_id"]
         == "second_bucket"
     )
     assert assignment_results["second_bucket"]["effective"] is True
+    assert assignment_results["second_bucket"]["old_value"] == "first"
+    assert assignment_results["second_bucket"]["changed"] is True
     assert assignment_results["second_bucket"]["authored_expression"] == (
         "bucket = 'second'"
     )

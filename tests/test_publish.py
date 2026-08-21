@@ -1,6 +1,7 @@
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.publish import PublishService
 from rules_engine.registry import FunctionRegistry
+from rules_engine.testing import RulesetTester
 from rules_engine.validator import RulesetValidator
 
 
@@ -54,6 +55,7 @@ def _service():
     return PublishService(
         repository=RecordingRepository(),
         validator=RulesetValidator(FunctionRegistry()),
+        tester=RulesetTester(FunctionRegistry()),
     )
 
 

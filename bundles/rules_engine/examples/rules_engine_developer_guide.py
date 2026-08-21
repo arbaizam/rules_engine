@@ -1,4 +1,5 @@
 # Databricks notebook source
+# ruff: noqa: E402
 # MAGIC %md
 # MAGIC # Rules Engine Developer Guide
 # MAGIC
@@ -46,7 +47,20 @@
 
 # COMMAND ----------
 
+import os
 import re
+import sys
+from pathlib import Path
+
+root = next(
+    (p for p in [Path.cwd(), *Path.cwd().parents] if (p / "databricks.yml").exists()),
+    None,
+)
+if root:
+    src_path = os.path.normpath(root / "src")
+    if src_path not in sys.path:
+        print(f"Adding to sys.path: {src_path}")
+        sys.path.append(src_path)
 
 import rules_engine
 from rules_engine import (
@@ -256,7 +270,7 @@ input_rows
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
-# MAGIC - Runs the Spark-specific validation gate against the normalized ruleset.
+# MAGIC - Runs the Spark-specific validation gate against the compiled ruleset.
 # MAGIC - Raises before metadata promotion if the ruleset violates the supported
 # MAGIC   row-level contract.
 # MAGIC
@@ -336,13 +350,14 @@ table_names
 # MAGIC %md
 # MAGIC ## 8. Publish Metadata
 # MAGIC
-# MAGIC `RulesEngineService` orchestrates normalization, validation, and direct
-# MAGIC publication through the standard public facade.
+# MAGIC `RulesEngineService` orchestrates validation, expected-case execution,
+# MAGIC and direct publication through the standard public facade.
 # MAGIC
-# MAGIC Published metadata is immutable by `(ruleset_id, version)`. If you rerun
-# MAGIC this cell after publication, retire or overwrite the development tables first.
+# MAGIC Published metadata is immutable by both `(ruleset_id, version)` and
+# MAGIC `(ruleset_name, version)`. To rerun this cell, use a new version or reset
+# MAGIC the dedicated guide tables.
 # MAGIC
-# MAGIC `owner` and `owner_department` come from the YAML/Python ruleset metadata.
+# MAGIC `owner` and `owner_department` come from the YAML ruleset metadata.
 # MAGIC `published_by` is an optional lifecycle actor field. When omitted,
 # MAGIC persisted actor metadata uses `system`, which fits dedicated production
 # MAGIC cluster execution.
@@ -351,9 +366,8 @@ table_names
 # MAGIC
 # MAGIC 1. Uses the configured `RulesEngineService`.
 # MAGIC 2. Calls `service.publish(ruleset)`.
-# MAGIC 3. Normalizes the ruleset so persistence-ready fields are explicit.
-# MAGIC 4. Runs semantic validation plus Spark compatibility validation.
-# MAGIC 5. Writes one published row into `ruleset_versions`.
+# MAGIC 3. Runs metadata validation and the embedded expected cases.
+# MAGIC 4. Writes one published row into `ruleset_versions`.
 # MAGIC
 # MAGIC Tables affected by this cell:
 # MAGIC
@@ -603,7 +617,7 @@ display(spark.table(table_names.ruleset_versions))
 # MAGIC Recommended promotion path:
 # MAGIC
 # MAGIC 1. Author and review canonical YAML.
-# MAGIC 2. Compile, validate, normalize, and export YAML.
+# MAGIC 2. Compile, validate, and export YAML.
 # MAGIC 3. Publish into non-production metadata tables.
 # MAGIC 4. Run small hand-verified DataFrame tests.
 # MAGIC 5. Run representative volume/performance tests.

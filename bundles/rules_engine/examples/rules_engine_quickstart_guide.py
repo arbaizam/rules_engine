@@ -1,4 +1,5 @@
 # Databricks notebook source
+# ruff: noqa: E402
 # MAGIC %md
 # MAGIC # Rules Engine Quickstart
 # MAGIC
@@ -13,6 +14,20 @@
 # MAGIC 6. Evaluate a Spark DataFrame.
 
 # COMMAND ----------
+
+import os
+import sys
+from pathlib import Path
+
+root = next(
+    (p for p in [Path.cwd(), *Path.cwd().parents] if (p / "databricks.yml").exists()),
+    None,
+)
+if root:
+    src_path = os.path.normpath(root / "src")
+    if src_path not in sys.path:
+        print(f"Adding to sys.path: {src_path}")
+        sys.path.append(src_path)
 
 from pyspark.sql import functions as F
 

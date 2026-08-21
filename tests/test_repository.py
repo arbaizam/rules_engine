@@ -70,11 +70,16 @@ class FakeLoadDataFrame:
 
 class FakeLoadSpark:
     def __init__(self, rows):
+        self.catalog = FakeCatalog()
         self.frame = FakeLoadDataFrame(rows)
+        self.queries = []
 
     def table(self, table_name):
         assert table_name == "ruleset_versions"
         return self.frame
+
+    def sql(self, query):
+        self.queries.append(query)
 
 
 def _repository():
@@ -116,17 +121,17 @@ def _ruleset(*, ruleset_id="rs1", ruleset_name="Ruleset", version="1"):
     )
 
 
-def test_save_published_checks_duplicate_ruleset_name_and_version():
+def test_save_published_rejects_duplicate_ruleset_name_and_version():
     """
-    What: Uses ruleset_name/version as the duplicate publish boundary.
-    Why: Testing workflows may publish multiple ruleset IDs under the same user-facing ruleset/version identity.
-    Fails when: The repository checks ruleset_id/version instead of ruleset_name/version.
+    What: Rejects duplicate caller-facing ruleset identities.
+    Why: Name-based loading must resolve one immutable version.
+    Fails when: A second ID can claim an existing name/version.
     """
     repo = _repository()
-    checked = []
-    repo._existing_ruleset_status = lambda ruleset_name, version: checked.append(
-        (ruleset_name, version)
-    ) or "published"
+    repo._ruleset_row_dict = lambda ruleset_id, version: None
+    repo._ruleset_row_dict_by_name_version = lambda ruleset_name, version: {
+        "status": "published"
+    }
 
     with pytest.raises(RepositoryError, match="ruleset_name=Ruleset, version=1"):
         repo.save_published(
@@ -137,7 +142,22 @@ def test_save_published_checks_duplicate_ruleset_name_and_version():
             )
         )
 
-    assert checked == [("Ruleset", "1")]
+
+
+def test_save_published_rejects_duplicate_ruleset_id_and_version():
+    """Stable ruleset IDs cannot identify more than one row per version."""
+    repo = _repository()
+    repo._ruleset_row_dict = lambda ruleset_id, version: {"status": "published"}
+    repo._ruleset_row_dict_by_name_version = lambda ruleset_name, version: None
+
+    with pytest.raises(RepositoryError, match="ruleset_id=rs1, version=1"):
+        repo.save_published(
+            _ruleset(
+                ruleset_id="rs1",
+                ruleset_name="Different name",
+                version="1",
+            )
+        )
 
 
 def test_save_published_allows_distinct_versions_for_same_ruleset_name():
@@ -148,10 +168,8 @@ def test_save_published_allows_distinct_versions_for_same_ruleset_name():
     """
     repo = _repository()
     saved_versions = []
-    existing_versions = {("Ruleset", "1")}
-    repo._existing_ruleset_status = lambda ruleset_name, version: (
-        "published" if (ruleset_name, version) in existing_versions else None
-    )
+    repo._ruleset_row_dict = lambda ruleset_id, version: None
+    repo._ruleset_row_dict_by_name_version = lambda ruleset_name, version: None
     repo._write_rows = lambda table_name, rows, schema: saved_versions.extend(
         row["version"] for row in rows
     )
@@ -181,6 +199,30 @@ def test_load_published_rejects_duplicate_rows_for_explicit_version(monkeypatch)
         match=r"immutable ruleset version: ruleset_name=Ruleset, version=1",
     ):
         repo.load_published("Ruleset", version="1")
+
+
+def test_retire_rejects_duplicate_stable_identity_before_update(monkeypatch):
+    """Retirement cannot update several rows sharing one stable identity."""
+    monkeypatch.setattr(
+        repository_module,
+        "F",
+        SimpleNamespace(col=lambda name: FakePredicate()),
+    )
+    spark = FakeLoadSpark([object(), object()])
+    repo = SparkDeltaRulesetRepository(
+        spark,
+        RulesEngineTableNames(
+            ruleset_versions="ruleset_versions",
+            function_registry="function_registry",
+        ),
+    )
+    with pytest.raises(
+        RepositoryError,
+        match=r"ruleset_id=rs1, version=1",
+    ):
+        repo.retire("rs1", "1")
+
+    assert spark.queries == []
 
 
 def test_retire_records_lifecycle_state_and_actor():

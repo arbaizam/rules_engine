@@ -33,8 +33,12 @@ class CoverageReport:
     no_match_count: int
     error_count: int
     rules: tuple[RuleCoverage, ...]
-    first_match_distribution: dict[str, int]
     no_match_rows: DataFrame
+
+    @property
+    def first_match_distribution(self) -> dict[str, int]:
+        """Return first-match counts keyed by rule ID."""
+        return {rule.rule_id: rule.first_match_count for rule in self.rules}
 
     @property
     def dead_rule_ids(self) -> tuple[str, ...]:
@@ -116,7 +120,6 @@ class RulesetCoverageAnalyzer:
         counts = evaluated.agg(*aggregates).collect()[0].asDict()
         total_count = int(counts["total_row_count"] or 0)
         rule_coverage: list[RuleCoverage] = []
-        first_distribution: dict[str, int] = {}
         for index, rule in enumerate(active_rules):
             match_count = int(counts[f"match_{index}"] or 0)
             first_count = int(counts[f"first_{index}"] or 0)
@@ -135,13 +138,11 @@ class RulesetCoverageAnalyzer:
                     ),
                 )
             )
-            first_distribution[rule.rule_id] = first_count
         no_match_rows = evaluated.filter(clean_no_match)
         return CoverageReport(
             total_row_count=total_count,
             no_match_count=int(counts["no_match_count"] or 0),
             error_count=int(counts["error_count"] or 0),
             rules=tuple(rule_coverage),
-            first_match_distribution=first_distribution,
             no_match_rows=no_match_rows,
         )

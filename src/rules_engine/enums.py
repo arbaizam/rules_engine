@@ -57,12 +57,6 @@ class ComparisonOperator(str, Enum):
     IS_NOT_NULL = "is_not_null"
 
 
-class ValidationSeverity(str, Enum):
-    """Validation issue severities."""
-
-    ERROR = "ERROR"
-
-
 class ObjectType(str, Enum):
     """Object types used in validation diagnostics."""
 

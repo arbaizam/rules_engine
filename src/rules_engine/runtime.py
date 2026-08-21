@@ -359,7 +359,7 @@ class SparkRowEvaluator:
             return None
         kind = operand.get("kind")
         if kind == OperandKind.FIELD.value:
-            column = operand.get("column") or operand.get("field_name")
+            column = operand.get("field_name")
             return f"{column}={self._trace_display_value(operand.get('value'))}"
         if kind == OperandKind.ASSIGNED.value:
             target = operand.get("target_field")
@@ -367,17 +367,11 @@ class SparkRowEvaluator:
         if kind == OperandKind.LITERAL.value:
             return self._trace_display_value(operand.get("value"))
         if kind == OperandKind.CUSTOM_FUNCTION.value:
-            args = operand.get("args")
-            if isinstance(args, Mapping):
-                arg_text = ", ".join(
-                    f"{name}={self._operand_trace_summary(value)}"
-                    for name, value in args.items()
-                )
-            else:
-                arg_text = ", ".join(
-                    f"{name}={value}"
-                    for name, value in dict(operand.get("arguments") or {}).items()
-                )
+            args = operand.get("args") or {}
+            arg_text = ", ".join(
+                f"{name}={self._operand_trace_summary(value)}"
+                for name, value in args.items()
+            )
             return (
                 f"{operand.get('function_name')}({arg_text})="
                 f"{self._trace_display_value(operand.get('value'))}"

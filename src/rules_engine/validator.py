@@ -16,16 +16,13 @@ from rules_engine.enums import (
     UNARY_OPERATORS,
     ComparisonOperator,
     ObjectType,
-    ValidationSeverity,
 )
 from rules_engine.exceptions import RegistryError
 from rules_engine.models import (
     AssignedOperand,
-    Assignment,
     Condition,
     ConditionGroup,
     CustomFunctionOperand,
-    FieldOperand,
     LiteralOperand,
     Operand,
     Rule,
@@ -74,16 +71,6 @@ class RulesetValidator:
         """
         Validate top-level ruleset identity, ownership, and child rules.
         """
-        if not ruleset.ruleset_id:
-            self._add(result, "RULESET_ID_REQUIRED", "ruleset_id is required.", ObjectType.RULESET, "")
-        if not ruleset.ruleset_name:
-            self._add(
-                result,
-                "RULESET_NAME_REQUIRED",
-                "ruleset_name is required.",
-                ObjectType.RULESET,
-                ruleset.ruleset_id,
-            )
         if not ruleset.owner:
             self._add(
                 result,
@@ -254,15 +241,7 @@ class RulesetValidator:
         reserved_keys = {"matched", "matched_rule_ids", "assign"}
         for expectation in ruleset.expect:
             object_id = expectation.name
-            if not expectation.name:
-                self._add(
-                    result,
-                    "EXPECTED_CASE_NAME_REQUIRED",
-                    "Expected case name is required.",
-                    ObjectType.EXPECTED_CASE,
-                    object_id,
-                )
-            elif expectation.name in seen_names:
+            if expectation.name in seen_names:
                 self._add(
                     result,
                     "EXPECTED_CASE_NAME_DUPLICATE",
@@ -271,14 +250,6 @@ class RulesetValidator:
                     object_id,
                 )
             seen_names.add(expectation.name)
-            if not isinstance(expectation.given, Mapping):
-                self._add(
-                    result,
-                    "EXPECTED_CASE_GIVEN_MAPPING_REQUIRED",
-                    "Expected case given must be a mapping.",
-                    ObjectType.EXPECTED_CASE,
-                    object_id,
-                )
             if not isinstance(expectation.then, Mapping) or not expectation.then:
                 self._add(
                     result,
@@ -354,8 +325,6 @@ class RulesetValidator:
         """
         Validate one rule and its condition tree and assignments.
         """
-        if not rule.rule_name:
-            self._add(result, "RULE_NAME_REQUIRED", "rule_name is required.", ObjectType.RULE, rule.rule_id)
         self._validate_condition_group(
             rule.root_group,
             result,
@@ -422,7 +391,12 @@ class RulesetValidator:
                 assignments_by_target[assignment.target_field] = [
                     assignment.assignment_id
                 ]
-            self._validate_assignment(assignment, result)
+            self._validate_operand(
+                assignment.value,
+                result,
+                assignment.assignment_id,
+                in_assignment=True,
+            )
 
     def _validate_condition_group(
         self,
@@ -434,15 +408,7 @@ class RulesetValidator:
         """
         Validate one condition group and recursively validate child groups.
         """
-        if not group.condition_group_id:
-            self._add(
-                result,
-                "CONDITION_GROUP_ID_REQUIRED",
-                "condition_group_id is required.",
-                ObjectType.CONDITION_GROUP,
-                "",
-            )
-        elif group.condition_group_id in seen_condition_group_ids:
+        if group.condition_group_id in seen_condition_group_ids:
             self._add(
                 result,
                 "CONDITION_GROUP_ID_DUPLICATE",
@@ -487,14 +453,6 @@ class RulesetValidator:
                 result,
                 "TOLERANCE_NEGATIVE",
                 "tolerance_abs must be non-negative.",
-                ObjectType.CONDITION,
-                condition.condition_id,
-            )
-        if not isinstance(condition.error_on_null, bool):
-            self._add(
-                result,
-                "ERROR_ON_NULL_BOOLEAN_REQUIRED",
-                "error_on_null must be a boolean.",
                 ObjectType.CONDITION,
                 condition.condition_id,
             )
@@ -576,20 +534,6 @@ class RulesetValidator:
                 condition.condition_id,
             )
 
-    def _validate_assignment(self, assignment: Assignment, result: ValidationResult) -> None:
-        """
-        Validate one assignment target and value operand.
-        """
-        if not assignment.target_field:
-            self._add(
-                result,
-                "ASSIGNMENT_TARGET_REQUIRED",
-                "target_field is required.",
-                ObjectType.ASSIGNMENT,
-                assignment.assignment_id,
-            )
-        self._validate_operand(assignment.value, result, assignment.assignment_id, in_assignment=True)
-
     def _validate_operand(
         self,
         operand: Operand,
@@ -599,65 +543,10 @@ class RulesetValidator:
         in_assignment: bool,
     ) -> None:
         """
-        Validate one operand according to its concrete operand type.
+        Validate registered functions nested in an operand tree.
         """
-        object_type = ObjectType.ASSIGNMENT if in_assignment else ObjectType.CONDITION
-        default = getattr(operand, "default_if_null", None)
-        if default is not None:
-            if not isinstance(default, LiteralOperand):
-                self._add(
-                    result,
-                    "DEFAULT_IF_NULL_LITERAL_REQUIRED",
-                    "default_if_null must be a literal operand.",
-                    object_type,
-                    object_id,
-                )
-            elif default.value is None:
-                self._add(
-                    result,
-                    "DEFAULT_IF_NULL_VALUE_REQUIRED",
-                    "default_if_null cannot itself be null.",
-                    object_type,
-                    object_id,
-                )
-            elif default.default_if_null is not None:
-                self._add(
-                    result,
-                    "DEFAULT_IF_NULL_NESTED_FORBIDDEN",
-                    "default_if_null cannot define another default_if_null.",
-                    object_type,
-                    object_id,
-                )
-        if isinstance(operand, FieldOperand):
-            if not operand.field_name:
-                self._add(
-                    result,
-                    "FIELD_NAME_REQUIRED",
-                    "field_name is required.",
-                    object_type,
-                    object_id,
-                )
-        elif isinstance(operand, AssignedOperand):
-            if not operand.target_field:
-                self._add(
-                    result,
-                    "ASSIGNED_TARGET_FIELD_REQUIRED",
-                    "assigned target_field is required.",
-                    object_type,
-                    object_id,
-                )
-        elif isinstance(operand, LiteralOperand):
-            pass
-        elif isinstance(operand, CustomFunctionOperand):
+        if isinstance(operand, CustomFunctionOperand):
             self._validate_custom_function(operand, result, object_id, in_assignment=in_assignment)
-        else:
-            self._add(
-                result,
-                "OPERAND_KIND_UNSUPPORTED",
-                f"Unsupported operand type: {type(operand).__name__}",
-                object_type,
-                object_id,
-            )
 
     def _validate_custom_function(
         self,
@@ -749,10 +638,9 @@ class RulesetValidator:
         details: dict[str, Any] | None = None,
     ) -> None:
         """
-        Add one error-severity validation issue to the result.
+        Add one validation issue to the result.
         """
         result.add_issue(
-            ValidationSeverity.ERROR,
             check_name,
             message,
             object_type,

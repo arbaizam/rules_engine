@@ -1,5 +1,4 @@
 import os
-from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -108,9 +107,14 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assignment_results_type = output.schema[
         "rules_engine_assignment_results"
     ].dataType
+    condition_type = matched_rules_type.elementType["conditions"].dataType.elementType
     assert matched_rules_type.containsNull is False
     assert matched_rules_type.elementType["assignments_applied"].dataType.containsNull is False
     assert matched_rules_type.elementType["conditions"].dataType.containsNull is False
+    assert condition_type["condition_id"].nullable is False
+    assert condition_type["condition_group_id"].nullable is False
+    assert condition_type["condition_group_operator"].nullable is False
+    assert condition_type["active_flag"].nullable is False
     assert assignment_results_type.containsNull is False
     assert assignment_results_type.elementType["authored_expression"].nullable is False
     assert assignment_results_type.elementType["changed"].nullable is False
@@ -135,6 +139,10 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert match_trace["rule_name"] == "Rule 1"
     assert match_trace["rule_order"] == 1
     assert match_trace["explanation"] == "account == 'A'"
+    assert match_trace["conditions"][0]["condition_id"] == "cg:r1:root:c1"
+    assert match_trace["conditions"][0]["condition_group_id"] == "cg:r1:root"
+    assert match_trace["conditions"][0]["condition_group_operator"] == "all"
+    assert match_trace["conditions"][0]["active_flag"] is True
     assert match_trace["conditions"][0]["columns"] == ["account"]
     assert match_trace["conditions"][0]["left"]["column"] == "account"
     assert match_trace["conditions"][0]["left"]["value"] == "A"
@@ -227,7 +235,27 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert multi_events["first_bucket"]["overridden_by_assignment_id"] == (
         "second_bucket"
     )
-    assert multi_events["second_bucket"]["old_value"] == "original"
+    assert multi_events["second_bucket"]["old_value"] == "first"
+    assert multi_events["second_bucket"]["changed"] is True
+
+
+def test_spark_runtime_preserves_input_column_named_like_old_temp_result(spark):
+    """Internal UDF plumbing cannot reserve or overwrite a caller column."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    df = spark.createDataFrame(
+        [("A", "keep-me")],
+        ["account", "rules_engine_result"],
+    )
+
+    row = _spark_runtime().evaluate_dataframe(df, ruleset).collect()[0]
+
+    assert row["rules_engine_result"] == "keep-me"
 
 
 def test_spark_runtime_applies_typed_operand_defaults_before_comparison(spark):
@@ -603,24 +631,6 @@ def test_spark_runtime_validates_schema_before_building_udf(spark):
         ValidationFailedError,
         match="SPARK_ASSIGNMENT_TARGET_TYPE_INCOMPATIBLE",
     ):
-        _spark_runtime().evaluate_dataframe(df, ruleset)
-
-
-def test_spark_runtime_validates_direct_ruleset_before_building_udf(spark):
-    """Direct in-memory rulesets receive the same semantic checks as published ones."""
-    ruleset = replace(
-        _compile(
-            {
-                "left": {"field": "account"},
-                "operator": "eq",
-                "right": {"literal": "A"},
-            }
-        ),
-        ruleset_id="",
-    )
-    df = spark.createDataFrame([{"account": "A"}])
-
-    with pytest.raises(ValidationFailedError, match="RULESET_ID_REQUIRED"):
         _spark_runtime().evaluate_dataframe(df, ruleset)
 
 

@@ -234,17 +234,28 @@ class SparkDeltaRulesetRepository:
         """
         Persist a published ruleset version.
 
-        Published and retired versions are immutable by ruleset_name/version.
-        Multiple versions of the same ruleset_name may be published at once so
-        callers can test candidate versions side by side.
+        Published and retired versions are immutable by both
+        ruleset_id/version and ruleset_name/version. Multiple versions may be
+        published side by side.
         """
-        existing_status = self._existing_ruleset_status(
+        existing_by_id = self._ruleset_row_dict(
+            ruleset.ruleset_id,
+            ruleset.version,
+        )
+        if existing_by_id is not None:
+            raise RepositoryError(
+                "Cannot overwrite ruleset version with "
+                f"status={existing_by_id['status']}: "
+                f"ruleset_id={ruleset.ruleset_id}, version={ruleset.version}"
+            )
+        existing_by_name = self._ruleset_row_dict_by_name_version(
             ruleset.ruleset_name,
             ruleset.version,
         )
-        if existing_status is not None:
+        if existing_by_name is not None:
             raise RepositoryError(
-                f"Cannot overwrite ruleset version with status={existing_status}: "
+                "Cannot overwrite ruleset version with "
+                f"status={existing_by_name['status']}: "
                 f"ruleset_name={ruleset.ruleset_name}, version={ruleset.version}"
             )
         logger.info(
@@ -283,12 +294,42 @@ class SparkDeltaRulesetRepository:
         """
         logger.info("Retiring ruleset version: ruleset_id=%s version=%s", ruleset_id, version)
         retired_at = self._utc_now()
-        self._set_status(
+        row = self._ruleset_row_dict(ruleset_id, version)
+        if row is None:
+            raise RepositoryError(
+                f"Ruleset version not found: ruleset_id={ruleset_id}, version={version}"
+            )
+        if row["status"] == RulesetStatus.RETIRED.value:
+            raise RepositoryError(
+                f"Ruleset version is already retired: ruleset_id={ruleset_id}, "
+                f"version={version}"
+            )
+
+        retired_by = self._actor_or_system(retired_by)
+        self.spark.sql(
+            f"""
+            UPDATE {self.table_names.ruleset_versions}
+            SET status = {self._sql(RulesetStatus.RETIRED.value)},
+                retired_by = {self._sql_nullable(retired_by)},
+                retired_at = {self._sql_nullable(retired_at)}
+            WHERE ruleset_id = {self._sql(ruleset_id)}
+              AND version = {self._sql(version)}
+            """
+        )
+        updated = self._ruleset_row_dict(ruleset_id, version)
+        if updated is None or updated["status"] != RulesetStatus.RETIRED.value:
+            logger.error(
+                "Ruleset retirement verification failed: ruleset_id=%s version=%s",
+                ruleset_id,
+                version,
+            )
+            raise RepositoryError(
+                f"Retirement failed: ruleset_id={ruleset_id}, version={version}"
+            )
+        logger.info(
+            "Ruleset version retired: ruleset_id=%s version=%s",
             ruleset_id,
             version,
-            RulesetStatus.RETIRED,
-            retired_by=self._actor_or_system(retired_by),
-            retired_at=retired_at,
         )
 
     def load_published(self, ruleset_name: str, version: str | None = None) -> Ruleset:
@@ -407,94 +448,32 @@ class SparkDeltaRulesetRepository:
             "append"
         ).saveAsTable(table_name)
 
-    def _set_status(
-        self,
-        ruleset_id: str,
-        version: str,
-        status: RulesetStatus,
-        *,
-        retired_by: str | None = None,
-        retired_at: str | None = None,
-    ) -> None:
-        """
-        Update lifecycle status fields for one version.
-        """
-        row = self._ruleset_row_dict(ruleset_id, version)
-        if row is None:
-            raise RepositoryError(
-                f"Ruleset version not found: ruleset_id={ruleset_id}, version={version}"
-            )
-        if status is RulesetStatus.RETIRED and row["status"] == RulesetStatus.RETIRED.value:
-            raise RepositoryError(
-                f"Ruleset version is already retired: ruleset_id={ruleset_id}, version={version}"
-            )
-
-        assignments = [
-            f"status = {self._sql(status.value)}",
-        ]
-        if status is RulesetStatus.RETIRED:
-            assignments.append(f"retired_by = {self._sql_nullable(retired_by)}")
-            assignments.append(f"retired_at = {self._sql_nullable(retired_at)}")
-
-        self.spark.sql(
-            f"""
-            UPDATE {self.table_names.ruleset_versions}
-            SET {", ".join(assignments)}
-            WHERE ruleset_id = {self._sql(ruleset_id)}
-              AND version = {self._sql(version)}
-            """
-        )
-        updated = self._ruleset_row_dict(ruleset_id, version)
-        if updated is None or updated["status"] != status.value:
-            logger.error(
-                "Ruleset status update verification failed: ruleset_id=%s version=%s expected_status=%s",
-                ruleset_id,
-                version,
-                status.value,
-            )
-            raise RepositoryError(
-                f"Status update failed: ruleset_id={ruleset_id}, "
-                f"version={version}, status={status.value}"
-            )
-        logger.info(
-            "Ruleset status updated: ruleset_id=%s version=%s status=%s",
-            ruleset_id,
-            version,
-            status.value,
-        )
-
-    def _existing_ruleset_status(self, ruleset_name: str, version: str) -> str | None:
-        """
-        Return the persisted status for one version, or None when absent.
-        """
-        row = self._ruleset_row_dict_by_name_version(ruleset_name, version)
-        return row["status"] if row is not None else None
-
     def _ruleset_row_dict_by_name_version(
         self,
         ruleset_name: str,
         version: str,
     ) -> dict | None:
         """
-        Load one ruleset version row by public identity.
-
-        The publish guard uses ruleset_name/version because ruleset_id can be
-        environment-specific or generated, while the authored name and version
-        are the caller-facing duplicate boundary.
+        Load one unique ruleset version row by caller-facing identity.
         """
         if not self._table_exists(self.table_names.ruleset_versions):
             return None
         rows = (
             self.spark.table(self.table_names.ruleset_versions)
             .where((F.col("ruleset_name") == ruleset_name) & (F.col("version") == version))
-            .limit(1)
+            .limit(2)
             .collect()
         )
+        if len(rows) > 1:
+            raise RepositoryError(
+                "Duplicate immutable ruleset rows found: "
+                f"ruleset_name={ruleset_name}, version={version}"
+            )
         return rows[0].asDict(recursive=True) if rows else None
 
     def _ruleset_row_dict(self, ruleset_id: str, version: str) -> dict | None:
         """
-        Load one ruleset version row as a recursive Python dictionary.
+        Load one unique ruleset version row by stable identity.
 
         Recursive conversion is required because Spark returns nested structs
         as Row objects by default, while serializer/model construction expects
@@ -505,9 +484,14 @@ class SparkDeltaRulesetRepository:
         rows = (
             self.spark.table(self.table_names.ruleset_versions)
             .where((F.col("ruleset_id") == ruleset_id) & (F.col("version") == version))
-            .limit(1)
+            .limit(2)
             .collect()
         )
+        if len(rows) > 1:
+            raise RepositoryError(
+                "Duplicate immutable ruleset rows found: "
+                f"ruleset_id={ruleset_id}, version={version}"
+            )
         return rows[0].asDict(recursive=True) if rows else None
 
     def _table_exists(self, table_name: str) -> bool:

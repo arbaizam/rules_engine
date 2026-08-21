@@ -1,33 +1,56 @@
 # Rules Engine
 
-`rules_engine` is a strict, YAML-authored rules engine for applying ordered
-row-level rules to PySpark DataFrames. It compiles YAML into immutable
-dataclasses, validates the contract, runs embedded examples, evaluates rows,
-and can persist published versions and custom-function metadata in Delta.
+ALM Engineering built `rules_engine` to apply clear, reviewable, row-level
+business rules to PySpark DataFrames. Rules are authored in strict YAML,
+compiled into immutable Python dataclasses, and validated. When we need a
+governed release process, we publish immutable ruleset versions and custom-
+function metadata to Delta tables.
 
-The supported authoring surface is canonical YAML. The dataclasses are the
-compiled in-memory model, not a second authoring format.
+The rules engine supports one authoring language: canonical YAML. The
+dataclasses are the compiled in-memory model.
 
-## Core contract
+## Why we designed it this way
 
-A ruleset contains ordered rules. Each active rule:
+We elected to keep the core contract narrow and explicit.  We:
 
-1. evaluates its `when` condition tree;
-2. applies every assignment when it matches;
-3. makes those assignments available to later rules through `assigned`;
-4. stops evaluation only when its own `stop_on_match` is `true`.
+- evaluate one row at a time. Cross-row facts must already be present as
+  DataFrame columns;
+- reject unknown YAML keys, duplicate YAML keys, aliases, and ambiguous
+  shapes instead of guessing what an author meant;
+- use `field` when a rule needs the original input row and `assigned` when
+  a later rule needs a value committed by an earlier matching rule.
+- resolve null substitutions on the operand before we compare values.
+- evaluate rules in explicit `rule_order` order'
+- let every matching rule contribute assignments unless a matching rule
+  has `stop_on_match: true`;
+- keep the normal DataFrame output compact. Detailed traces are returned
+  only when `full_audit=true`;
+- never create metadata tables as a side effect of compiling, publishing,
+  loading, or evaluating rules;
+- treat both `(ruleset_id, version)` and `(ruleset_name, version)` as
+  immutable published identities.
 
-Rules read original input columns with `field`. A later rule reads a value
-assigned by an earlier matched rule with `assigned`. Multiple matching rules
-contribute to `rules_engine_assign`; if more than one rule assigns the same
-target, the last applied assignment is the final value.
+## How one row is evaluated
+
+For each active rule, in ascending `rule_order`, we:
+
+1. evaluate every active condition in its `when` tree;
+2. resolve all assignment expressions against one pre-rule snapshot;
+3. commit every assignment together when the rule matches;
+4. expose those committed values to later rules through `assigned`; and
+5. stop only when that matching rule has `stop_on_match: true`.
+
+Multiple rules may match. Their assignments are merged into
+`rules_engine_assign`. When multiple rules assign the same target, the last
+applied assignment is the final value. Full audit preserves every assignment
+event so we can see what was replaced and which assignment won.
 
 ```yaml
 ruleset_id: account_review
 ruleset_name: Account Review
 version: "1"
-owner: Rules Team
-owner_department: Engineering
+owner: ALM Rules Team
+owner_department: ALM Engineering
 rules:
   - rule_id: classify_open
     rule_name: Classify open accounts
@@ -67,85 +90,166 @@ expect:
       requires_review: true
 ```
 
-Unknown keys, duplicate YAML keys, unsupported aliases, and invalid shapes are
-rejected. Ruleset lifecycle status is not authored in YAML.
+Ruleset lifecycle status is not authored in YAML. `published` and `retired`
+belong only to repository rows.
 
-## YAML reference
+## YAML contract reference
+
+### Document rules
+
+| Contract rule | Allowed values | Definition |
+|---|---|---|
+| Root document | One YAML mapping | The document must contain exactly one ruleset mapping. |
+| Keys | Only keys listed in the tables below | Unknown and duplicate keys fail compilation. |
+| Names and IDs | Non-empty strings | IDs are case-sensitive. We recommend stable, explicit IDs for audit work. |
+| Booleans | YAML `true` or `false` | Strings such as `"true"` are not accepted as booleans. |
+| Integers | YAML integers, excluding booleans | We use integers for `rule_order`. |
+| Numbers | Finite YAML integers, decimals, or floats | `NaN` and infinite values are rejected. Untyped fractional YAML values are preserved as `Decimal`. |
+| Dates | YAML date values or ISO `YYYY-MM-DD` with `value_type: date` | Invalid calendar dates fail compilation. |
+| Collections | YAML lists and mappings; tuples may appear in canonical exported YAML | The operator or Spark target type may impose tighter rules. |
 
 ### Ruleset fields
 
-| Field | Required | Meaning |
-|---|---:|---|
-| `ruleset_id` | Yes | Stable ruleset identifier. |
-| `ruleset_name` | Yes | Name used to load a published ruleset. |
-| `version` | Yes | Immutable version identifier. |
-| `rules` | Yes | Ordered rule definitions. |
-| `description` | No | Human-readable description. |
-| `owner` | No | Owning person or team. |
-| `owner_department` | No | Owning department. |
-| `expect` | No | Executable examples run before publication. |
+| Field | Required | Type and allowed values | Definition |
+|---|---:|---|---|
+| `ruleset_id` | Yes | Non-empty string | Stable technical identity for the ruleset across versions. |
+| `ruleset_name` | Yes | Non-empty string | Human-facing name used by `load_published`. The same name may have multiple versions. |
+| `version` | Yes | Non-empty string | Immutable caller-defined version. We do not parse or order the value as semantic versioning. |
+| `rules` | Yes | YAML list with at least one rule before validation can pass | Rules are evaluated by `rule_order`, not by list position once explicit orders are supplied. |
+| `description` | No | String or `null`; default `null` | Plain-English purpose of the ruleset. |
+| `owner` | Required for validation | Non-empty string; compile default `null` | Person or team accountable for the rules. YAML can compile without it, but validation and publication fail. |
+| `owner_department` | Required for validation | Non-empty string; compile default `null` | Department accountable for the rules. YAML can compile without it, but validation and publication fail. |
+| `expect` | No | YAML list of expected cases; default `[]` | Executable examples that become a publication gate. |
 
 ### Rule fields
 
-| Field | Required | Default | Meaning |
-|---|---:|---|---|
-| `rule_name` | Yes | — | Human-readable rule name. |
-| `when` | Yes | — | One `all` or `any` condition group. Groups may nest. |
-| `assign` | Yes | — | Assignment mapping or explicit assignment list. |
-| `rule_id` | No | Generated | Stable rule identifier. Explicit IDs are recommended. |
-| `rule_order` | No | YAML order | Evaluation order. Values must be unique. |
-| `active_flag` | No | `true` | Whether the rule is evaluated. |
-| `stop_on_match` | No | `false` | Stop after this rule matches and applies assignments. |
-| `description` | No | `null` | Human-readable description. |
+| Field | Required | Type and allowed values | Default | Definition |
+|---|---:|---|---|---|
+| `rule_name` | Yes | Non-empty string | — | Human-readable rule name. |
+| `when` | Yes | One condition-group mapping containing exactly one of `all` or `any` | — | Boolean condition tree for the rule. |
+| `assign` | Yes | Non-empty mapping or explicit assignment list | — | Values committed when the rule matches. Validation rejects a rule with no assignments. |
+| `rule_id` | No | Non-empty string, unique within the ruleset | `rule:<YAML position>` | Stable technical rule identity. We recommend authoring it explicitly. |
+| `rule_order` | No | Integer, unique within the ruleset | One-based YAML position | Evaluation order. Lower values run first; values do not need to be consecutive. |
+| `active_flag` | No | `true` or `false` | `true` | An inactive rule is not evaluated and does not produce assignments. |
+| `stop_on_match` | No | `true` or `false` | `false` | When this rule matches, we apply its assignments and skip all later rules. A non-matching rule never stops evaluation. |
+| `description` | No | String or `null` | `null` | Plain-English purpose or business explanation. |
 
-### Condition fields
+`rule_id` and `rule_order` must each be unique. Assignment dependencies are
+validated against `rule_order`, so an `assigned` reference must have an active
+producer with a lower order.
 
-| Field | Required | Default | Meaning |
-|---|---:|---|---|
-| `left` | Yes | — | Left operand. |
-| `operator` | Yes | — | Canonical comparison operator. |
-| `right` | Usually | — | Right operand; omitted for `is_null` and `is_not_null`. |
-| `condition_id` | No | Generated | Stable identifier. Explicit IDs are recommended. |
-| `tolerance_abs` | No | `0` | Absolute numeric tolerance for supported comparisons. |
-| `error_on_null` | No | `false` | Raise a row error if an operand is still null. |
-| `active_flag` | No | `true` | Inactive conditions evaluate as not passed. |
+### Condition-group fields
 
-Condition groups contain exactly one logical key:
+A group contains conditions, nested groups, or both.
+
+| Field | Required | Type and allowed values | Default | Definition |
+|---|---:|---|---|---|
+| `all` | Exactly one of `all` or `any` | YAML list with at least one condition or nested group before validation can pass | — | The group passes only when every item passes. |
+| `any` | Exactly one of `all` or `any` | YAML list with at least one condition or nested group before validation can pass | — | The group passes when at least one item passes. |
+| `condition_group_id` | No | Non-empty string, unique across the ruleset | Generated from its location | Stable group identity included in full-audit traces. |
+
+We evaluate every active condition in both `all` and `any` groups. We elected
+not to short-circuit because errors must not disappear merely because an
+earlier branch already determined the Boolean result. An inactive condition
+evaluates as not passed. Therefore it blocks an `all` group but does not block
+another passing branch in an `any` group.
 
 ```yaml
 when:
   all:
-    - left: {field: country}
+    - condition_id: is_us
+      left: {field: country}
       operator: eq
       right: {literal: US}
-    - any:
-        - left: {field: amount}
+    - condition_group_id: material_or_priority
+      any:
+        - condition_id: material_amount
+          left: {field: amount}
           operator: gt
           right: {literal: 100}
-        - left: {field: priority}
+        - condition_id: high_priority
+          left: {field: priority}
           operator: eq
           right: {literal: HIGH}
 ```
 
-### Operands
+### Condition fields
 
-Exactly one operand kind is allowed per operand.
+| Field | Required | Type and allowed values | Default | Definition |
+|---|---:|---|---|---|
+| `left` | Yes | Exactly one operand mapping | — | Value on the left side of the comparison. |
+| `operator` | Yes | One canonical operator from the operator table below | — | Comparison to perform. Aliases and SQL symbols are not accepted. |
+| `right` | Required for binary operators | Exactly one operand mapping; forbidden for `is_null` and `is_not_null` | — | Value on the right side of the comparison. |
+| `condition_id` | No | Non-empty string, unique across the ruleset | Generated from its location | Stable identity included in validation and audit output. |
+| `tolerance_abs` | No | Finite number greater than or equal to `0` | `0` | Absolute numeric tolerance. It must be `0` for date/timestamp comparisons and for `between`/`not_between`. |
+| `error_on_null` | No | `true` or `false`; forbidden for unary null operators | `false` | When a binary operand remains null after fallback, `false` means no match and `true` produces a row error. |
+| `active_flag` | No | `true` or `false` | `true` | An inactive condition is recorded as inactive in full audit and evaluates as not passed. |
 
-| Form | Meaning |
-|---|---|
-| `{field: amount}` | Read an original DataFrame column. |
-| `{assigned: review_bucket}` | Read the latest value committed by an earlier matched rule. |
-| `{literal: 100}` | Use a literal value. |
-| `{custom_function: {name: trim, args: {value: {field: raw_name}}}}` | Call a registered function. |
+### Operand forms
 
-Any operand may define `default_if_null`. The fallback must be a non-null
-literal and is applied before the comparison or assignment:
+Every operand defines exactly one of `field`, `assigned`, `literal`, or
+`custom_function`. The allowed keys depend on that choice.
+
+| Operand | Allowed keys | Allowed values | Definition |
+|---|---|---|---|
+| Field | `field`, optional `default_if_null` | `field` is a non-empty original DataFrame column name | Reads the input row. It never reads a value created by a rule. Dotted names are treated as literal column names and escaped for Spark. |
+| Assigned | `assigned`, optional `default_if_null` | `assigned` is a non-empty assignment target produced by an active lower-order rule | Reads the latest value committed to that target. It does not fall back to an input column with the same name. |
+| Literal | `literal`, optional `value_type`, optional `default_if_null` | Any supported finite scalar or supported collection | Uses authored data directly. A typed null is allowed, but a new Spark assignment target needs a supported `value_type`. |
+| Custom function | `custom_function`, optional `default_if_null` | Function mapping with exactly `name` and optional `args` | Calls a registered function. The argument names must exactly match its registry contract. |
+
+Examples:
 
 ```yaml
-left: {field: amount, default_if_null: 0}
+left: {field: amount}
+right: {literal: 100}
 ```
 
-Typed fallback form:
+```yaml
+left: {assigned: review_bucket}
+right: {literal: high}
+```
+
+```yaml
+left:
+  custom_function:
+    name: trim
+    args:
+      value: {field: raw_name}
+right: {literal: ABC}
+```
+
+Custom-function arguments may be another operand or a literal value. Nested
+custom functions are supported. Argument names are strings and must match the
+registered `arg_names` set exactly; missing and extra arguments fail
+validation.
+
+### Literal type hints
+
+We use type hints when Spark cannot safely infer an assignment type, most
+notably for null literals and custom-function results assigned to a new field.
+
+| Canonical Spark meaning | Allowed `value_type` or `return_type_hint` values | Notes |
+|---|---|---|
+| String | `string`, `str` | The value must be compatible with a Spark string target. |
+| Integer | `integer`, `int`, `long` | Mapped to Spark `LongType`; values must fit without loss. |
+| Floating number | `number`, `float`, `double` | Mapped to Spark `DoubleType`. Explicit use elects floating-point behavior. |
+| Exact decimal | `decimal` | Mapped to `DecimalType(38,18)` when a concrete target type is not already known. Values must be finite and fit. |
+| Boolean | `boolean`, `bool` | Values must be actual booleans; strings are not coerced. |
+| Date | `date` | ISO `YYYY-MM-DD` strings are converted to Python dates during compilation. |
+| Timestamp | `timestamp` | The authored or returned value must be timestamp-compatible. |
+| Timestamp without timezone | `timestamp_ntz` | Available only when the installed PySpark runtime provides `TimestampNTZType`. |
+| Polymorphic custom return | `any` | Allowed for a custom function only when Spark already knows the assignment target type. It cannot define a new target field. |
+
+The compiler retains an unrecognized non-empty `value_type` as metadata, but
+Spark compatibility validation rejects it when it is needed for an
+assignment. We recommend using only the values in this table.
+
+### Null behavior
+
+Any operand may define `default_if_null`. Allowed fallback forms are:
+
+- a non-null scalar or list literal, such as `default_if_null: 0`; or
+- a mapping containing `literal` and optional `value_type` only.
 
 ```yaml
 left:
@@ -153,35 +257,56 @@ left:
   default_if_null: {literal: 2026-01-01, value_type: date}
 ```
 
-### Null semantics
+We handle nulls in this order:
 
-Null handling has two steps:
+1. Resolve the operand.
+2. If the result is null and `default_if_null` exists, replace it with the
+   fallback.
+3. Run the comparison against the effective value.
+4. For a binary comparison that still has a null, return no match when
+   `error_on_null=false` or a row error when `error_on_null=true`.
 
-1. Resolve each operand. If its result is null and it has `default_if_null`,
-   replace the null with that literal.
-2. If an operand is still null, `error_on_null: false` makes the condition not
-   match; `error_on_null: true` produces a row evaluation error.
+`is_null` and `is_not_null` inspect the effective value. A fallback can
+therefore intentionally make an originally null value non-null before the
+unary comparison. The fallback itself cannot be null and cannot contain a
+nested `default_if_null`.
 
-`is_null` and `is_not_null` inspect the resolved value. Therefore a fallback
-can intentionally make an originally null value non-null before the unary
-comparison.
+### Operator reference
 
-### Operators
-
-| Category | Operators |
-|---|---|
-| Equality and order | `eq`, `ne`, `gt`, `ge`, `lt`, `le` |
-| Membership and ranges | `in`, `not_in`, `between`, `not_between` |
-| Text | `like`, `not_like`, `contains`, `not_contains`, `starts_with`, `ends_with` |
-| Null | `is_null`, `is_not_null` |
+| Operator | Right operand | Allowed values or shapes | Definition |
+|---|---|---|---|
+| `eq` | Required | Comparable scalar values | Equality. Numeric equality uses `tolerance_abs`. |
+| `ne` | Required | Comparable scalar values | Negation of `eq`. Numeric inequality uses `tolerance_abs`. |
+| `gt` | Required | Numeric pair or matching temporal pair | Left is greater than right. Numeric tolerance moves the boundary outward. Temporal tolerance must be `0`. |
+| `ge` | Required | Numeric pair or matching temporal pair | Left is greater than or equal to right. Numeric tolerance is supported. |
+| `lt` | Required | Numeric pair or matching temporal pair | Left is less than right. Numeric tolerance is supported. |
+| `le` | Required | Numeric pair or matching temporal pair | Left is less than or equal to right. Numeric tolerance is supported. |
+| `in` | Required | Right side must resolve to a list, tuple, or set | True when left equals any right-side item. Numeric membership uses `tolerance_abs`. |
+| `not_in` | Required | Right side must resolve to a list, tuple, or set | Negation of `in`. Strings and mappings are not treated as collections. |
+| `between` | Required | Right side must be a two-item list or tuple | Inclusive lower and upper bounds. `tolerance_abs` must be `0`. |
+| `not_between` | Required | Right side must be a two-item list or tuple | Negation of inclusive `between`. `tolerance_abs` must be `0`. |
+| `like` | Required | Values that can be rendered as strings | SQL-style whole-value pattern match. `%` matches any number of characters and `_` matches one character. |
+| `not_like` | Required | Values that can be rendered as strings | Negation of `like`. |
+| `contains` | Required | Values that can be rendered as strings | True when the rendered right value is a substring of the rendered left value. |
+| `not_contains` | Required | Values that can be rendered as strings | Negation of `contains`. |
+| `starts_with` | Required | Values that can be rendered as strings | True when rendered left starts with rendered right. |
+| `ends_with` | Required | Values that can be rendered as strings | True when rendered left ends with rendered right. |
+| `is_null` | Forbidden | Left may resolve to any value | True when the effective left value is null. `error_on_null` is not allowed. |
+| `is_not_null` | Forbidden | Left may resolve to any value | True when the effective left value is not null. `error_on_null` is not allowed. |
 
 ### Assignments
 
-Mapping form is the usual shorthand:
+The normal mapping form uses the key as `target_field`. A scalar or list value
+is shorthand for a literal operand. A mapping value must be an explicit
+operand, so a mapping literal must be wrapped in `literal`.
 
 ```yaml
 assign:
   review_bucket: high
+  review_flags:
+    literal:
+      material: true
+      manual: false
   normalized_name:
     custom_function:
       name: trim
@@ -189,7 +314,13 @@ assign:
         value: {field: raw_name}
 ```
 
-Explicit form is available when stable assignment IDs are needed:
+The explicit list form gives us stable assignment IDs:
+
+| Field | Required | Type and allowed values | Default | Definition |
+|---|---:|---|---|---|
+| `assignment_id` | No | Non-empty string, unique across the ruleset | `assignment:<rule_id>:<target_field>` | Identity used in full-audit provenance. |
+| `target_field` | Yes | Non-empty string; unique within one rule | — | Field written into `rules_engine_assign`. It may match an input column name, but the input column itself is preserved. |
+| `value` | Yes | Exactly one operand mapping | — | Expression resolved when the rule matches. |
 
 ```yaml
 assign:
@@ -198,18 +329,27 @@ assign:
     value: {literal: high}
 ```
 
-Assignments from one matched rule are committed together after all of that
-rule's assignment expressions are resolved. Consequently, `assigned` refers
-only to values committed by earlier matched rules, never another assignment in
-the same rule.
+Assignments within one rule read the same pre-rule state and are committed
+together. An assignment cannot read another assignment from the same rule.
+Only a later active rule may read the committed value through `assigned`.
 
 ### Executable expected cases
 
-`expect` examples run without Spark through `RulesetTester`. Publication is
-blocked when any case fails.
+`expect` cases run in declaration order without Spark. Publication is blocked
+when any case fails.
 
-`then` may assert `matched`, `matched_rule_ids`, an `assign` mapping, or
-assignment target names directly:
+| Field | Required | Type and allowed values | Definition |
+|---|---:|---|---|
+| `name` | Yes | Non-empty string, unique within the ruleset | Name shown in test results. |
+| `given` | Yes | YAML mapping | One input row. Keys are field names and values are row values. |
+| `then` | Yes | Non-empty YAML mapping | Assertions for the result. Allowed keys are listed below. |
+
+| `then` key | Allowed values | Definition |
+|---|---|---|
+| `matched` | `true` or `false` | Expected overall match flag. |
+| `matched_rule_ids` | List of rule-ID strings | Expected complete ordered list of matching rule IDs. |
+| `assign` | Mapping of declared assignment targets to expected values | Expected subset of final assignments. Unlisted targets are not compared. |
+| Any declared assignment target | Any expected value | Shorthand for placing that target inside `assign`. Unknown target names fail validation. |
 
 ```yaml
 expect:
@@ -220,7 +360,12 @@ expect:
       matched_rule_ids: []
 ```
 
-## Compile, validate, and export
+Expected cases have no Spark schema. They prove rule behavior, not whether an
+assignment can be represented losslessly in a particular DataFrame schema.
+We run Spark compatibility validation separately when we have the actual
+schema.
+
+## Compile, validate, test, and export
 
 ```python
 from rules_engine import (
@@ -246,12 +391,16 @@ if not tests.passed:
 canonical_yaml = YamlRulesetExporter().export_text(ruleset)
 ```
 
-`compile_text` and `compile_path` build the immutable dataclasses. Validation
-checks rule identities, ordering, operator/operand compatibility, assignment
-dependencies, function contracts, and expected-case shape. Exported YAML can
-be compiled back into the same model.
+Compilation checks YAML syntax, keys, primitive types, and structural shapes.
+Semantic validation checks ownership, unique identities, group contents,
+operator arity, assignment dependencies, function contracts, and expected
+cases. `SparkRulesetCompatibilityValidator` adds DataFrame field and exact
+type checks when we pass a DataFrame or `StructType`.
 
-## Spark evaluation
+The exporter emits canonical YAML that compiles back into the same dataclass
+model.
+
+## Spark evaluation contract
 
 ```python
 from rules_engine import FunctionRegistry, SparkRulesEngineRuntime
@@ -265,131 +414,134 @@ result_df = runtime.evaluate_dataframe(
 )
 ```
 
-The returned DataFrame keeps all original columns first and appends the rules
-engine columns in the order below. Replace `rules_engine` with the requested
-`column_prefix` when a custom prefix is used.
+The returned DataFrame keeps every original column first and in its original
+order. We append engine columns afterward. Replace `rules_engine` with the
+selected `column_prefix` when a custom prefix is used.
 
 ### Compact output columns
 
-| Order | Column | Type | Definition |
-|---:|---|---|---|
-| 1 | Original DataFrame columns | Existing | Preserved in their original order. |
-| 2 | `rules_engine_error` | string, nullable | Row error text when `fail_on_error=false`; otherwise null. |
-| 3 | `rules_engine_matched` | boolean | Whether at least one rule matched. |
-| 4 | `rules_engine_matched_rule_ids` | array<string> | Matching rule IDs in evaluation order. |
-| 5 | `rules_engine_assign` | struct, nullable | Final assignment values from all applied rules. Its fields are derived from the ruleset. |
-| 6 | `rules_engine_ruleset` | struct | Immutable ruleset identity. |
-| 7 | `rules_engine_engine_version` | string | Installed package version used for evaluation. |
+| Order | Column | Type | Allowed returned values | Definition |
+|---:|---|---|---|---|
+| 1 | Original DataFrame columns | Existing types | Original values | Input columns are preserved in their original order. |
+| 2 | `rules_engine_error` | Nullable string | `null` or error text | Row error captured when `fail_on_error=false`. It remains null for a clean match or no-match. |
+| 3 | `rules_engine_matched` | Boolean | `true` or `false` | True when at least one active rule matched and the row completed successfully. |
+| 4 | `rules_engine_matched_rule_ids` | `array<string>` | Ordered IDs or `[]` | Every matching rule ID in evaluation order. |
+| 5 | `rules_engine_assign` | Nullable struct | Struct or `null` | Final assignments from all matching rules. Fields are derived from active assignment targets. |
+| 6 | `rules_engine_ruleset` | Struct | Non-null identity struct | Immutable identity of the evaluated ruleset. |
+| 7 | `rules_engine_engine_version` | String | Non-empty package version | Installed package version used for evaluation. |
 
 ### Full-audit additions
 
-With `full_audit=true`, two columns are inserted after
-`rules_engine_assign` and before `rules_engine_ruleset`:
+When `full_audit=true`, we insert two columns after `rules_engine_assign` and
+before `rules_engine_ruleset`:
 
-| Order after assign | Column | Type | Definition |
-|---:|---|---|---|
-| 1 | `rules_engine_matched_rules` | array<struct> | Detailed trace for every matched rule. |
-| 2 | `rules_engine_assignment_results` | array<struct> | Every applied assignment with override provenance. |
+| Order after assign | Column | Type | Allowed returned values | Definition |
+|---:|---|---|---|---|
+| 1 | `rules_engine_matched_rules` | `array<struct>` | One element per match or `[]` | Complete trace for every matching rule. Losing rules do not emit match traces. |
+| 2 | `rules_engine_assignment_results` | `array<struct>` | One element per applied assignment or `[]` | Assignment history, including replaced values and final-winner provenance. |
 
-Full audit is optional because it resolves and serializes substantially more
-row-level detail. There is no separate first-match trace: the first element of
-`rules_engine_matched_rules` is the first match, and all later matches use the
+Full audit resolves and serializes substantially more data. We elected to make
+it optional for targeted explainability instead of paying that cost on every
+production row. There is no special first-match trace. The first element of
+`rules_engine_matched_rules` is the first match, and every later match uses the
 same schema.
 
-### `rules_engine_assign` fields
+### `rules_engine_assign`
 
-The struct contains one field per assignment target across the ruleset.
+The struct contains one nullable field per active assignment target across the
+ruleset.
 
-| Value | Meaning |
+| Returned value | Definition |
 |---|---|
-| Struct with values | At least one rule matched; each assigned target holds its final value. |
-| Null field in a struct | A different rule matched, but that target was not assigned, or its assignment resolved to null. |
-| Null struct | No rule matched, or the row failed before assignments were returned. |
+| Struct with one or more values | At least one rule matched; each populated field is its final assigned value. |
+| Null field inside a struct | A rule matched but did not assign that target, or the final assignment resolved to null. |
+| Null struct | No rule matched, or row evaluation failed before assignments were returned. |
 
-### `rules_engine_ruleset` fields
+### `rules_engine_ruleset`
 
-| Nested field | Type | Definition |
-|---|---|---|
-| `id` | string | `ruleset_id` used for evaluation. |
-| `version` | string | Ruleset version used for evaluation. |
-| `content_hash` | string | SHA-256 hash of the canonical persisted payload. |
+| Nested field | Type | Allowed returned values | Definition |
+|---|---|---|---|
+| `id` | String | Authored `ruleset_id` | Technical ruleset identity used for evaluation. |
+| `version` | String | Authored version | Exact ruleset version used for evaluation. |
+| `content_hash` | String | SHA-256 hexadecimal hash | Hash of the canonical immutable payload. |
 
-### `rules_engine_matched_rules` element fields
+### `rules_engine_matched_rules` elements
 
-| Nested field | Type | Definition |
-|---|---|---|
-| `rule_id` | string | Matched rule identifier. |
-| `rule_name` | string | Matched rule name. |
-| `rule_order` | long | Evaluation order. |
-| `explanation` | string | Human-readable explanation of the matched condition logic. |
-| `assignments_applied` | array<string> | Assignment target fields applied by the rule. |
-| `conditions` | array<struct> | Resolved condition details for the rule. |
+| Nested field | Type | Allowed returned values | Definition |
+|---|---|---|---|
+| `rule_id` | String | Authored or generated rule ID | Identity of the matching rule. |
+| `rule_name` | String | Authored rule name | Human-readable rule name. |
+| `rule_order` | Long | Authored or generated integer order | Order in which we evaluated the rule. |
+| `explanation` | String | Human-readable Boolean expression | Explanation built from authored logic and resolved values. |
+| `assignments_applied` | `array<string>` | Ordered target names or `[]` | Targets applied by this matching rule. |
+| `conditions` | `array<struct>` | One element per evaluated condition | Detailed condition results for this rule. |
 
 Each `conditions` element contains:
 
-| Nested field | Type | Definition |
+| Nested field | Type | Allowed returned values | Definition |
+|---|---|---|---|
+| `condition_id` | String | Authored or generated ID | Stable condition identity. |
+| `condition_group_id` | String | Authored or generated group ID | Group that directly contains the condition. |
+| `condition_group_operator` | String | `all` or `any` | Logical operator of the containing group. |
+| `active_flag` | Boolean | `true` or `false` | Whether we treated the condition as active. |
+| `columns` | `array<string>` | Source column names or `[]` | Original input columns used directly or through function arguments. |
+| `left` | Struct | Resolved operand trace | Left operand before and after fallback. |
+| `right` | Nullable struct | Resolved operand trace or `null` | Right operand; null only for unary operators. |
+| `operator` | String | One canonical comparison operator | Comparison that was evaluated. |
+| `comparison_result` | Nullable Boolean | `true`, `false`, or `null` | Direct comparison result. Null means a binary operand remained null. |
+| `passed` | Nullable Boolean | `true`, `false`, or `null` | Condition pass result. |
+| `tolerance_abs` | Nullable string | Non-default tolerance text or `null` | Authored absolute tolerance when it is not zero. |
+
+Each operand trace (`left` or `right`) contains:
+
+| Nested field | Type | Allowed returned values | Definition |
+|---|---|---|---|
+| `kind` | String | `field`, `assigned`, `literal`, or `custom_function` | Operand kind. |
+| `column` | Nullable string | Source field name or `null` | Direct field source. |
+| `target_field` | Nullable string | Assignment target name or `null` | Target read by an `assigned` operand. |
+| `original_value` | Nullable string | Rendered value or `null` | Value before `default_if_null`. |
+| `value` | Nullable string | Rendered effective value or `null` | Value used by the comparison. |
+| `value_type` | Nullable string | Authored hint or `null` | Literal type hint when present. |
+| `default_if_null` | Nullable string | Rendered fallback or `null` | Configured fallback. |
+| `default_applied` | Boolean | `true` or `false` | Whether fallback replaced a null. |
+| `function_name` | Nullable string | Registered name or `null` | Function used by a custom-function operand. |
+| `produced_by_rule_id` | Nullable string | Earlier rule ID or `null` | Rule that produced an assigned value. |
+| `produced_by_assignment_id` | Nullable string | Earlier assignment ID or `null` | Assignment that produced an assigned value. |
+| `source_columns` | Nullable `array<string>` | Column names, `[]`, or `null` | Transitive input columns used by the operand. |
+| `arguments` | Nullable `map<string,string>` | Resolved argument text or `null` | Compact custom-function argument values. |
+
+### `rules_engine_assignment_results` elements
+
+| Nested field | Type | Allowed returned values | Definition |
+|---|---|---|---|
+| `assignment_id` | String | Authored or generated assignment ID | Stable assignment identity. |
+| `rule_id` | String | Matching rule ID | Rule that applied the assignment. |
+| `rule_name` | String | Matching rule name | Human-readable rule name. |
+| `rule_order` | Long | Rule order integer | Evaluation order of the applying rule. |
+| `target_field` | String | Declared target name | Field assigned by this event. |
+| `authored_expression` | String | Readable operand expression | Human-readable assignment expression. |
+| `old_value` | Nullable string | Rendered value or `null` | Latest earlier committed assignment for this target, otherwise the original input value. |
+| `proposed_value` | Nullable string | Rendered value or `null` | Value proposed by this assignment. |
+| `changed` | Boolean | `true` or `false` | Whether proposed value differs from `old_value`. |
+| `effective` | Boolean | `true` or `false` | True only when this event supplies the final target value. |
+| `overridden_by_rule_id` | Nullable string | Later rule ID or `null` | Rule that later replaced this value. |
+| `overridden_by_assignment_id` | Nullable string | Later assignment ID or `null` | Assignment that later replaced this value. |
+
+### Evaluation parameters and returned behavior
+
+| Setting | Allowed values and default | Returned behavior |
 |---|---|---|
-| `columns` | array<string> | Original source columns referenced by the condition. |
-| `left` | struct | Resolved left operand. |
-| `right` | struct, nullable | Resolved right operand; null for unary operators. |
-| `operator` | string | Canonical comparison operator. |
-| `comparison_result` | boolean, nullable | Direct comparison result. |
-| `passed` | boolean, nullable | Whether the condition passed. |
-| `tolerance_abs` | string, nullable | Non-default absolute tolerance. |
+| `column_prefix` | Non-empty string; default `rules_engine` | Renames every appended column. For example, `decision` produces `decision_error` and `decision_matched`. |
+| `fail_on_error` | `true` or `false`; default `true` | `true` raises from the worker during the caller's first Spark action. `false` returns an error row with `matched=false`, an empty ID array, and null assignments. |
+| `include_error_traceback` | `true` or `false`; default `false` | Adds a Python traceback to captured row errors. We use it only for debugging because it makes rows much larger. |
+| `full_audit` | `true` or `false`; default `false` | `true` adds matched-rule and assignment-history columns. It does not change matching or assignment results. |
+| Rule `stop_on_match` | `true` or `false`; default `false` | `false` lets later rules run. `true` applies the matching rule and then stops. |
 
-Each operand struct (`left` or `right`) contains:
+All compact and full-audit output names for the selected prefix are reserved.
+We reject an input DataFrame containing any reserved name before evaluation,
+even when `full_audit=false`.
 
-| Nested field | Type | Definition |
-|---|---|---|
-| `kind` | string | `field`, `assigned`, `literal`, or `custom_function`. |
-| `column` | string, nullable | Original source column for a field operand. |
-| `target_field` | string, nullable | Referenced assignment target for an assigned operand. |
-| `original_value` | string, nullable | Value before `default_if_null`. |
-| `value` | string, nullable | Resolved value used by the comparison. |
-| `value_type` | string, nullable | Declared literal type when present. |
-| `default_if_null` | string, nullable | Configured fallback value. |
-| `default_applied` | boolean | Whether the fallback replaced a null. |
-| `function_name` | string, nullable | Registered custom-function name. |
-| `produced_by_rule_id` | string, nullable | Rule that produced an assigned value. |
-| `produced_by_assignment_id` | string, nullable | Assignment that produced an assigned value. |
-| `source_columns` | array<string>, nullable | Source columns used by this operand. |
-| `arguments` | map<string,string>, nullable | Compact resolved custom-function arguments. |
-
-### `rules_engine_assignment_results` element fields
-
-| Nested field | Type | Definition |
-|---|---|---|
-| `assignment_id` | string | Stable assignment identifier. |
-| `rule_id` | string | Rule that applied the assignment. |
-| `rule_name` | string | Rule name. |
-| `rule_order` | long | Rule evaluation order. |
-| `target_field` | string | Assigned target. |
-| `authored_expression` | string | Readable YAML assignment expression. |
-| `old_value` | string, nullable | Original input value of the target column. |
-| `proposed_value` | string, nullable | Value proposed by this assignment. |
-| `changed` | boolean | Whether proposed and original input values differ. |
-| `effective` | boolean | Whether this is the final assignment to the target. |
-| `overridden_by_rule_id` | string, nullable | Later rule that supplied the final value. |
-| `overridden_by_assignment_id` | string, nullable | Later assignment that supplied the final value. |
-
-### Parameter behavior
-
-| Setting | Returned behavior |
-|---|---|
-| All matching rules use `stop_on_match: false` | Every matching rule is applied. IDs and traces follow rule order; `rules_engine_assign` contains their combined final assignments. |
-| A matching rule uses `stop_on_match: true` | That rule's assignments are applied, then later rules are not evaluated. |
-| `full_audit=false` | Returns the compact columns only. |
-| `full_audit=true` | Adds matched-rule traces and assignment provenance. Business results remain the same. |
-| `fail_on_error=true` | A row evaluation error raises during the first materializing Spark action. |
-| `fail_on_error=false` | The row returns `rules_engine_error`, `matched=false`, an empty ID array, and null assignments. Other rows continue. |
-| `include_error_traceback=true` | Adds the Python traceback to captured row errors. Use only for debugging. |
-| Custom `column_prefix="decision"` | Emits `decision_error`, `decision_matched`, and the equivalent prefixed columns. |
-
-All compact and full-audit names for the selected prefix are reserved. An
-input DataFrame containing any of them is rejected before evaluation, even
-when `full_audit=false`.
-
-## Coverage
+## Coverage reports
 
 ```python
 report = service.coverage_report(
@@ -399,15 +551,28 @@ report = service.coverage_report(
 )
 ```
 
-Coverage uses the production evaluator and returns total/no-match/error counts,
-per-rule match and first-match counts, dead-rule IDs, broad-rule IDs, and a
-filtered DataFrame of clean no-match rows. It does not score a “closest” rule.
+Coverage uses the production evaluator with `fail_on_error=false` and starts
+one Spark aggregation action. It returns:
 
-## Custom function registry
+| Field | Allowed values | Definition |
+|---|---|---|
+| `total_row_count` | Integer greater than or equal to `0` | Rows evaluated. |
+| `no_match_count` | Integer greater than or equal to `0` | Clean rows that matched no rule. |
+| `error_count` | Integer greater than or equal to `0` | Rows with evaluation errors. |
+| `rules` | Tuple of `RuleCoverage` | Match count, first-match count, match rate, dead flag, and broad flag for every active rule. |
+| `first_match_distribution` | Mapping of rule ID to integer count | Derived first-match counts. |
+| `dead_rule_ids` | Tuple of rule IDs | Active rules with zero matches. |
+| `suspiciously_broad_rule_ids` | Tuple of rule IDs | Rules whose match rate is at or above `broad_match_threshold`. |
+| `no_match_rows` | Spark DataFrame | Lazy filtered view containing only clean no-match rows and the coverage-prefixed result columns. |
 
-YAML may call only functions registered in `FunctionRegistry`. Metadata and
-the executable callable are registered separately so persisted rulesets never
-contain executable code.
+`broad_match_threshold` must be between `0` and `1`, inclusive. Coverage is a
+diagnostic summary; it does not change or publish the ruleset.
+
+## Custom-function registry
+
+YAML may call only functions registered in `FunctionRegistry`. We keep
+metadata and executable callables separate so persisted rulesets never contain
+executable code.
 
 ```python
 from rules_engine import CustomFunctionSpec, FunctionRegistry
@@ -429,21 +594,368 @@ registry.register(
 )
 ```
 
-Callables must be top-level and serializable for Spark workers. The package
-also provides `register_standard_functions(registry)` and
-`standard_function_rows()` for its built-in function set.
+### `CustomFunctionSpec` contract
 
-## Repository and service
+| Field | Required | Allowed values | Definition |
+|---|---:|---|---|
+| `function_name` | Yes | Unique non-empty string | Name used in YAML. Duplicate registration fails. |
+| `implementation_reference` | Yes | Non-empty environment-defined string | Audit metadata only. We never import executable code from this string. |
+| `arg_names` | Yes | Tuple of unique argument-name strings | Exact keyword set required in YAML. |
+| `allowed_in_condition_flag` | Yes | `true` or `false` | Whether the function may appear in a condition operand. |
+| `allowed_in_assignment_flag` | Yes | `true` or `false` | Whether the function may appear in an assignment operand. |
+| `active_flag` | No | `true` or `false`; default `true` | Inactive functions fail ruleset validation. |
+| `return_type_hint` | No | Supported type hint, `any`, or `null` | Used for Spark assignment type resolution. New targets need a concrete supported type. |
+| `description` | No | String or `null` | Human-readable purpose. |
+| `version` | No | String or `null` | Implementation contract version stored as metadata. |
 
-The repository owns two Delta tables:
+The callable receives keyword arguments. We require top-level, deterministic,
+worker-serializable implementations for Spark evaluation. A spec without an
+implementation can support metadata validation, but runtime evaluation fails
+if a referenced implementation is missing.
 
-- `ruleset_versions`: immutable canonical payloads, hashes, summary counts,
-  ownership, publication/retirement audit fields, and row lifecycle status;
-- `function_registry`: function references, argument contracts, permissions,
-  and activation metadata.
+### Standard functions
 
-`status` belongs only to a persisted ruleset-version row (`published` or
-`retired`). It is not part of the authored `Ruleset` or canonical payload.
+`register_standard_functions(registry)` registers these package functions and
+their implementations. `standard_function_rows()` returns the corresponding
+persistence rows.
+
+| Function | Required YAML arguments | Allowed use | Return hint | Definition |
+|---|---|---|---|---|
+| `substring` | `value`, `start`, `length` | Condition and assignment | `string` | SQL-style one-based substring. Supply `length: null` to continue to the end. |
+| `left` | `value`, `length` | Condition and assignment | `string` | Leftmost characters. |
+| `right` | `value`, `length` | Condition and assignment | `string` | Rightmost characters. |
+| `trim` | `value` | Condition and assignment | `string` | Removes leading and trailing whitespace. |
+| `upper` | `value` | Condition and assignment | `string` | Converts text to uppercase. |
+| `lower` | `value` | Condition and assignment | `string` | Converts text to lowercase. |
+| `normalize_whitespace` | `value` | Condition and assignment | `string` | Trims text and collapses repeated whitespace. |
+| `length` | `value` | Condition and assignment | `integer` | Returns string length. |
+| `regex_extract` | `value`, `pattern`, `group` | Condition and assignment | `string` | Returns one regular-expression capture group. |
+| `regex_replace` | `value`, `pattern`, `replacement` | Condition and assignment | `string` | Replaces regular-expression matches. |
+| `contains_any` | `value`, `candidates` | Condition only | `boolean` | Tests whether text contains any candidate string. |
+| `null_if` | `value`, `compare_to` | Condition and assignment | `any` | Returns null when both values are equal; otherwise returns `value`. |
+| `to_number` | `value` | Condition and assignment | `decimal` | Converts text or numeric input to `Decimal`. |
+| `to_date` | `value` | Condition and assignment | `date` | Converts ISO `YYYY-MM-DD` input to a date. |
+| `date_add_days` | `value`, `days` | Condition and assignment | `date` | Adds integral calendar days. |
+| `date_add_months` | `value`, `months` | Condition and assignment | `date` | Adds calendar months with month-end clamping. |
+| `date_add_years` | `value`, `years` | Condition and assignment | `date` | Adds calendar years with leap-day clamping. |
+| `date_diff_days` | `start`, `end` | Condition and assignment | `integer` | Returns `end - start` in calendar days. |
+| `month_start` | `value` | Condition and assignment | `date` | Returns the first day of the month. |
+| `month_end` | `value` | Condition and assignment | `date` | Returns the final day of the month. |
+
+## Delta repository contract
+
+The repository owns two Delta tables. We create them only through an explicit
+`create_tables` call.
+
+### `ruleset_versions`
+
+| Field group | Allowed values | Definition |
+|---|---|---|
+| Identity | Non-null `ruleset_id`, `ruleset_name`, and `version` | Both ID/version and name/version pairs are immutable. |
+| `status` | `published` or `retired` | Repository lifecycle only; not part of canonical ruleset content. |
+| Canonical content | Non-null `payload_json` and SHA-256 `content_hash` | Deterministic ruleset content used for reconstruction and audit. |
+| Counts | Non-negative integer rule, condition, assignment, and custom-function counts | Queryable summary of the canonical payload. |
+| Ownership | Nullable description, owner, and owner department | Copied from authored metadata. |
+| Publication audit | Nullable actor and UTC timestamp | Stored when publication succeeds. Missing actor becomes `system`. |
+| Retirement audit | Nullable actor and UTC timestamp | Populated once when a published row is retired. |
+
+### `function_registry`
+
+| Field group | Allowed values | Definition |
+|---|---|---|
+| Identity | Non-null `function_name` | Merge key for registry metadata. |
+| Implementation metadata | Non-null reference and argument-contract JSON | Describes where the environment implementation comes from and its exact arguments. |
+| Permissions | Non-null condition, assignment, and active booleans | Controls valid ruleset references. |
+| Type and description | Nullable return hint, description, and version | Helps Spark infer assignment types and supports audit review. |
+
+Publishing appends a new immutable ruleset-version row. It never overwrites an
+existing ID/version or name/version pair, even if the existing row is retired.
+Multiple different versions of the same ruleset may remain published at once.
+
+## `RulesEngineService` API
+
+`RulesEngineService` is our normal public facade. It wires the compiler,
+registry, validators, expected-case tester, repository, runtime, formatter,
+and coverage analyzer into one object. It does not manage cluster libraries,
+permissions, external logs, bundle deployment, or business approval.
+
+### Public component attributes
+
+The service keeps its wired components available when an advanced caller
+needs to use a lower-level API directly.
+
+| Attribute | Allowed value | Definition |
+|---|---|---|
+| `repository` | Configured repository object | Delta persistence and published-ruleset loading backend. |
+| `registry` | `FunctionRegistry` | In-memory function specs and executable callables. |
+| `validator` | `SparkRulesetCompatibilityValidator` | Shared semantic and Spark-schema validator. |
+| `tester` | `RulesetTester` | Pure-Python runner for embedded expected cases. |
+| `publish_service` | `PublishService` | Validation, expected-case, and persistence coordinator. |
+| `runtime` | `SparkRulesEngineRuntime` | Typed Spark DataFrame evaluator. |
+| `compiler` | `YamlRulesetCompiler` | Strict YAML compiler. |
+| `rule_formatter` | `HumanReadableRulesetFormatter` | Readable rule and assignment formatter. |
+| `coverage_analyzer` | `RulesetCoverageAnalyzer` | Spark match-coverage analyzer. |
+
+### `RulesEngineService(...)`
+
+```python
+RulesEngineService(
+    *,
+    repository,
+    registry,
+    validator=None,
+)
+```
+
+We use the constructor when an application already owns its repository and
+registry objects.
+
+| Parameter | Allowed values | Definition |
+|---|---|---|
+| `repository` | Object implementing the ruleset repository protocol | Required persistence and loading backend. |
+| `registry` | `FunctionRegistry` | In-memory metadata and callables available to validation and evaluation. |
+| `validator` | `SparkRulesetCompatibilityValidator` or `None` | Optional shared validator. When omitted, the service creates one from `registry`. |
+
+The constructor creates the tester, publish service, Spark runtime, compiler,
+human-readable formatter, and coverage analyzer. It performs no Spark action
+and writes no data.
+
+### `from_schema`
+
+```python
+RulesEngineService.from_schema(
+    spark,
+    schema,
+    *,
+    ruleset_versions_table=None,
+    function_registry_table=None,
+    register_standard=True,
+)
+```
+
+This is the easiest way to build a service for Databricks.
+
+| Parameter | Allowed values and default | Definition |
+|---|---|---|
+| `spark` | Active `SparkSession` | Session used for Delta reads, writes, and Spark evaluation. |
+| `schema` | Non-empty `catalog.schema`-style string | Base namespace used to derive default table names. The service does not create the schema. |
+| `ruleset_versions_table` | Full table-name string or `None` | Overrides `<schema>.ruleset_versions`. |
+| `function_registry_table` | Full table-name string or `None` | Overrides `<schema>.function_registry`. |
+| `register_standard` | `true` or `false`; default `true` | Registers standard specs and executable implementations in memory. It does not persist them. |
+
+Returns a configured service without creating tables or starting a Spark job.
+
+### `table_names`
+
+```python
+service.table_names
+```
+
+Read-only property returning `RulesEngineTableNames` with `ruleset_versions`
+and `function_registry`. It performs no I/O.
+
+### `create_tables`
+
+```python
+service.create_tables(mode="error")
+```
+
+Creates both metadata tables with explicit Delta DDL.
+
+| `mode` | Allowed behavior |
+|---|---|
+| `error` or `errorifexists` | Fail if either target table already exists. `error` is the default alias. |
+| `ignore` | Create missing tables and leave existing tables unchanged. |
+| `overwrite` | Drop and recreate both tables. This deletes their existing metadata and must be limited to disposable environments. |
+
+Returns `None`. It does not create the parent catalog or schema.
+
+### `save_standard_function_registry`
+
+```python
+service.save_standard_function_registry(update_existing=True)
+```
+
+Persists the package's standard function specs to `function_registry`.
+`update_existing=true` refreshes package-owned rows; `false` inserts only
+missing names. This method does not register executable callables—the service
+already does that in memory when `register_standard=true`. Returns `None`.
+
+### `save_function_registry_rows`
+
+```python
+service.save_function_registry_rows(rows, update_existing=True)
+```
+
+Persists caller-supplied `FunctionRegistryRow` objects. `rows` must be a list;
+an empty list is a no-op. Existing rows are updated by `function_name` when
+`update_existing=true` and preserved when false. Executable Python callables
+are never stored in Delta. Returns `None`.
+
+### `compile_yaml_text`
+
+```python
+ruleset = service.compile_yaml_text(yaml_text)
+```
+
+Compiles one YAML string into an immutable `Ruleset`. It rejects invalid YAML,
+duplicate keys, unknown keys, wrong primitive types, and invalid shapes by
+raising `CompilationError`. It does not perform semantic validation, run
+expected cases, access Spark, or persist anything.
+
+### `compile_yaml_path`
+
+```python
+ruleset = service.compile_yaml_path(path)
+```
+
+Reads one UTF-8 YAML file and delegates to `compile_yaml_text`. `path` may be a
+string or `Path`. A missing file or invalid document raises
+`CompilationError`. It returns the compiled `Ruleset` and writes nothing.
+
+### `test_ruleset`
+
+```python
+result = service.test_ruleset(ruleset)
+```
+
+Runs every embedded `expect` case in pure Python and declaration order. It
+returns `RulesetTestResult` with `passed`, `failure_count`, individual case
+results, and `to_text()`. A ruleset with no cases returns a passing empty
+result. This method does not start Spark and does not publish.
+
+### `publish`
+
+```python
+service.publish(ruleset, published_by=None)
+```
+
+Runs semantic validation, then runs embedded expected cases when present, and
+finally writes one immutable published row. `published_by` may be a string or
+`None`; the repository records `system` when no usable actor is supplied.
+
+Returns `None`. `ValidationFailedError` is raised before any write when
+validation or an expected case fails. `RepositoryError` is raised for an
+identity collision or repository failure. Because this entry point has no
+input DataFrame, it cannot prove compatibility with a future DataFrame
+schema.
+
+### `publish_yaml_text`
+
+```python
+ruleset = service.publish_yaml_text(yaml_text, published_by=None)
+```
+
+Compiles YAML text, delegates to `publish`, and returns the compiled `Ruleset`
+after a successful write. It can raise either `CompilationError`,
+`ValidationFailedError`, or `RepositoryError`. It does not create tables.
+
+### `publish_yaml_path`
+
+```python
+ruleset = service.publish_yaml_path(path, published_by=None)
+```
+
+Reads and compiles a YAML file, delegates to `publish`, and returns the
+compiled `Ruleset`. Failure behavior is the same as `publish_yaml_text` plus a
+missing-file `CompilationError`.
+
+### `load_published`
+
+```python
+ruleset = service.load_published(ruleset_name, version=None)
+```
+
+Loads and reconstructs one row whose status is `published`.
+
+| Parameter | Allowed values | Definition |
+|---|---|---|
+| `ruleset_name` | Exact non-empty name string | Name stored in repository metadata. |
+| `version` | Exact string or `None` | When supplied, selects that immutable version. When omitted, exactly one published version must exist. |
+
+Returns a `Ruleset`. It raises `RepositoryError` when no row exists, when a
+name-only lookup is ambiguous, or when duplicate immutable rows exist.
+
+### `describe_rules`
+
+```python
+rows = service.describe_rules(
+    ruleset=None,
+    ruleset_name=None,
+    version=None,
+)
+```
+
+Returns one plain dictionary per rule with readable condition logic and
+assignment text. Supply either a compiled `ruleset` or `ruleset_name` with an
+optional version. A supplied `ruleset` takes precedence and causes the name
+and version arguments to be ignored. Supplying neither raises `ValueError`.
+Repository lookup errors pass through when loading by name. No Spark action is
+started after a ruleset is available.
+
+### `evaluate_dataframe`
+
+```python
+result_df = service.evaluate_dataframe(
+    df,
+    *,
+    ruleset=None,
+    ruleset_name=None,
+    version=None,
+    column_prefix="rules_engine",
+    fail_on_error=True,
+    include_error_traceback=False,
+    full_audit=False,
+)
+```
+
+Evaluates a supplied ruleset or loads one by name. A supplied `ruleset` takes
+precedence. Supplying neither a ruleset nor a name raises `ValueError`.
+
+Before building the result DataFrame, we validate semantics, source fields,
+assignment types, null fallbacks, temporal compatibility, custom-function
+contracts, reserved output names, and worker serialization. Building the
+DataFrame is lazy; row evaluation begins when the caller starts a Spark
+action. Parameter values and exact output behavior are defined in the Spark
+evaluation section above.
+
+Returns a new DataFrame containing all original columns plus the documented
+result columns. It never changes the input DataFrame or publishes metadata.
+
+### `coverage_report`
+
+```python
+report = service.coverage_report(
+    df,
+    *,
+    ruleset=None,
+    ruleset_name=None,
+    version=None,
+    broad_match_threshold=0.40,
+    column_prefix="rules_engine_coverage",
+)
+```
+
+Evaluates a supplied or loaded ruleset with captured row errors and starts one
+Spark aggregation action. `broad_match_threshold` must be between `0` and `1`.
+`column_prefix` must be non-empty and must not conflict with an existing input
+column beginning with `<prefix>_`. Returns `CoverageReport` as described in
+the coverage section. Supplying neither a ruleset nor a name raises
+`ValueError`.
+
+### `retire`
+
+```python
+service.retire(ruleset_id, version, retired_by=None)
+```
+
+Changes one persisted row from `published` to `retired` using the stable
+`ruleset_id` and exact version. It records the actor and UTC retirement time,
+then verifies the update. The canonical payload and content hash do not
+change. Missing rows, duplicate stable identities, already-retired rows, and
+failed verification raise `RepositoryError`. Returns `None`.
+
+### End-to-end service example
 
 ```python
 from rules_engine import RulesEngineService
@@ -458,7 +970,7 @@ service.save_standard_function_registry()
 
 ruleset = service.publish_yaml_path(
     "account_review.yaml",
-    published_by="rules-team",
+    published_by="alm-rules-team",
 )
 
 loaded = service.load_published("Account Review", version="1")
@@ -471,35 +983,67 @@ result_df = service.evaluate_dataframe(
 service.retire(
     loaded.ruleset_id,
     loaded.version,
-    retired_by="rules-team",
+    retired_by="alm-rules-team",
 )
 ```
 
-`create_tables` is explicit and never runs as a side effect of evaluation or
-publication. Published `(ruleset_name, version)` identities cannot be
-overwritten. Loading without a version requires exactly one published version;
-otherwise callers must pin the version.
+## Package module guide
+
+The package is intentionally split by responsibility. We keep Spark-specific
+imports and behavior out of compile-only paths where practical.
+
+| Module | What it does | Important public pieces |
+|---|---|---|
+| `rules_engine.__init__` | Defines the supported top-level package surface. It imports compile-only objects directly and lazily imports Spark-backed objects so YAML tooling can load without paying the full Spark import cost. | Top-level exports such as `RulesEngineService`, `YamlRulesetCompiler`, `RulesetValidator`, `SparkRulesEngineRuntime`, and `__version__`. |
+| `rules_engine.analytics` | Runs the production Spark evaluator and aggregates rule match behavior. It calculates total, no-match, error, match, first-match, dead-rule, and broad-rule measures and retains a lazy DataFrame of clean no-match rows. | `RuleCoverage`, `CoverageReport`, `RulesetCoverageAnalyzer`. |
+| `rules_engine.compiler_yaml` | Parses strict YAML with duplicate-key protection and converts canonical mappings into immutable dataclasses. It applies only structural defaults, preserves fractional values exactly, parses supported typed dates and decimals, and rejects unknown keys and ambiguous operand shapes. | `YamlRulesetCompiler`. |
+| `rules_engine.enums` | Holds the only accepted lifecycle, logical, operand, comparison, and diagnostic object values. Centralizing these strings prevents aliases from drifting between compilation, validation, runtime behavior, and persistence. | `RulesetStatus`, `LogicalOperator`, `OperandKind`, `ComparisonOperator`, `ObjectType`. |
+| `rules_engine.exceptions` | Defines the package exception hierarchy so callers can distinguish compilation, validation, registry, and repository failures from ordinary Python errors. | `RulesEngineError`, `CompilationError`, `ValidationFailedError`, `RegistryError`, `RepositoryError`. |
+| `rules_engine.exporter_yaml` | Converts compiled dataclasses back to canonical YAML. It preserves explicit identities, nested groups, exact decimals and dates, operand forms, default values, mappings, and expected cases so export and recompile produce the same model. | `YamlRulesetExporter`. |
+| `rules_engine.human_readable` | Renders rules, groups, operands, operators, and assignments as readable text for reviewers and full-audit explanations. It formats authored logic; it does not evaluate or persist rules. | `HumanReadableRulesetFormatter`. |
+| `rules_engine.models` | Defines the canonical immutable rule tree, operands, assignments, expected cases, persistence rows, validation results, and runtime traces. These dataclasses are the shared language used by every other module. | `Ruleset`, `Rule`, `ConditionGroup`, `Condition`, operand classes, `Assignment`, `RulesetExpectation`, row and trace models. |
+| `rules_engine.publish` | Coordinates the publication gate. It runs validation, runs embedded expected cases when present, and calls the repository only after both pass. | `PublishService`. |
+| `rules_engine.registry` | Keeps custom-function metadata and executable implementations in memory under one exact function name. It enforces unique registration and provides focused errors for unknown specs or missing implementations. | `CustomFunctionSpec`, `FunctionRegistry`, `CustomFunction`. |
+| `rules_engine.repository` | Owns the Delta table names, schemas, DDL, immutable publication, explicit-version loading, retirement, and registry metadata merge behavior. It detects duplicate identities instead of selecting an arbitrary row. | `RulesEngineTableNames`, `RulesetRepository`, `SparkDeltaRulesetRepository`. |
+| `rules_engine.runtime` | Implements the deterministic pure-Python row evaluator used inside the Spark UDF and by embedded expected cases. It evaluates Boolean trees, resolves operands and null defaults, calls registered functions, performs comparisons, commits assignments atomically by rule, and creates trace/provenance data. | `SparkRowEvaluator` and runtime result/trace behavior used by higher-level APIs. |
+| `rules_engine.serializer` | Creates deterministic canonical JSON, SHA-256 content hashes, queryable summary counts, and `RulesetVersionRow` objects. It also reconstructs a `Ruleset` while preserving supported Python literal types. | `DeltaRowSerializer`. |
+| `rules_engine.service` | Provides the public facade documented above. It wires the package components into the normal compile, test, publish, load, describe, evaluate, cover, and retire workflows. | `RulesEngineService`. |
+| `rules_engine.spark_runtime` | Adapts the pure row evaluator to a typed Spark Python UDF. It validates the incoming schema, infers the assignment struct, sends only required source columns to workers, checks callable serialization, appends ordered compact/full-audit columns, and keeps execution lazy. | `SparkRulesEngineRuntime`, `required_source_columns`. |
+| `rules_engine.spark_types` | Provides shared exact-fit helpers for Spark integer, decimal, date, and timestamp handling. We use it to prevent silent overflow, precision loss, and incompatible temporal assignments. | `decimal_literal_type`, `decimal_value_fits`, shared type constants. |
+| `rules_engine.spark_validator` | Extends semantic validation with actual Spark schema checks. It verifies field existence, default compatibility, function return hints, collection and temporal comparisons, assignment target consistency, and lossless type coercion, then builds the assignment `StructType`. | `SparkRulesetCompatibilityValidator`. |
+| `rules_engine.standard_functions` | Implements and declares the supported built-in string, regex, numeric, null, and calendar functions. It keeps implementation metadata, exact arguments, permissions, return hints, and package versions together. | Standard callables, `register_standard_functions`, `standard_function_rows`. |
+| `rules_engine.testing` | Runs YAML `expect` cases through the same pure row semantics used by Spark. It validates expected keys, compares the requested result subset, captures function errors as case failures, and produces readable aggregate results. | `RulesetTester`, `RulesetTestResult`, `ExpectationCaseResult`. |
+| `rules_engine.validator` | Applies semantic rules that are independent of a DataFrame schema. It checks ownership, non-empty content, unique IDs/orders, operand arity, null options, assignment dependencies, expected cases, and custom-function permissions and argument contracts. | `RulesetValidator`. |
+| `rules_engine.version` | Stores the installed package version used by the top-level package and the `rules_engine_engine_version` output column. | `__version__`. |
 
 ## Repository layout
 
 ```text
-rules_engine/                         Package source
-tests/                                Unit and Spark tests
-rule_sets/                            Example source rulesets
-outputs/                              Additional example YAML
-notebooks/
-  rules_engine_quickstart.py          Short Databricks walkthrough
-  rules_engine_developer_guide.py     Detailed YAML-first workflow
-  custom_function_authoring_guide.py  Function registry walkthrough
-  rules_engine_system_tests.py        Databricks system-test notebook
-docs/
-  rules_engine_unit_test_summary.md   Test-suite inventory
+bundles/
+  rules_engine/
+    docs/
+      rules_engine_system_test_summary.md
+      rules_engine_unit_test_summary.md
+    examples/
+      rulesets/
+        rules_engine_system_testing_rules.yaml
+      rules_engine_custom_function_authoring_guide.py
+      rules_engine_developer_guide.py
+      rules_engine_quickstart_guide.py
+    notebooks/
+      99.rules_engine_system_tests.py
+    rulesets/
+      account_key_mra.yaml
+src/
+  rules_engine/                        Package source
+tests/                                 Unit and Spark tests
+outputs/                               Additional generated YAML artifacts
 ```
 
 ## Development checks
 
 ```powershell
-python -m ruff check rules_engine tests
+python -m ruff check src tests
 python -m pytest tests
 ```
 
@@ -507,10 +1051,14 @@ Spark tests are skipped unless `RULES_ENGINE_RUN_SPARK_TESTS=1` is set.
 
 ## Known boundaries
 
-- Evaluation is row-level. Cross-row facts must already be DataFrame columns.
-- YAML is the supported rule-authoring format.
-- Custom functions execute as registered Python callables in the row UDF.
-- Full audit is intended for targeted explainability, not as the default
-  production payload.
-- Repository creation and permissions are environment responsibilities; the
-  package creates tables only when explicitly asked.
+- We evaluate rows, not aggregates or windows. Cross-row facts belong in the
+  input DataFrame.
+- We support YAML authoring only.
+- We run custom functions as registered Python callables inside the row UDF.
+- We use full audit for targeted explainability, not as the default production
+  payload.
+- We require the environment to create catalogs/schemas, grant permissions,
+  install the wheel, and manage deployment.
+- We do not publish automatically when we compile or evaluate.
+- We do not provide business approval, UAT workflow, external logging, or
+  Databricks Asset Bundle configuration.

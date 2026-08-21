@@ -24,10 +24,10 @@ class PublishService:
         self,
         repository: RulesetRepository,
         validator: RulesetValidator,
-        tester: RulesetTester | None = None,
+        tester: RulesetTester,
     ) -> None:
         """
-        Create a publish service from repository and validator.
+        Create a publish service from repository, validator, and expected-case tester.
         """
         self._repository = repository
         self._validator = validator
@@ -61,10 +61,6 @@ class PublishService:
                 f"version={ruleset.version}.\n{validation.to_text()}"
             )
         if ruleset.expect:
-            if self._tester is None:
-                raise ValidationFailedError(
-                    "Publish cannot execute expected cases without a RulesetTester."
-                )
             test_result = self._tester.test(ruleset)
             if not test_result.passed:
                 raise ValidationFailedError(

@@ -26,7 +26,6 @@ from rules_engine.enums import (
     LogicalOperator,
     ObjectType,
     OperandKind,
-    ValidationSeverity,
 )
 
 
@@ -37,8 +36,6 @@ class ValidationIssue:
 
     Parameters
     ----------
-    severity : ValidationSeverity
-        Severity classification for the issue.
     check_name : str
         Stable identifier for the validation check.
     message : str
@@ -51,7 +48,6 @@ class ValidationIssue:
         Optional structured diagnostics.
     """
 
-    severity: ValidationSeverity
     check_name: str
     message: str
     object_type: ObjectType
@@ -75,18 +71,17 @@ class ValidationResult:
     @property
     def passed(self) -> bool:
         """
-        Return whether validation has no error-severity issues.
+        Return whether validation has no issues.
 
         Returns
         -------
         bool
-            True when no collected issue has severity ``ERROR``.
+            True when no issues were collected.
         """
         return not self.has_errors()
 
     def add_issue(
         self,
-        severity: ValidationSeverity,
         check_name: str,
         message: str,
         object_type: ObjectType,
@@ -98,8 +93,6 @@ class ValidationResult:
 
         Parameters
         ----------
-        severity : ValidationSeverity
-            Issue severity.
         check_name : str
             Stable validation check name.
         message : str
@@ -113,7 +106,6 @@ class ValidationResult:
         """
         self.issues.append(
             ValidationIssue(
-                severity=severity,
                 check_name=check_name,
                 message=message,
                 object_type=object_type,
@@ -124,14 +116,14 @@ class ValidationResult:
 
     def has_errors(self) -> bool:
         """
-        Return whether any validation issue is an error.
+        Return whether any validation issue exists.
 
         Returns
         -------
         bool
-            True when one or more issues have severity ``ERROR``.
+            True when one or more issues exist.
         """
-        return any(issue.severity is ValidationSeverity.ERROR for issue in self.issues)
+        return bool(self.issues)
 
     def to_text(self) -> str:
         """
@@ -148,7 +140,7 @@ class ValidationResult:
         for issue in self.issues:
             details_text = f" | details={issue.details}" if issue.details else ""
             lines.append(
-                f"[{issue.severity.value}] {issue.check_name}: "
+                f"[ERROR] {issue.check_name}: "
                 f"{issue.message}{details_text}"
             )
         return "\n".join(lines)

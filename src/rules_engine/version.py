@@ -1,3 +1,3 @@
 """Installed rules-engine package version."""
 
-__version__ = "0.4.0"
+__version__ = "2.1"
