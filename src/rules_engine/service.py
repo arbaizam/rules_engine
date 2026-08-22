@@ -4,12 +4,14 @@ Public service facade for common Spark rules engine workflows.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from pyspark.sql import DataFrame, SparkSession
 
 from rules_engine.analytics import CoverageReport, RulesetCoverageAnalyzer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.dataframe_evaluation import DataFrameEvaluation
 from rules_engine.human_readable import HumanReadableRulesetFormatter
 from rules_engine.models import FunctionRegistryRow, Ruleset
 from rules_engine.publish import PublishService
@@ -219,13 +221,14 @@ class RulesEngineService:
         ruleset: Ruleset | None = None,
         ruleset_name: str | None = None,
         version: str | None = None,
+        key_columns: Sequence[str],
         column_prefix: str = "rules_engine",
         fail_on_error: bool = True,
         include_error_traceback: bool = False,
         full_audit: bool = False,
-    ) -> DataFrame:
+    ) -> DataFrameEvaluation:
         """
-        Evaluate a Spark DataFrame using a supplied or loaded ruleset.
+        Evaluate keyed Spark rows using a supplied or loaded ruleset.
         """
         if ruleset is None:
             if ruleset_name is None:
@@ -234,6 +237,7 @@ class RulesEngineService:
         return self.runtime.evaluate_dataframe(
             df,
             ruleset,
+            key_columns=key_columns,
             column_prefix=column_prefix,
             fail_on_error=fail_on_error,
             include_error_traceback=include_error_traceback,

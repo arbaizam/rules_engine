@@ -234,7 +234,7 @@ class NotebookRepository:
 
 
 runtime = SparkRulesEngineRuntime(NotebookRepository(), registry)
-output_df = runtime.evaluate_dataframe(
+evaluation = runtime.evaluate_dataframe(
     spark.createDataFrame(
         [
             {
@@ -254,10 +254,13 @@ output_df = runtime.evaluate_dataframe(
         ]
     ),
     ruleset,
+    key_columns=["account_id"],
     full_audit=True,
 )
+output_df = evaluation.results_df
 
 display(output_df)
+display(evaluation.apply_assignments())
 
 rows = {
     row["account_id"]: row.asDict(recursive=True)
@@ -265,12 +268,15 @@ rows = {
 }
 assert rows["A"]["rules_engine_matched_rule_ids"] == ["high_custom_score"]
 assert rows["A"]["rules_engine_assign"] == {
-    "review_bucket": "high",
-    "review_date": date(2025, 1, 31),
-    "age_days": 29,
+    "review_bucket": {"applied": True, "value": "high"},
+    "review_date": {"applied": True, "value": date(2025, 1, 31)},
+    "age_days": {"applied": True, "value": 29},
 }
 assert rows["B"]["rules_engine_matched"] is False
-assert rows["B"]["rules_engine_assign"] is None
+assert all(
+    outcome["applied"] is False and outcome["value"] is None
+    for outcome in rows["B"]["rules_engine_assign"].values()
+)
 assert all(row["rules_engine_error"] is None for row in rows.values())
 
 authored_expressions = {

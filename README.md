@@ -18,11 +18,14 @@ We elected to keep the core contract narrow and explicit.  We:
 - reject unknown YAML keys, duplicate YAML keys, aliases, and ambiguous
   shapes instead of guessing what an author meant;
 - use `field` when a rule needs the original input row and `assigned` when
-  a later rule needs a value committed by an earlier matching rule.
-- resolve null substitutions on the operand before we compare values.
-- evaluate rules in explicit `rule_order` order'
+  a later rule needs a value committed by an earlier matching rule;
+- resolve null substitutions on the operand before we compare values;
+- evaluate rules in explicit `rule_order` order;
 - let every matching rule contribute assignments unless a matching rule
   has `stop_on_match: true`;
+- return keyed engine results separately from the business DataFrame, then let
+  callers explicitly apply final assignments when they want business rows;
+- distinguish "no assignment" from "assign null" for every target;
 - keep the normal DataFrame output compact. Detailed traces are returned
   only when `full_audit=true`;
 - never create metadata tables as a side effect of compiling, publishing,
@@ -41,9 +44,10 @@ For each active rule, in ascending `rule_order`, we:
 5. stop only when that matching rule has `stop_on_match: true`.
 
 Multiple rules may match. Their assignments are merged into
-`rules_engine_assign`. When multiple rules assign the same target, the last
-applied assignment is the final value. Full audit preserves every assignment
-event so we can see what was replaced and which assignment won.
+`rules_engine_assign`. Each target reports whether an assignment was applied
+and its typed final value. When multiple rules assign the same target, the
+last applied assignment is the final value. Full audit preserves every
+assignment event so we can see what was replaced and which assignment won.
 
 ```yaml
 ruleset_id: account_review
@@ -319,7 +323,7 @@ The explicit list form gives us stable assignment IDs:
 | Field | Required | Type and allowed values | Default | Definition |
 |---|---:|---|---|---|
 | `assignment_id` | No | Non-empty string, unique across the ruleset | `assignment:<rule_id>:<target_field>` | Identity used in full-audit provenance. |
-| `target_field` | Yes | Non-empty string; unique within one rule | — | Field written into `rules_engine_assign`. It may match an input column name, but the input column itself is preserved. |
+| `target_field` | Yes | Non-empty top-level column name; unique within one rule; cannot be a declared evaluation key | — | Target written into `rules_engine_assign`. `apply_assignments()` replaces an existing target column or appends a new one. Struct targets are whole values, not nested merge paths. |
 | `value` | Yes | Exactly one operand mapping | — | Expression resolved when the rule matches. |
 
 ```yaml
@@ -406,27 +410,50 @@ model.
 from rules_engine import FunctionRegistry, SparkRulesEngineRuntime
 
 runtime = SparkRulesEngineRuntime(repository, FunctionRegistry())
-result_df = runtime.evaluate_dataframe(
+evaluation = runtime.evaluate_dataframe(
     input_df,
     ruleset,
+    key_columns=["account_id"],
     fail_on_error=False,
     full_audit=False,
 )
+result_df = evaluation.results_df
+applied_df = evaluation.apply_assignments()
 ```
 
-The returned DataFrame keeps every original column first and in its original
-order. We append engine columns afterward. Replace `rules_engine` with the
-selected `column_prefix` when a custom prefix is used.
+`evaluate_dataframe()` returns a lazy `DataFrameEvaluation`, not a DataFrame.
+We require at least one `key_columns` entry so every result row carries an
+explicit business identity. The named columns must exist and be unambiguous,
+and rules cannot assign to them. The caller owns the data guarantee that the
+combined key is non-null and unique; we intentionally do not start a hidden
+Spark job to verify values.
+
+The object exposes two projections of one shared evaluated Spark plan:
+
+| Public entry point | Allowed values or return | Purpose |
+|---|---|---|
+| `evaluation.key_columns` | Tuple of the exact declared key names | Inspect immutable row identity in caller-supplied order. |
+| `evaluation.result_columns` | Tuple of the exact engine result names | Inspect ordered result names for the selected prefix and audit mode. Keys are not included. |
+| `evaluation.results_df` | DataFrame with declared keys, then rules-engine result columns | Store, inspect, or report evaluation evidence without copying the business payload. |
+| `evaluation.apply_assignments()` | DataFrame with original business columns and final assignments applied | Continue business processing with overwritten and newly appended values, without engine result columns. |
+| `evaluation.persist(storage_level=None)` | The same `DataFrameEvaluation` | Cache the shared evaluated plan with Spark's default or a supplied `StorageLevel`. |
+| `evaluation.unpersist(blocking=False)` | The same `DataFrameEvaluation` | Remove the shared plan from cache, optionally waiting for removal. |
+
+Neither projection joins rows by key. Both select from the same lazy plan, so
+there is no ambiguity if duplicate key values accidentally reach evaluation.
+The key contract is still required for downstream storage and reporting.
+Replace `rules_engine` below with the selected `column_prefix` when a custom
+prefix is used.
 
 ### Compact output columns
 
 | Order | Column | Type | Allowed returned values | Definition |
 |---:|---|---|---|---|
-| 1 | Original DataFrame columns | Existing types | Original values | Input columns are preserved in their original order. |
+| 1 | Declared key columns | Existing types | Original key values | Keys appear in the exact order supplied to `key_columns`. Other business columns are not copied into `results_df`. |
 | 2 | `rules_engine_error` | Nullable string | `null` or error text | Row error captured when `fail_on_error=false`. It remains null for a clean match or no-match. |
 | 3 | `rules_engine_matched` | Boolean | `true` or `false` | True when at least one active rule matched and the row completed successfully. |
 | 4 | `rules_engine_matched_rule_ids` | `array<string>` | Ordered IDs or `[]` | Every matching rule ID in evaluation order. |
-| 5 | `rules_engine_assign` | Nullable struct | Struct or `null` | Final assignments from all matching rules. Fields are derived from active assignment targets. |
+| 5 | `rules_engine_assign` | Non-null struct | One outcome per active assignment target | Final assignment state from all matching rules. Every target contains `applied` and typed `value` fields. |
 | 6 | `rules_engine_ruleset` | Struct | Non-null identity struct | Immutable identity of the evaluated ruleset. |
 | 7 | `rules_engine_engine_version` | String | Non-empty package version | Installed package version used for evaluation. |
 
@@ -448,14 +475,52 @@ same schema.
 
 ### `rules_engine_assign`
 
-The struct contains one nullable field per active assignment target across the
-ruleset.
+The struct contains one non-null outcome struct per active assignment target
+across the ruleset. This explicit state is how we distinguish assigning null
+from not assigning the target.
 
-| Returned value | Definition |
+| Nested field | Type | Allowed returned values | Definition |
+|---|---|---|---|
+| `<target>.applied` | Boolean | `true` or `false` | True when a matching rule assigned this target. On errors and clean no-matches, it is false. |
+| `<target>.value` | Target Spark type, nullable | Any compatible typed value or `null` | Final value from the last matching assignment. It may be null even when `applied=true`. It is null when `applied=false`. |
+
+For example, these states have different meanings:
+
+| Outcome | Meaning for an existing business column |
 |---|---|
-| Struct with one or more values | At least one rule matched; each populated field is its final assigned value. |
-| Null field inside a struct | A rule matched but did not assign that target, or the final assignment resolved to null. |
-| Null struct | No rule matched, or row evaluation failed before assignments were returned. |
+| `{applied: false, value: null}` | No rule assigned the target; keep its current value. |
+| `{applied: true, value: "review"}` | Replace its current value with `"review"`. |
+| `{applied: true, value: null}` | The rule explicitly assigned null; clear its current value. |
+
+### Applying assignments
+
+`evaluation.apply_assignments()` applies those outcomes without a join and
+returns no rules-engine result columns.
+
+| Target shape | Applied behavior |
+|---|---|
+| Existing top-level column | The column stays in its original position. We replace it only when `applied=true`; otherwise we retain the input value. |
+| New top-level column | We append it after all original columns in ruleset assignment order. It is null on rows where `applied=false`. |
+| Struct column | We use the same atomic behavior as any other top-level value: retain the whole struct, replace the whole struct, or clear the whole struct. We do not merge nested fields. |
+| Declared key column | Rejected before evaluation because keys are immutable row identity. |
+
+The method returns a new lazy DataFrame and does not mutate the input
+DataFrame. If a caller materializes both projections, explicit persistence
+prevents the shared evaluation from running twice:
+
+```python
+evaluation.persist()
+try:
+    evaluation.results_df.write.mode("append").saveAsTable("audit.rule_results")
+    evaluation.apply_assignments().write.mode("overwrite").saveAsTable("business.accounts")
+finally:
+    evaluation.unpersist()
+```
+
+`persist(storage_level=None)` uses Spark's default storage level or accepts an
+explicit `pyspark.StorageLevel`. `unpersist(blocking=False)` forwards the
+blocking choice to Spark. Both methods return the same evaluation object for
+chaining.
 
 ### `rules_engine_ruleset`
 
@@ -531,8 +596,9 @@ Each operand trace (`left` or `right`) contains:
 
 | Setting | Allowed values and default | Returned behavior |
 |---|---|---|
-| `column_prefix` | Non-empty string; default `rules_engine` | Renames every appended column. For example, `decision` produces `decision_error` and `decision_matched`. |
-| `fail_on_error` | `true` or `false`; default `true` | `true` raises from the worker during the caller's first Spark action. `false` returns an error row with `matched=false`, an empty ID array, and null assignments. |
+| `key_columns` | Required non-empty sequence of distinct, non-empty input column names | Places those columns first in `results_df` and protects them from assignment. The caller guarantees their combined values are non-null and unique. |
+| `column_prefix` | Non-empty string; default `rules_engine` | Renames every result column. For example, `decision` produces `decision_error` and `decision_matched`. |
+| `fail_on_error` | `true` or `false`; default `true` | `true` raises from the worker during the caller's first Spark action. `false` returns an error row with `matched=false`, an empty ID array, and `applied=false` for every assignment target. |
 | `include_error_traceback` | `true` or `false`; default `false` | Adds a Python traceback to captured row errors. We use it only for debugging because it makes rows much larger. |
 | `full_audit` | `true` or `false`; default `false` | `true` adds matched-rule and assignment-history columns. It does not change matching or assignment results. |
 | Rule `stop_on_match` | `true` or `false`; default `false` | `false` lets later rules run. `true` applies the matching rule and then stops. |
@@ -896,12 +962,13 @@ started after a ruleset is available.
 ### `evaluate_dataframe`
 
 ```python
-result_df = service.evaluate_dataframe(
+evaluation = service.evaluate_dataframe(
     df,
     *,
     ruleset=None,
     ruleset_name=None,
     version=None,
+    key_columns=["row_id"],
     column_prefix="rules_engine",
     fail_on_error=True,
     include_error_traceback=False,
@@ -911,16 +978,23 @@ result_df = service.evaluate_dataframe(
 
 Evaluates a supplied ruleset or loads one by name. A supplied `ruleset` takes
 precedence. Supplying neither a ruleset nor a name raises `ValueError`.
+`key_columns` is required and follows the identity contract in the Spark
+evaluation section.
 
-Before building the result DataFrame, we validate semantics, source fields,
+Before building the shared lazy plan, we validate semantics, source fields,
 assignment types, null fallbacks, temporal compatibility, custom-function
-contracts, reserved output names, and worker serialization. Building the
-DataFrame is lazy; row evaluation begins when the caller starts a Spark
-action. Parameter values and exact output behavior are defined in the Spark
-evaluation section above.
+contracts, key metadata, reserved output names, and worker serialization.
+Building the object and either projection is lazy; row evaluation begins when
+the caller starts a Spark action. Parameter values and exact output behavior
+are defined in the Spark evaluation section above.
 
-Returns a new DataFrame containing all original columns plus the documented
-result columns. It never changes the input DataFrame or publishes metadata.
+Returns `DataFrameEvaluation`. Its `results_df` property returns keys plus
+engine evidence; `apply_assignments()` returns the business DataFrame with
+final assignments applied; `persist()` and `unpersist()` manage the one shared
+evaluated plan. The object is bound to the exact source DataFrame, ruleset,
+prefix, and audit mode used in this call, so there is no separate ruleset or
+result argument that can be mismatched later. It never mutates the input
+DataFrame or publishes metadata.
 
 ### `coverage_report`
 
@@ -974,11 +1048,14 @@ ruleset = service.publish_yaml_path(
 )
 
 loaded = service.load_published("Account Review", version="1")
-result_df = service.evaluate_dataframe(
+evaluation = service.evaluate_dataframe(
     input_df,
     ruleset=loaded,
+    key_columns=["account_id"],
     fail_on_error=False,
 )
+result_df = evaluation.results_df
+applied_df = evaluation.apply_assignments()
 
 service.retire(
     loaded.ruleset_id,
@@ -997,6 +1074,7 @@ imports and behavior out of compile-only paths where practical.
 | `rules_engine.__init__` | Defines the supported top-level package surface. It imports compile-only objects directly and lazily imports Spark-backed objects so YAML tooling can load without paying the full Spark import cost. | Top-level exports such as `RulesEngineService`, `YamlRulesetCompiler`, `RulesetValidator`, `SparkRulesEngineRuntime`, and `__version__`. |
 | `rules_engine.analytics` | Runs the production Spark evaluator and aggregates rule match behavior. It calculates total, no-match, error, match, first-match, dead-rule, and broad-rule measures and retains a lazy DataFrame of clean no-match rows. | `RuleCoverage`, `CoverageReport`, `RulesetCoverageAnalyzer`. |
 | `rules_engine.compiler_yaml` | Parses strict YAML with duplicate-key protection and converts canonical mappings into immutable dataclasses. It applies only structural defaults, preserves fractional values exactly, parses supported typed dates and decimals, and rejects unknown keys and ambiguous operand shapes. | `YamlRulesetCompiler`. |
+| `rules_engine.dataframe_evaluation` | Owns the one lazy source-plus-results Spark plan created by DataFrame evaluation. It exposes the key-only result projection, applies explicit assignment outcomes to business columns without a join, preserves column order, handles atomic struct values, and manages optional shared persistence. | `DataFrameEvaluation`. |
 | `rules_engine.enums` | Holds the only accepted lifecycle, logical, operand, comparison, and diagnostic object values. Centralizing these strings prevents aliases from drifting between compilation, validation, runtime behavior, and persistence. | `RulesetStatus`, `LogicalOperator`, `OperandKind`, `ComparisonOperator`, `ObjectType`. |
 | `rules_engine.exceptions` | Defines the package exception hierarchy so callers can distinguish compilation, validation, registry, and repository failures from ordinary Python errors. | `RulesEngineError`, `CompilationError`, `ValidationFailedError`, `RegistryError`, `RepositoryError`. |
 | `rules_engine.exporter_yaml` | Converts compiled dataclasses back to canonical YAML. It preserves explicit identities, nested groups, exact decimals and dates, operand forms, default values, mappings, and expected cases so export and recompile produce the same model. | `YamlRulesetExporter`. |
@@ -1008,7 +1086,7 @@ imports and behavior out of compile-only paths where practical.
 | `rules_engine.runtime` | Implements the deterministic pure-Python row evaluator used inside the Spark UDF and by embedded expected cases. It evaluates Boolean trees, resolves operands and null defaults, calls registered functions, performs comparisons, commits assignments atomically by rule, and creates trace/provenance data. | `SparkRowEvaluator` and runtime result/trace behavior used by higher-level APIs. |
 | `rules_engine.serializer` | Creates deterministic canonical JSON, SHA-256 content hashes, queryable summary counts, and `RulesetVersionRow` objects. It also reconstructs a `Ruleset` while preserving supported Python literal types. | `DeltaRowSerializer`. |
 | `rules_engine.service` | Provides the public facade documented above. It wires the package components into the normal compile, test, publish, load, describe, evaluate, cover, and retire workflows. | `RulesEngineService`. |
-| `rules_engine.spark_runtime` | Adapts the pure row evaluator to a typed Spark Python UDF. It validates the incoming schema, infers the assignment struct, sends only required source columns to workers, checks callable serialization, appends ordered compact/full-audit columns, and keeps execution lazy. | `SparkRulesEngineRuntime`, `required_source_columns`. |
+| `rules_engine.spark_runtime` | Adapts the pure row evaluator to a typed Spark Python UDF. It validates key metadata and the incoming schema, infers typed `{applied, value}` assignment outcomes, sends only required source columns to workers, checks callable serialization, builds ordered compact/full-audit fields, and returns one lazy `DataFrameEvaluation`. | `SparkRulesEngineRuntime`, `required_source_columns`. |
 | `rules_engine.spark_types` | Provides shared exact-fit helpers for Spark integer, decimal, date, and timestamp handling. We use it to prevent silent overflow, precision loss, and incompatible temporal assignments. | `decimal_literal_type`, `decimal_value_fits`, shared type constants. |
 | `rules_engine.spark_validator` | Extends semantic validation with actual Spark schema checks. It verifies field existence, default compatibility, function return hints, collection and temporal comparisons, assignment target consistency, and lossless type coercion, then builds the assignment `StructType`. | `SparkRulesetCompatibilityValidator`. |
 | `rules_engine.standard_functions` | Implements and declares the supported built-in string, regex, numeric, null, and calendar functions. It keeps implementation metadata, exact arguments, permissions, return hints, and package versions together. | Standard callables, `register_standard_functions`, `standard_function_rows`. |

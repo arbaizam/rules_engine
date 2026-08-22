@@ -20,6 +20,10 @@ from rules_engine.validator import RulesetValidator
 from rules_engine.version import __version__
 
 _LAZY_EXPORTS = {
+    "DataFrameEvaluation": (
+        "rules_engine.dataframe_evaluation",
+        "DataFrameEvaluation",
+    ),
     "PublishService": ("rules_engine.publish", "PublishService"),
     "RulesEngineService": ("rules_engine.service", "RulesEngineService"),
     "SparkRulesEngineRuntime": ("rules_engine.spark_runtime", "SparkRulesEngineRuntime"),
@@ -54,6 +58,7 @@ def __getattr__(name: str):
 __all__ = [
     "CustomFunctionSpec",
     "CoverageReport",
+    "DataFrameEvaluation",
     "DeltaRowSerializer",
     "FunctionRegistry",
     "PublishService",

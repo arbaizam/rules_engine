@@ -409,13 +409,14 @@ display(spark.table(table_names.ruleset_versions))
 # MAGIC 2. Creates a Spark input DataFrame from `input_rows`.
 # MAGIC 3. Instantiates the Spark runtime.
 # MAGIC 4. Evaluates the DataFrame against the published ruleset.
-# MAGIC 5. Displays output ordered by `row_id`.
+# MAGIC 5. Displays keyed engine results and applied business rows separately.
 # MAGIC
 # MAGIC Runtime execution details:
 # MAGIC
 # MAGIC - `load_published()` reads only `status = published` metadata.
 # MAGIC - A Python UDF evaluates final condition and assignment logic per row.
-# MAGIC - Building `result_df` is lazy and starts no hidden error-check action.
+# MAGIC - Building the evaluation and either DataFrame projection is lazy and
+# MAGIC   starts no hidden error-check action.
 # MAGIC - With `fail_on_error=True`, a row error raises from the UDF during the
 # MAGIC   materializing `display` action below.
 # MAGIC
@@ -425,22 +426,26 @@ display(spark.table(table_names.ruleset_versions))
 # COMMAND ----------
 
 input_df = spark.createDataFrame(input_rows)
-result_df = service.evaluate_dataframe(
+evaluation = service.evaluate_dataframe(
     input_df,
     ruleset_name="Account Review Rules",
     version="1",
+    key_columns=["row_id"],
     fail_on_error=True,
     full_audit=True,
 )
+result_df = evaluation.results_df
+applied_df = evaluation.apply_assignments()
 
 display(result_df.orderBy("row_id"))
+display(applied_df.orderBy("row_id"))
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 10. Inspect Output Columns
 # MAGIC
-# MAGIC The Spark runtime appends:
+# MAGIC `results_df` contains the declared key columns followed by:
 # MAGIC
 # MAGIC - `rules_engine_error`
 # MAGIC - `rules_engine_matched`
@@ -466,8 +471,9 @@ display(result_df.orderBy("row_id"))
 # MAGIC
 # MAGIC - `rules_engine_matched`: whether at least one rule matched the row.
 # MAGIC - `rules_engine_matched_rule_ids`: ordered list of matched rule IDs.
-# MAGIC - `rules_engine_assign`: struct containing assignments from matched rules,
-# MAGIC   or null when no rule matched.
+# MAGIC - `rules_engine_assign`: one `{applied, value}` outcome per assignment
+# MAGIC   target. `applied=false` means keep the business value; `applied=true`
+# MAGIC   means use `value`, including when that value is null.
 # MAGIC - `rules_engine_matched_rules`: every matched rule in order, including its
 # MAGIC   explanation and condition-level source columns, values, and pass/fail state.
 # MAGIC - `rules_engine_assignment_results`: every proposed assignment plus its
@@ -476,6 +482,11 @@ display(result_df.orderBy("row_id"))
 # MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
 # MAGIC - `rules_engine_ruleset`: immutable ruleset ID, version, and content hash.
 # MAGIC - `rules_engine_engine_version`: installed evaluator version.
+# MAGIC
+# MAGIC `apply_assignments()` returns only business columns. Existing targets are
+# MAGIC replaced in place, new targets are appended, and unmatched targets keep
+# MAGIC their current values. Struct targets are replaced as whole values; we do
+# MAGIC not merge individual nested fields.
 # MAGIC
 # MAGIC In production, avoid collecting large DataFrames. Use aggregations,
 # MAGIC displays, or writes instead.

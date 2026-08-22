@@ -160,14 +160,18 @@ input_df = spark.createDataFrame(
     ]
 )
 
-result_df = service.evaluate_dataframe(
+evaluation = service.evaluate_dataframe(
     input_df,
     ruleset_name="Quickstart Account Review",
     version="1",
+    key_columns=["account"],
     fail_on_error=True,
 )
+result_df = evaluation.results_df
+applied_df = evaluation.apply_assignments()
 
 display(result_df.orderBy("account"))
+display(applied_df.orderBy("account"))
 
 # COMMAND ----------
 
@@ -183,7 +187,12 @@ rows = {
 
 assert rows["A"]["rules_engine_matched"] is True
 assert rows["A"]["rules_engine_matched_rule_ids"] == ["open_high_value"]
-assert rows["A"]["rules_engine_assign"] == {"review_bucket": "high_value_open"}
+assert rows["A"]["rules_engine_assign"] == {
+    "review_bucket": {"applied": True, "value": "high_value_open"}
+}
+assert rows["B"]["rules_engine_assign"] == {
+    "review_bucket": {"applied": False, "value": None}
+}
 assert rows["B"]["rules_engine_matched"] is False
 assert rows["C"]["rules_engine_matched"] is False
 assert all(row["rules_engine_error"] is None for row in rows.values())
@@ -192,5 +201,7 @@ assert all(row["rules_engine_ruleset"]["version"] == ruleset.version for row in 
 assert all(row["rules_engine_ruleset"]["content_hash"] for row in rows.values())
 assert all(row["rules_engine_engine_version"] == rules_engine.__version__ for row in rows.values())
 assert result_df.where(F.col("rules_engine_matched")).count() == 1
+assert applied_df.columns == ["account", "amount", "status", "review_bucket"]
+assert applied_df.where(F.col("account") == "A").first()["review_bucket"] == "high_value_open"
 
 print("Quickstart passed.")

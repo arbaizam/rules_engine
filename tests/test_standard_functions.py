@@ -194,7 +194,9 @@ def test_standard_functions_can_be_registered_for_runtime_field_args():
     assert validation.passed
     assert '"field":"account_code"' in row.payload_json
     assert output["matched"] is True
-    assert output["assign"] == {"account_prefix": "AB"}
+    assert output["assign"] == {
+        "account_prefix": {"applied": True, "value": "AB"}
+    }
 
 
 def test_standard_date_functions_work_in_conditions_and_typed_assignments():
@@ -288,8 +290,8 @@ def test_standard_date_functions_work_in_conditions_and_typed_assignments():
         "date_add_months(value=funded_date, months=1) >= 2024-02-29"
     )
     assert output["assign"] == {
-        "review_date": date(2025, 1, 31),
-        "age_days": 29,
+        "review_date": {"applied": True, "value": date(2025, 1, 31)},
+        "age_days": {"applied": True, "value": 29},
     }
     authored_expressions = {
         event["target_field"]: event["authored_expression"]

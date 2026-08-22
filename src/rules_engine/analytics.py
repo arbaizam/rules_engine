@@ -80,7 +80,7 @@ class RulesetCoverageAnalyzer:
                 "Input contains reserved coverage columns beginning "
                 f"{column_prefix}_"
             )
-        evaluated = self._runtime.evaluate_dataframe(
+        evaluated, _ = self._runtime._evaluate_attached_dataframe(
             df,
             ruleset,
             column_prefix=column_prefix,

@@ -189,7 +189,7 @@ def test_service_evaluate_dataframe_requires_ruleset_or_name():
     service = _service()
 
     with pytest.raises(ValueError, match="ruleset or ruleset_name"):
-        service.evaluate_dataframe(None)
+        service.evaluate_dataframe(None, key_columns=["row_id"])
 
 
 def test_service_passes_runtime_error_options_through(monkeypatch):
@@ -207,6 +207,7 @@ def test_service_passes_runtime_error_options_through(monkeypatch):
     result = service.evaluate_dataframe(
         "input",
         ruleset=ruleset,
+        key_columns=["row_id"],
         fail_on_error=False,
         include_error_traceback=True,
         full_audit=True,
@@ -214,6 +215,7 @@ def test_service_passes_runtime_error_options_through(monkeypatch):
 
     assert result == "evaluated"
     assert captured == {
+        "key_columns": ["row_id"],
         "column_prefix": "rules_engine",
         "fail_on_error": False,
         "include_error_traceback": True,

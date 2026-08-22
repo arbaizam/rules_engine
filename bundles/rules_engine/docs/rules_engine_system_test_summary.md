@@ -4,7 +4,7 @@ Source: `bundles/rules_engine/notebooks/99.rules_engine_system_tests.py`.
 
 ALM Engineering uses this Databricks notebook for behavior that needs a real
 Spark, Python-worker, or Delta boundary. Compiler and validator permutations
-remain in the pytest suite. The system notebook contains 17 focused tests and
+remain in the pytest suite. The system notebook contains 18 focused tests and
 does not run pytest itself.
 
 ## Test Inventory
@@ -28,6 +28,7 @@ does not run pytest itself.
 | ST-015 | Custom-function worker | A registered custom function works in both a condition and an assignment inside a real Spark worker. |
 | ST-016 | Output-name isolation | An ordinary `rules_engine_result` input is preserved, custom prefixes work, and full-audit names remain reserved in compact mode. |
 | ST-017 | Coverage aggregation | Coverage returns total, no-match, error, per-rule first-match, dead-rule, broad-rule, and clean no-match results. |
+| ST-018 | Assignment application | Keyed result rows remain separate from business rows; explicit nulls clear values, non-null values replace or append columns, structs replace atomically, keys stay immutable, and both projections share explicit persistence. |
 
 ## Execution Contract
 
@@ -57,7 +58,7 @@ table.
 The run is successful only when execution reaches the final message:
 
 ```text
-PASS: All 17 current-contract rules engine system tests completed.
+PASS: All 18 current-contract rules engine system tests completed.
 ```
 
 Any failed assertion or unexpected exception stops the notebook at the

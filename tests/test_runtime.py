@@ -12,7 +12,6 @@ from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
 from rules_engine.runtime import SparkRowEvaluator
 from rules_engine.spark_runtime import (
     COMPACT_RESULT_FIELD_NAMES,
-    EMPTY_ASSIGN_STRUCT,
     FULL_AUDIT_ONLY_RESULT_FIELD_NAMES,
     FULL_AUDIT_RESULT_FIELD_NAMES,
     SparkRulesEngineRuntime,
@@ -342,12 +341,15 @@ def test_result_payload_keys_match_the_declared_schema(
 ):
     """Compact and full payloads cannot drift from their Spark result schemas."""
     evaluator = object.__new__(_SparkRowUdfEvaluator)
-    base_payload_template = evaluator._base_payload(full_audit=full_audit)
+    base_payload_template = evaluator._base_payload(
+        ["bucket"],
+        full_audit=full_audit,
+    )
 
     success = evaluator._success_payload(
         matched_rule_ids=[],
         matched_rules=[],
-        assign_payload=None,
+        assign_payload={"bucket": {"applied": False, "value": None}},
         assignment_results=[],
         base_payload_template=base_payload_template,
         full_audit=full_audit,
@@ -367,12 +369,13 @@ def test_result_payload_keys_match_the_declared_schema(
 
     assert expected_field_names == tuple(
         _result_struct(
-            EMPTY_ASSIGN_STRUCT,
+            T.StructType(),
             full_audit=full_audit,
         ).fieldNames()
     )
     assert tuple(success) == expected_field_names
     assert tuple(error) == expected_field_names
+    assert error["assign"] == {"bucket": {"applied": False, "value": None}}
     assert error["matched_rule_ids"] is not another_error["matched_rule_ids"]
     if full_audit:
         assert error["matched_rules"] is not another_error["matched_rules"]
@@ -402,10 +405,14 @@ def test_dataframe_evaluation_reserves_every_output_name_in_compact_mode(
         }
     )
     column_name = f"rules_engine_{field_name}"
-    input_frame = type("InputFrame", (), {"columns": [column_name]})()
+    input_frame = type("InputFrame", (), {"columns": ["row_id", column_name]})()
 
     with pytest.raises(ValueError, match=column_name):
-        _spark_runtime().evaluate_dataframe(input_frame, ruleset)
+        _spark_runtime().evaluate_dataframe(
+            input_frame,
+            ruleset,
+            key_columns=["row_id"],
+        )
 
 
 def test_compact_evaluation_reserves_full_audit_only_names():
@@ -423,9 +430,13 @@ def test_compact_evaluation_reserves_full_audit_only_names():
         "assignment_results",
     ):
         column_name = f"rules_engine_{field_name}"
-        input_frame = type("InputFrame", (), {"columns": [column_name]})()
+        input_frame = type("InputFrame", (), {"columns": ["row_id", column_name]})()
         with pytest.raises(ValueError, match=column_name):
-            _spark_runtime().evaluate_dataframe(input_frame, ruleset)
+            _spark_runtime().evaluate_dataframe(
+                input_frame,
+                ruleset,
+                key_columns=["row_id"],
+            )
 
 
 def test_dataframe_evaluation_rejects_an_empty_column_prefix():
@@ -437,13 +448,63 @@ def test_dataframe_evaluation_rejects_an_empty_column_prefix():
             "right": {"literal": "A"},
         }
     )
-    input_frame = type("InputFrame", (), {"columns": []})()
+    input_frame = type("InputFrame", (), {"columns": ["row_id"]})()
 
     with pytest.raises(ValueError, match="column_prefix must be non-empty"):
         _spark_runtime().evaluate_dataframe(
             input_frame,
             ruleset,
+            key_columns=["row_id"],
             column_prefix="",
+        )
+
+
+@pytest.mark.parametrize(
+    ("key_columns", "message"),
+    [
+        ("row_id", "not a string"),
+        ([], "at least one"),
+        (["row_id", "row_id"], "duplicate"),
+        (["missing"], "missing from"),
+        ([1], "non-empty strings"),
+    ],
+)
+def test_dataframe_evaluation_rejects_invalid_key_metadata(key_columns, message):
+    """Key shape is validated without scanning key values or starting Spark."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    input_frame = type("InputFrame", (), {"columns": ["row_id", "account"]})()
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        _spark_runtime().evaluate_dataframe(
+            input_frame,
+            ruleset,
+            key_columns=key_columns,
+        )
+
+
+def test_dataframe_evaluation_rejects_assignment_to_an_immutable_key():
+    """Application cannot change the columns used to correlate separate results."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        },
+        assign={"row_id": "replacement"},
+    )
+    input_frame = type("InputFrame", (), {"columns": ["row_id", "account"]})()
+
+    with pytest.raises(ValueError, match="cannot modify immutable key"):
+        _spark_runtime().evaluate_dataframe(
+            input_frame,
+            ruleset,
+            key_columns=["row_id"],
         )
 
 
@@ -754,7 +815,9 @@ def test_spark_row_evaluator_returns_native_matched_rule_trace():
     match_trace = result["matched_rules"][0]
 
     assert result["matched"] is True
-    assert result["assign"] == {"bucket": "matched"}
+    assert result["assign"] == {
+        "bucket": {"applied": True, "value": "matched"}
+    }
     assert "rule_results" not in result
     assert match_trace["rule_id"] == "r1"
     assert match_trace["rule_name"] == "Rule 1"
@@ -888,7 +951,10 @@ def test_spark_row_evaluator_assignment_struct_includes_unassigned_fields_as_nul
         assign_fields=["bucket", "secondary_bucket"],
     )
 
-    assert result["assign"] == {"bucket": "A", "secondary_bucket": None}
+    assert result["assign"] == {
+        "bucket": {"applied": True, "value": "A"},
+        "secondary_bucket": {"applied": False, "value": None},
+    }
 
 
 def test_spark_row_evaluator_match_trace_explanation_uses_any_joiner():
@@ -1108,10 +1174,13 @@ def test_spark_row_evaluator_preserves_mapping_literal_assignment_as_struct():
         "book_value": T.BooleanType(),
     }
     assert result["assign"] == {
-        "leaf_key": "10110",
+        "leaf_key": {"applied": True, "value": "10110"},
         "non_modeled": {
-            "market_value": True,
-            "book_value": False,
+            "applied": True,
+            "value": {
+                "market_value": True,
+                "book_value": False,
+            },
         },
     }
 
@@ -1181,8 +1250,11 @@ def test_spark_assignment_schema_ignores_inactive_rules():
     assert "inactive_only" not in field_types
     assert result["assign"] == {
         "non_modeled": {
-            "market_value": True,
-            "book_value": False,
+            "applied": True,
+            "value": {
+                "market_value": True,
+                "book_value": False,
+            },
         },
     }
 
@@ -1273,9 +1345,9 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
 
     assert result["matched_rule_ids"] == ["first_match", "second_match"]
     assert result["assign"] == {
-        "bucket": "second",
-        "risk": "high",
-        "cleared": None,
+        "bucket": {"applied": True, "value": "second"},
+        "risk": {"applied": True, "value": "high"},
+        "cleared": {"applied": True, "value": None},
     }
     assert compact_result["matched_rule_ids"] == result["matched_rule_ids"]
     assert compact_result["assign"] == result["assign"]
@@ -1350,9 +1422,24 @@ def test_compact_and_full_audit_payloads_have_core_result_parity():
         }
     )
     cases = {
-        "success": ({"amount": 20}, True, ["r1"], {"bucket": "matched"}),
-        "no_match": ({"amount": 5}, False, [], None),
-        "error": ({"amount": "invalid"}, False, [], None),
+        "success": (
+            {"amount": 20},
+            True,
+            ["r1"],
+            {"bucket": {"applied": True, "value": "matched"}},
+        ),
+        "no_match": (
+            {"amount": 5},
+            False,
+            [],
+            {"bucket": {"applied": False, "value": None}},
+        ),
+        "error": (
+            {"amount": "invalid"},
+            False,
+            [],
+            {"bucket": {"applied": False, "value": None}},
+        ),
     }
 
     for case_name, (row, matched, matched_rule_ids, assign) in cases.items():
@@ -1960,7 +2047,9 @@ def test_spark_row_evaluator_default_if_null_applies_to_assignment_operand():
 
     result = _evaluate_worker(ruleset, {})
 
-    assert result["assign"] == {"bucket": "UNKNOWN"}
+    assert result["assign"] == {
+        "bucket": {"applied": True, "value": "UNKNOWN"}
+    }
 
 
 def test_spark_row_evaluator_error_on_null_returns_compact_error():

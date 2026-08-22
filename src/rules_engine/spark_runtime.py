@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import math
 import traceback
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -25,6 +25,7 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
+from rules_engine.dataframe_evaluation import DataFrameEvaluation
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.models import (
     AssignedOperand,
@@ -209,10 +210,29 @@ def _result_struct(
     _require_bool("full_audit", full_audit)
     compact_fields = [
         *_COMPACT_RESULT_FIELDS_BEFORE_ASSIGN,
-        T.StructField("assign", assign_schema, True),
+        T.StructField("assign", _assignment_outcome_schema(assign_schema), False),
     ]
     return T.StructType(
         compact_fields + (list(_FULL_AUDIT_ONLY_RESULT_FIELDS) if full_audit else [])
+    )
+
+
+def _assignment_outcome_schema(assign_schema: T.StructType) -> T.StructType:
+    """Wrap every typed assignment target with explicit application state."""
+    return T.StructType(
+        [
+            T.StructField(
+                field.name,
+                T.StructType(
+                    [
+                        T.StructField("applied", T.BooleanType(), False),
+                        T.StructField("value", field.dataType, True),
+                    ]
+                ),
+                False,
+            )
+            for field in assign_schema.fields
+        ]
     )
 
 
@@ -237,12 +257,6 @@ def result_field_names(
         else COMPACT_RESULT_FIELD_NAMES
     )
 
-
-EMPTY_ASSIGN_STRUCT = T.StructType(
-    [
-        T.StructField("__empty", T.StringType(), True),
-    ]
-)
 
 class SparkRulesEngineRuntime:
     """Spark DataFrame runtime for ruleset evaluation."""
@@ -270,13 +284,14 @@ class SparkRulesEngineRuntime:
         df: DataFrame,
         ruleset: Ruleset,
         *,
+        key_columns: Sequence[str],
         column_prefix: str = "rules_engine",
         fail_on_error: bool = True,
         include_error_traceback: bool = False,
         full_audit: bool = False,
-    ) -> DataFrame:
+    ) -> DataFrameEvaluation:
         """
-        Evaluate a Spark DataFrame against a ruleset.
+        Evaluate keyed Spark rows and return separate lazy result projections.
 
         Parameters
         ----------
@@ -285,8 +300,12 @@ class SparkRulesEngineRuntime:
         ruleset : Ruleset
             Ruleset metadata to evaluate. This method performs semantic and
             incoming-schema validation before building the UDF.
+        key_columns : sequence of str
+            Existing, immutable columns that identify rows in ``results_df``.
+            The caller guarantees their values are non-null and unique; this
+            method does not start a hidden Spark action to prove that contract.
         column_prefix : str, default "rules_engine"
-            Prefix for appended output columns.
+            Prefix for result columns.
         fail_on_error : bool, default True
             Raise from the worker during the caller's first materializing Spark
             action when a row-level evaluator error is produced. Building the
@@ -301,9 +320,41 @@ class SparkRulesEngineRuntime:
 
         Returns
         -------
-        pyspark.sql.DataFrame
-            DataFrame with rules engine result columns appended.
+        DataFrameEvaluation
+            Shared lazy plan exposing keyed results and applied business rows.
         """
+        normalized_keys = self._validate_key_columns(df, ruleset, key_columns)
+        evaluated, assign_schema = self._evaluate_attached_dataframe(
+            df,
+            ruleset,
+            column_prefix=column_prefix,
+            fail_on_error=fail_on_error,
+            include_error_traceback=include_error_traceback,
+            full_audit=full_audit,
+        )
+        return DataFrameEvaluation(
+            evaluated,
+            source_columns=df.columns,
+            key_columns=normalized_keys,
+            result_columns=self._output_column_names(
+                column_prefix,
+                full_audit=full_audit,
+            ),
+            assignment_fields=assign_schema.fields,
+            assign_column=f"{column_prefix}_assign",
+        )
+
+    def _evaluate_attached_dataframe(
+        self,
+        df: DataFrame,
+        ruleset: Ruleset,
+        *,
+        column_prefix: str = "rules_engine",
+        fail_on_error: bool = True,
+        include_error_traceback: bool = False,
+        full_audit: bool = False,
+    ) -> tuple[DataFrame, T.StructType]:
+        """Build the internal source-plus-results plan without starting a job."""
         _require_bool("full_audit", full_audit)
         if not column_prefix:
             raise ValueError("column_prefix must be non-empty.")
@@ -397,7 +448,78 @@ class SparkRulesEngineRuntime:
             ruleset.version,
             column_prefix,
         )
-        return output
+        return output, assign_schema
+
+    @staticmethod
+    def _validate_key_columns(
+        df: DataFrame,
+        ruleset: Ruleset,
+        key_columns: Sequence[str],
+    ) -> tuple[str, ...]:
+        """Validate lazy row-identity metadata without scanning key values."""
+        if isinstance(key_columns, (str, bytes)):
+            raise TypeError("key_columns must be a sequence of column names, not a string.")
+        try:
+            normalized = tuple(key_columns)
+        except TypeError as exc:
+            raise TypeError("key_columns must be a sequence of column names.") from exc
+        if not normalized:
+            raise ValueError("key_columns must contain at least one column name.")
+        invalid = [
+            column_name
+            for column_name in normalized
+            if not isinstance(column_name, str) or not column_name
+        ]
+        if invalid:
+            raise ValueError("key_columns must contain only non-empty strings.")
+        duplicates = sorted(
+            {
+                column_name
+                for column_name in normalized
+                if normalized.count(column_name) > 1
+            }
+        )
+        if duplicates:
+            raise ValueError(f"key_columns contains duplicate names: {duplicates}")
+        missing = sorted(set(normalized) - set(df.columns))
+        if missing:
+            raise ValueError(f"key_columns are missing from the input DataFrame: {missing}")
+        ambiguous = sorted(
+            column_name
+            for column_name in normalized
+            if df.columns.count(column_name) > 1
+        )
+        if ambiguous:
+            raise ValueError(f"key_columns are ambiguous in the input DataFrame: {ambiguous}")
+        assignment_targets = {
+            assignment.target_field
+            for rule in ruleset.rules
+            if rule.active_flag
+            for assignment in rule.assignments
+        }
+        assigned_keys = sorted(set(normalized) & assignment_targets)
+        if assigned_keys:
+            raise ValueError(
+                "Assignment targets cannot modify immutable key columns: "
+                f"{assigned_keys}"
+            )
+        return normalized
+
+    @staticmethod
+    def _output_column_names(
+        column_prefix: str,
+        *,
+        full_audit: bool,
+    ) -> tuple[str, ...]:
+        """Return the public result columns in contract order."""
+        return (
+            *(
+                f"{column_prefix}_{field_name}"
+                for field_name in result_field_names(full_audit=full_audit)
+            ),
+            f"{column_prefix}_ruleset",
+            f"{column_prefix}_engine_version",
+        )
 
     @staticmethod
     def _append_output_columns(
@@ -436,13 +558,10 @@ class SparkRulesEngineRuntime:
 
     def _assignment_schema(self, ruleset: Ruleset, source_schema: T.StructType) -> T.StructType:
         """Build a ruleset-specific assignment result struct."""
-        assign_schema = self._compatibility_validator.assignment_schema(
+        return self._compatibility_validator.assignment_schema(
             ruleset,
             source_schema,
         )
-        if not assign_schema.fields:
-            return EMPTY_ASSIGN_STRUCT
-        return assign_schema
 
     def _build_row_evaluator(
         self,
@@ -479,7 +598,10 @@ class SparkRulesEngineRuntime:
                     assignment_specs=assignment_specs,
                 )
             )
-        base_payload_template = runtime._base_payload(full_audit=full_audit)
+        base_payload_template = runtime._base_payload(
+            assign_field_names,
+            full_audit=full_audit,
+        )
 
         def evaluate(row: Any) -> dict[str, Any]:
             """Evaluate one Spark row struct and return the declared result struct."""
@@ -564,14 +686,13 @@ class SparkRulesEngineRuntime:
                     if full_audit
                     else []
                 )
-                assign_payload = (
-                    {
-                        field_name: assignments.get(field_name)
-                        for field_name in assign_field_names
+                assign_payload = {
+                    field_name: {
+                        "applied": field_name in assignments,
+                        "value": assignments.get(field_name),
                     }
-                    if assignments
-                    else None
-                )
+                    for field_name in assign_field_names
+                }
                 return runtime._success_payload(
                     matched_rule_ids=matched_rule_ids,
                     matched_rules=matched_rules,
@@ -677,7 +798,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         *,
         matched_rule_ids: list[str],
         matched_rules: list[dict[str, Any]],
-        assign_payload: dict[str, Any] | None,
+        assign_payload: dict[str, Any],
         assignment_results: list[dict[str, Any]],
         base_payload_template: Mapping[str, Any],
         full_audit: bool = False,
@@ -716,6 +837,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
 
     def _base_payload(
         self,
+        assign_field_names: Sequence[str],
         *,
         full_audit: bool = False,
     ) -> dict[str, Any]:
@@ -724,6 +846,10 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         payload.update(
             matched=False,
             matched_rule_ids=[],
+            assign={
+                field_name: {"applied": False, "value": None}
+                for field_name in assign_field_names
+            },
         )
         if full_audit:
             payload.update(matched_rules=[], assignment_results=[])

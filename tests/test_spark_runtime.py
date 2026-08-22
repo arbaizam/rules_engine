@@ -63,6 +63,23 @@ def _spark_runtime():
     return SparkRulesEngineRuntime(DummyRepository(), FunctionRegistry())
 
 
+def _evaluation(
+    df,
+    ruleset,
+    *,
+    runtime=None,
+    key_columns=None,
+    **kwargs,
+):
+    """Build one keyed evaluation with terse test defaults."""
+    return (runtime or _spark_runtime()).evaluate_dataframe(
+        df,
+        ruleset,
+        key_columns=key_columns or [df.columns[0]],
+        **kwargs,
+    )
+
+
 def _compile(condition, assign=None):
     return YamlRulesetCompiler().compile_payload(
         {
@@ -102,7 +119,8 @@ def test_spark_runtime_evaluates_row_rule(spark):
         ["account", "bucket"],
     )
 
-    output = _spark_runtime().evaluate_dataframe(df, ruleset, full_audit=True)
+    evaluation = _evaluation(df, ruleset, full_audit=True)
+    output = evaluation.results_df
     matched_rules_type = output.schema["rules_engine_matched_rules"].dataType
     assignment_results_type = output.schema[
         "rules_engine_assignment_results"
@@ -123,7 +141,10 @@ def test_spark_runtime_evaluates_row_rule(spark):
     rows = output.orderBy("account").collect()
 
     assert rows[0]["rules_engine_matched"] is True
-    assert rows[0]["rules_engine_assign"]["bucket"] == "matched"
+    assert rows[0]["rules_engine_assign"]["bucket"].asDict() == {
+        "applied": True,
+        "value": "matched",
+    }
     match_trace = rows[0]["rules_engine_matched_rules"][0]
     assert [item["rule_id"] for item in rows[0]["rules_engine_matched_rules"]] == [
         "r1"
@@ -148,8 +169,18 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert match_trace["conditions"][0]["left"]["value"] == "A"
     assert "rules_engine_rule_results" not in rows[0].asDict()
     assert rows[1]["rules_engine_matched"] is False
+    assert rows[1]["rules_engine_assign"]["bucket"].asDict() == {
+        "applied": False,
+        "value": None,
+    }
     assert rows[1]["rules_engine_matched_rules"] == []
     assert rows[1]["rules_engine_assignment_results"] == []
+    applied_rows = {
+        row["account"]: row.asDict(recursive=True)
+        for row in evaluation.apply_assignments().collect()
+    }
+    assert applied_rows["A"]["bucket"] == "matched"
+    assert applied_rows["B"]["bucket"] == "unchanged"
 
     multi_match_ruleset = YamlRulesetCompiler().compile_payload(
         {
@@ -209,11 +240,12 @@ def test_spark_runtime_evaluates_row_rule(spark):
             ],
         }
     )
-    multi_row = _spark_runtime().evaluate_dataframe(
+    multi_evaluation = _evaluation(
         spark.createDataFrame([("A", "original")], ["account", "bucket"]),
         multi_match_ruleset,
         full_audit=True,
-    ).collect()[0]
+    )
+    multi_row = multi_evaluation.results_df.collect()[0]
     multi_events = {
         event["assignment_id"]: event
         for event in multi_row["rules_engine_assignment_results"]
@@ -226,7 +258,12 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert all(
         trace["conditions"] for trace in multi_row["rules_engine_matched_rules"]
     )
-    assert multi_row["rules_engine_assign"].asDict() == {
+    assert multi_row["rules_engine_assign"].asDict(recursive=True) == {
+        "bucket": {"applied": True, "value": "second"},
+        "review": {"applied": True, "value": True},
+    }
+    assert multi_evaluation.apply_assignments().collect()[0].asDict() == {
+        "account": "A",
         "bucket": "second",
         "review": True,
     }
@@ -237,6 +274,176 @@ def test_spark_runtime_evaluates_row_rule(spark):
     )
     assert multi_events["second_bucket"]["old_value"] == "first"
     assert multi_events["second_bucket"]["changed"] is True
+
+
+def test_dataframe_evaluation_separates_results_and_applies_atomic_values(spark):
+    """Keyed results stay separate while scalar, null, and struct values apply atomically."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "apply_assignments",
+            "ruleset_name": "Apply assignments",
+            "version": "1",
+            "owner": "Engineering",
+            "owner_department": "Technology",
+            "rules": [
+                {
+                    "rule_id": "clear_values",
+                    "rule_name": "Clear values",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "action"},
+                                "operator": "eq",
+                                "right": {"literal": "clear"},
+                            }
+                        ]
+                    },
+                    "assign": {
+                        "status": {"literal": None, "value_type": "string"},
+                        "details": {"literal": None},
+                        "new_note": {"literal": None, "value_type": "string"},
+                    },
+                },
+                {
+                    "rule_id": "replace_values",
+                    "rule_name": "Replace values",
+                    "rule_order": 2,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "action"},
+                                "operator": "eq",
+                                "right": {"literal": "replace"},
+                            }
+                        ]
+                    },
+                    "assign": {
+                        "status": "updated",
+                        "new_flag": True,
+                        "details": {
+                            "literal": {
+                                "book_value": True,
+                                "market_value": False,
+                            }
+                        },
+                    },
+                },
+            ],
+        }
+    )
+    details_type = T.StructType(
+        [
+            T.StructField("book_value", T.BooleanType(), True),
+            T.StructField("market_value", T.BooleanType(), True),
+        ]
+    )
+    input_schema = T.StructType(
+        [
+            T.StructField("row_id", T.StringType(), False),
+            T.StructField("action", T.StringType(), False),
+            T.StructField("status", T.StringType(), True),
+            T.StructField("details", details_type, True),
+        ]
+    )
+    original_details = {"book_value": False, "market_value": True}
+    input_df = spark.createDataFrame(
+        [
+            ("clear", "clear", "original", original_details),
+            ("replace", "replace", "original", original_details),
+            ("keep", "none", "original", original_details),
+        ],
+        input_schema,
+    )
+
+    evaluation = _evaluation(
+        input_df,
+        ruleset,
+        key_columns=["row_id", "action"],
+        full_audit=True,
+    )
+
+    assert evaluation.key_columns == ("row_id", "action")
+    assert evaluation.results_df.columns == [
+        "row_id",
+        "action",
+        "rules_engine_error",
+        "rules_engine_matched",
+        "rules_engine_matched_rule_ids",
+        "rules_engine_assign",
+        "rules_engine_matched_rules",
+        "rules_engine_assignment_results",
+        "rules_engine_ruleset",
+        "rules_engine_engine_version",
+    ]
+    result_rows = {
+        row["row_id"]: row.asDict(recursive=True)
+        for row in evaluation.results_df.collect()
+    }
+    assert result_rows["clear"]["rules_engine_assign"]["status"] == {
+        "applied": True,
+        "value": None,
+    }
+    assert result_rows["clear"]["rules_engine_assign"]["details"] == {
+        "applied": True,
+        "value": None,
+    }
+    assert result_rows["keep"]["rules_engine_assign"]["status"] == {
+        "applied": False,
+        "value": None,
+    }
+    assert result_rows["replace"]["rules_engine_assign"]["details"] == {
+        "applied": True,
+        "value": {"book_value": True, "market_value": False},
+    }
+
+    applied = evaluation.apply_assignments()
+    assert applied.columns == [
+        "row_id",
+        "action",
+        "status",
+        "details",
+        "new_note",
+        "new_flag",
+    ]
+    applied_rows = {
+        row["row_id"]: row.asDict(recursive=True)
+        for row in applied.collect()
+    }
+    assert applied_rows["clear"]["status"] is None
+    assert applied_rows["clear"]["details"] is None
+    assert applied_rows["clear"]["new_note"] is None
+    assert applied_rows["replace"]["status"] == "updated"
+    assert applied_rows["replace"]["details"] == {
+        "book_value": True,
+        "market_value": False,
+    }
+    assert applied_rows["replace"]["new_flag"] is True
+    assert applied_rows["keep"]["status"] == "original"
+    assert applied_rows["keep"]["details"] == original_details
+    assert applied_rows["keep"]["new_note"] is None
+    assert applied_rows["keep"]["new_flag"] is None
+
+
+def test_dataframe_evaluation_persists_one_shared_plan(spark):
+    """Explicit persistence is owned by the internal source-plus-results plan."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    evaluation = _evaluation(
+        spark.createDataFrame([("one", "A")], ["row_id", "account"]),
+        ruleset,
+        key_columns=["row_id"],
+    )
+
+    assert evaluation.persist() is evaluation
+    assert evaluation._evaluated_df.storageLevel.useMemory
+    assert evaluation.unpersist(blocking=True) is evaluation
+    assert not evaluation._evaluated_df.storageLevel.useMemory
 
 
 def test_spark_runtime_preserves_input_column_named_like_old_temp_result(spark):
@@ -253,7 +460,8 @@ def test_spark_runtime_preserves_input_column_named_like_old_temp_result(spark):
         ["account", "rules_engine_result"],
     )
 
-    row = _spark_runtime().evaluate_dataframe(df, ruleset).collect()[0]
+    evaluation = _evaluation(df, ruleset)
+    row = evaluation.apply_assignments().collect()[0]
 
     assert row["rules_engine_result"] == "keep-me"
 
@@ -305,15 +513,15 @@ def test_spark_runtime_applies_typed_operand_defaults_before_comparison(spark):
         }
     )
     frame = spark.createDataFrame(
-        [(None, None)],
-        "amount double, status string",
+        [("one", None, None)],
+        "row_id string, amount double, status string",
     )
 
-    row = _spark_runtime().evaluate_dataframe(
+    row = _evaluation(
         frame,
         ruleset,
         full_audit=True,
-    ).collect()[0]
+    ).results_df.collect()[0]
 
     assert row["rules_engine_matched_rule_ids"] == [
         "numeric_default",
@@ -343,14 +551,14 @@ def test_spark_runtime_quarantines_error_on_null(spark):
             "error_on_null": True,
         }
     )
-    frame = spark.createDataFrame([(None,)], "status string")
+    frame = spark.createDataFrame([("one", None)], "row_id string, status string")
 
-    row = _spark_runtime().evaluate_dataframe(
+    row = _evaluation(
         frame,
         ruleset,
         fail_on_error=False,
         full_audit=True,
-    ).collect()[0]
+    ).results_df.collect()[0]
 
     assert row["rules_engine_matched"] is False
     assert row["rules_engine_matched_rules"] == []
@@ -374,13 +582,13 @@ def test_spark_runtime_builds_one_python_udf(spark, monkeypatch):
         return original_udf(*args, **kwargs)
 
     monkeypatch.setattr(spark_runtime_module.F, "udf", tracked_udf)
-    output = _spark_runtime().evaluate_dataframe(
+    evaluation = _evaluation(
         spark.createDataFrame([{"account": "A"}]),
         ruleset,
     )
 
     assert len(udf_factory_calls) == 1
-    assert output.collect()[0]["rules_engine_matched"] is True
+    assert evaluation.results_df.collect()[0]["rules_engine_matched"] is True
 
 
 def test_spark_runtime_evaluates_and_assigns_standard_date_functions(spark):
@@ -418,12 +626,18 @@ def test_spark_runtime_evaluates_and_assigns_standard_date_functions(spark):
     )
     runtime = SparkRulesEngineRuntime(DummyRepository(), registry)
 
-    output = runtime.evaluate_dataframe(df, ruleset)
+    evaluation = _evaluation(df, ruleset, runtime=runtime)
+    output = evaluation.results_df
     row = output.collect()[0]
 
     assert row["rules_engine_matched"] is True
-    assert row["rules_engine_assign"]["review_date"] == date(2025, 1, 31)
-    assert output.schema["rules_engine_assign"].dataType["review_date"].dataType.typeName() == "date"
+    review_date = row["rules_engine_assign"]["review_date"]
+    assert review_date["applied"] is True
+    assert review_date["value"] == date(2025, 1, 31)
+    review_outcome_type = output.schema["rules_engine_assign"].dataType[
+        "review_date"
+    ].dataType
+    assert review_outcome_type["value"].dataType.typeName() == "date"
 
 
 def test_spark_runtime_serializes_only_required_literal_source_columns(spark):
@@ -447,15 +661,19 @@ def test_spark_runtime_serializes_only_required_literal_source_columns(spark):
 
     assert required_source_columns(ruleset) == ("risk.score", "source_value")
 
-    row = _spark_runtime().evaluate_dataframe(
+    evaluation = _evaluation(
         df,
         ruleset,
         full_audit=True,
-    ).collect()[0]
+        key_columns=["risk.score"],
+    )
+    row = evaluation.results_df.collect()[0]
+    applied = evaluation.apply_assignments().collect()[0]
 
-    assert row["unused_payload"] == "kept"
+    assert applied["unused_payload"] == "kept"
     assert row["rules_engine_matched"] is True
-    assert row["rules_engine_assign"]["copied"] == "assigned"
+    assert row["rules_engine_assign"]["copied"]["value"] == "assigned"
+    assert applied["copied"] == "assigned"
     assert row["rules_engine_matched_rules"][0]["conditions"][0]["left"][
         "value"
     ] == "A"
@@ -497,12 +715,16 @@ def test_spark_runtime_evaluates_literal_only_rule_without_source_dependencies(s
 
     assert required_source_columns(ruleset) == ()
 
-    output = _spark_runtime().evaluate_dataframe(df, ruleset)
+    evaluation = _evaluation(df, ruleset)
+    output = evaluation.results_df
     row = output.collect()[0]
 
     assert row["unused_payload"] == "kept"
     assert row["rules_engine_matched"] is True
-    assert row["rules_engine_assign"]["matched"] is True
+    assert row["rules_engine_assign"]["matched"].asDict() == {
+        "applied": True,
+        "value": True,
+    }
     assert output.schema["rules_engine_assign"].dataType.fieldNames() == ["matched"]
 
 
@@ -556,15 +778,15 @@ def test_spark_runtime_carries_assigned_values_across_real_worker_boundary(spark
         }
     )
 
-    row = _spark_runtime().evaluate_dataframe(
+    row = _evaluation(
         spark.createDataFrame([(True,)], ["eligible"]),
         ruleset,
         full_audit=True,
-    ).collect()[0]
+    ).results_df.collect()[0]
     operand = row["rules_engine_matched_rules"][1]["conditions"][0]["left"]
 
     assert row["rules_engine_matched_rule_ids"] == ["producer", "consumer"]
-    assert row["rules_engine_assign"]["copied_bucket"] == "A"
+    assert row["rules_engine_assign"]["copied_bucket"]["value"] == "A"
     assert operand["kind"] == "assigned"
     assert operand["produced_by_rule_id"] == "producer"
     assert operand["produced_by_assignment_id"] == "produce_bucket"
@@ -581,17 +803,17 @@ def test_spark_runtime_applies_column_prefix_to_all_new_outputs(spark):
     )
     df = spark.createDataFrame([{"account": "A"}])
 
-    compact = _spark_runtime().evaluate_dataframe(
+    compact = _evaluation(
         df,
         ruleset,
         column_prefix="audit",
-    )
-    full = _spark_runtime().evaluate_dataframe(
+    ).results_df
+    full = _evaluation(
         df,
         ruleset,
         column_prefix="audit",
         full_audit=True,
-    )
+    ).results_df
 
     assert compact.columns == [
         "account",
@@ -631,7 +853,7 @@ def test_spark_runtime_validates_schema_before_building_udf(spark):
         ValidationFailedError,
         match="SPARK_ASSIGNMENT_TARGET_TYPE_INCOMPATIBLE",
     ):
-        _spark_runtime().evaluate_dataframe(df, ruleset)
+        _evaluation(df, ruleset)
 
 
 def test_spark_runtime_preserves_mapping_literal_assignment_as_struct(spark):
@@ -658,9 +880,10 @@ def test_spark_runtime_preserves_mapping_literal_assignment_as_struct(spark):
     )
     df = spark.createDataFrame([{"account": "A"}])
 
-    output = _spark_runtime().evaluate_dataframe(df, ruleset)
+    evaluation = _evaluation(df, ruleset)
+    output = evaluation.results_df
     assign_type = output.schema["rules_engine_assign"].dataType
-    non_modeled_type = assign_type["non_modeled"].dataType
+    non_modeled_type = assign_type["non_modeled"].dataType["value"].dataType
     row = output.collect()[0]
 
     assert {
@@ -670,9 +893,15 @@ def test_spark_runtime_preserves_mapping_literal_assignment_as_struct(spark):
         "market_value": "boolean",
         "book_value": "boolean",
     }
-    assert row["rules_engine_assign"]["leaf_key"] == "10110"
-    assert row["rules_engine_assign"]["non_modeled"]["market_value"] is True
-    assert row["rules_engine_assign"]["non_modeled"]["book_value"] is False
+    assert row["rules_engine_assign"]["leaf_key"]["value"] == "10110"
+    assert row["rules_engine_assign"]["non_modeled"]["applied"] is True
+    assert row["rules_engine_assign"]["non_modeled"]["value"]["market_value"] is True
+    assert row["rules_engine_assign"]["non_modeled"]["value"]["book_value"] is False
+    applied = evaluation.apply_assignments().collect()[0]
+    assert applied["non_modeled"].asDict() == {
+        "market_value": True,
+        "book_value": False,
+    }
 
 
 def test_spark_runtime_preserves_decimal_and_array_assignments(spark):
@@ -719,18 +948,23 @@ def test_spark_runtime_preserves_decimal_and_array_assignments(spark):
         schema,
     )
 
-    row = SparkRulesEngineRuntime(DummyRepository(), registry).evaluate_dataframe(
+    evaluation = _evaluation(
         df,
         ruleset,
+        runtime=SparkRulesEngineRuntime(DummyRepository(), registry),
         fail_on_error=False,
-    ).collect()[0]
+    )
+    row = evaluation.results_df.collect()[0]
 
-    assert row["rules_engine_assign"]["existing_rate"] == Decimal("0.0425")
-    assert row["rules_engine_assign"]["parsed_balance"] == Decimal("1234.56")
-    assert row["rules_engine_assign"]["factors"] == [
+    assert row["rules_engine_assign"]["existing_rate"]["value"] == Decimal("0.0425")
+    assert row["rules_engine_assign"]["parsed_balance"]["value"] == Decimal("1234.56")
+    assert row["rules_engine_assign"]["factors"]["value"] == [
         Decimal("0.10"),
         Decimal("0.25"),
     ]
+    applied = evaluation.apply_assignments().collect()[0]
+    assert applied["existing_rate"] == Decimal("0.0425")
+    assert applied["parsed_balance"] == Decimal("1234.56")
 
 
 def test_spark_runtime_quarantines_errors_without_failing_job(spark):
@@ -766,11 +1000,13 @@ def test_spark_runtime_quarantines_errors_without_failing_job(spark):
     )
     df = spark.createDataFrame([{"value": "good"}, {"value": "bad"}])
 
-    rows = SparkRulesEngineRuntime(DummyRepository(), registry).evaluate_dataframe(
+    evaluation = _evaluation(
         df,
         ruleset,
+        runtime=SparkRulesEngineRuntime(DummyRepository(), registry),
         fail_on_error=False,
-    ).collect()
+    )
+    rows = evaluation.results_df.collect()
 
     by_value = {row["value"]: row for row in rows}
     assert by_value["good"]["rules_engine_error"] is None
@@ -779,10 +1015,12 @@ def test_spark_runtime_quarantines_errors_without_failing_job(spark):
     )
     assert "Traceback" not in by_value["bad"]["rules_engine_error"]
 
-    fail_fast_output = SparkRulesEngineRuntime(
-        DummyRepository(),
-        registry,
-    ).evaluate_dataframe(df, ruleset, fail_on_error=True)
+    fail_fast_output = _evaluation(
+        df,
+        ruleset,
+        runtime=SparkRulesEngineRuntime(DummyRepository(), registry),
+        fail_on_error=True,
+    ).results_df
     with pytest.raises(Exception, match="bad test value"):
         fail_fast_output.collect()
 
@@ -798,7 +1036,8 @@ def test_fail_on_error_remains_lazy_until_callers_action(spark):
     )
     df = spark.createDataFrame([{"account": "A"}])
 
-    output = _spark_runtime().evaluate_dataframe(df, ruleset)
+    evaluation = _evaluation(df, ruleset)
+    output = evaluation.results_df
 
     assert not output.storageLevel.useMemory
     assert not output.storageLevel.useDisk
@@ -818,13 +1057,15 @@ def test_spark_runtime_preserves_timestamp_assignment_type(spark):
     expected = datetime(2025, 1, 15, 10, 30)  # noqa: DTZ001 - Spark TimestampType is naive.
     df = spark.createDataFrame([("OPEN", expected)], ["status", "source_timestamp"])
 
-    row = _spark_runtime().evaluate_dataframe(
+    evaluation = _evaluation(
         df,
         ruleset,
         fail_on_error=False,
-    ).collect()[0]
+    )
+    row = evaluation.results_df.collect()[0]
 
-    assert row["rules_engine_assign"]["copied_timestamp"] == expected
+    assert row["rules_engine_assign"]["copied_timestamp"]["value"] == expected
+    assert evaluation.apply_assignments().collect()[0]["copied_timestamp"] == expected
 
 
 @pytest.mark.skipif(
@@ -850,18 +1091,22 @@ def test_spark_runtime_preserves_timestamp_ntz_assignment_type(spark):
     )
     df = spark.createDataFrame([("OPEN", expected)], schema)
 
-    output = _spark_runtime().evaluate_dataframe(
+    evaluation = _evaluation(
         df,
         ruleset,
         fail_on_error=False,
     )
+    output = evaluation.results_df
     row = output.collect()[0]
 
     assert isinstance(
-        output.schema["rules_engine_assign"].dataType["copied_timestamp"].dataType,
+        output.schema["rules_engine_assign"]
+        .dataType["copied_timestamp"]
+        .dataType["value"]
+        .dataType,
         T.TimestampNTZType,
     )
-    assert row["rules_engine_assign"]["copied_timestamp"] == expected
+    assert row["rules_engine_assign"]["copied_timestamp"]["value"] == expected
 
 
 def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
@@ -878,18 +1123,19 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
         ["row_id", "account", "source_note"],
     )
 
-    compact = _spark_runtime().evaluate_dataframe(df, ruleset)
-    full = _spark_runtime().evaluate_dataframe(
+    compact_evaluation = _evaluation(df, ruleset, key_columns=["row_id"])
+    full_evaluation = _evaluation(
         df,
         ruleset,
+        key_columns=["row_id"],
         full_audit=True,
     )
+    compact = compact_evaluation.results_df
+    full = full_evaluation.results_df
     compact_row = compact.collect()[0]
 
     assert compact.columns == [
         "row_id",
-        "account",
-        "source_note",
         "rules_engine_error",
         "rules_engine_matched",
         "rules_engine_matched_rule_ids",
@@ -899,8 +1145,6 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
     ]
     assert full.columns == [
         "row_id",
-        "account",
-        "source_note",
         "rules_engine_error",
         "rules_engine_matched",
         "rules_engine_matched_rule_ids",
@@ -918,6 +1162,12 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
         "content_hash": DeltaRowSerializer().content_hash(ruleset),
     }
     assert compact_row["rules_engine_engine_version"]
+    assert compact_evaluation.apply_assignments().columns == [
+        "row_id",
+        "account",
+        "source_note",
+        "bucket",
+    ]
 
 
 def test_coverage_report_finds_dead_broad_and_clean_no_match_rows(spark):

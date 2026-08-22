@@ -475,22 +475,25 @@ parity_input = spark.createDataFrame(
     ),
 )
 
-compact = service.evaluate_dataframe(
+compact_evaluation = service.evaluate_dataframe(
     parity_input,
     ruleset=parity_ruleset,
+    key_columns=["row_id"],
     fail_on_error=False,
     full_audit=False,
 )
-full = service.evaluate_dataframe(
+full_evaluation = service.evaluate_dataframe(
     parity_input,
     ruleset=parity_ruleset,
+    key_columns=["row_id"],
     fail_on_error=False,
     full_audit=True,
 )
+compact = compact_evaluation.results_df
+full = full_evaluation.results_df
 
 assert compact.columns == [
     "row_id",
-    "amount",
     "rules_engine_error",
     "rules_engine_matched",
     "rules_engine_matched_rule_ids",
@@ -500,7 +503,6 @@ assert compact.columns == [
 ]
 assert full.columns == [
     "row_id",
-    "amount",
     "rules_engine_error",
     "rules_engine_matched",
     "rules_engine_matched_rule_ids",
@@ -532,7 +534,12 @@ for row_id in compact_rows:
 
 assert compact_rows["success"]["rules_engine_matched"] is True
 assert compact_rows["success"]["rules_engine_matched_rule_ids"] == ["positive_amount"]
-assert compact_rows["success"]["rules_engine_assign"] == {"outcome": "positive"}
+assert compact_rows["success"]["rules_engine_assign"] == {
+    "outcome": {"applied": True, "value": "positive"}
+}
+assert compact_rows["no_match"]["rules_engine_assign"] == {
+    "outcome": {"applied": False, "value": None}
+}
 assert compact_rows["no_match"]["rules_engine_matched"] is False
 assert compact_rows["no_match"]["rules_engine_matched_rule_ids"] == []
 assert compact_rows["no_match"]["rules_engine_error"] is None
@@ -607,12 +614,19 @@ rules:
 stop_row = service.evaluate_dataframe(
     spark.createDataFrame([("one",)], ["row_id"]),
     ruleset=stop_ruleset,
+    key_columns=["row_id"],
     full_audit=True,
-).collect()[0].asDict(recursive=True)
+).results_df.collect()[0].asDict(recursive=True)
 
 assert stop_row["rules_engine_matched_rule_ids"] == ["stop_first"]
-assert stop_row["rules_engine_assign"]["stage"] == "first"
-assert stop_row["rules_engine_assign"]["later_rule_ran"] is None
+assert stop_row["rules_engine_assign"]["stage"] == {
+    "applied": True,
+    "value": "first",
+}
+assert stop_row["rules_engine_assign"]["later_rule_ran"] == {
+    "applied": False,
+    "value": None,
+}
 assert [item["rule_id"] for item in stop_row["rules_engine_matched_rules"]] == [
     "stop_first"
 ]
@@ -670,18 +684,19 @@ rules:
 chain_row = service.evaluate_dataframe(
     spark.createDataFrame([("one", "original")], ["row_id", "stage"]),
     ruleset=chain_ruleset,
+    key_columns=["row_id"],
     full_audit=True,
-).collect()[0].asDict(recursive=True)
+).results_df.collect()[0].asDict(recursive=True)
 
 assert chain_row["rules_engine_matched_rule_ids"] == [
     "chain_producer",
     "chain_consumer",
     "chain_final",
 ]
-assert chain_row["rules_engine_assign"]["stage"] == "consumed"
-assert chain_row["rules_engine_assign"]["copied_stage"] == "produced"
-assert chain_row["rules_engine_assign"]["copied_score"] == 10
-assert chain_row["rules_engine_assign"]["final_rule_ran"] is True
+assert chain_row["rules_engine_assign"]["stage"]["value"] == "consumed"
+assert chain_row["rules_engine_assign"]["copied_stage"]["value"] == "produced"
+assert chain_row["rules_engine_assign"]["copied_score"]["value"] == 10
+assert chain_row["rules_engine_assign"]["final_rule_ran"]["value"] is True
 
 consumer_left = chain_row["rules_engine_matched_rules"][1]["conditions"][0]["left"]
 assert consumer_left["value"] == "produced"
@@ -740,13 +755,14 @@ null_input = spark.createDataFrame(
 null_row = service.evaluate_dataframe(
     null_input,
     ruleset=null_ruleset,
+    key_columns=["row_id"],
     full_audit=True,
-).collect()[0].asDict(recursive=True)
+).results_df.collect()[0].asDict(recursive=True)
 
 assert null_row["rules_engine_matched_rule_ids"] == ["numeric_default", "text_default"]
 assert null_row["rules_engine_assign"] == {
-    "numeric_defaulted": True,
-    "text_defaulted": True,
+    "numeric_defaulted": {"applied": True, "value": True},
+    "text_defaulted": {"applied": True, "value": True},
 }
 numeric_left = null_row["rules_engine_matched_rules"][0]["conditions"][0]["left"]
 text_left = null_row["rules_engine_matched_rules"][1]["conditions"][0]["left"]
@@ -797,8 +813,9 @@ rules:
 history_row = service.evaluate_dataframe(
     spark.createDataFrame([("one", "original")], ["row_id", "target"]),
     ruleset=history_ruleset,
+    key_columns=["row_id"],
     full_audit=True,
-).collect()[0].asDict(recursive=True)
+).results_df.collect()[0].asDict(recursive=True)
 
 events = history_row["rules_engine_assignment_results"]
 assert len(events) == 2
@@ -814,7 +831,10 @@ assert second_event["proposed_value"] == "second"
 assert second_event["changed"] is True
 assert second_event["effective"] is True
 assert second_event["overridden_by_rule_id"] is None
-assert history_row["rules_engine_assign"]["target"] == "second"
+assert history_row["rules_engine_assign"]["target"] == {
+    "applied": True,
+    "value": "second",
+}
 
 print("PASS: Assignment history follows original value, prior commit, and final winner.")
 
@@ -846,19 +866,27 @@ rules:
 """
 )
 
-typed_result = service.evaluate_dataframe(
+typed_evaluation = service.evaluate_dataframe(
     spark.createDataFrame([("one",)], ["row_id"]),
     ruleset=typed_ruleset,
+    key_columns=["row_id"],
 )
+typed_result = typed_evaluation.results_df
 typed_assign_schema = typed_result.schema["rules_engine_assign"].dataType
 typed_row = typed_result.collect()[0].asDict(recursive=True)
 
-assert isinstance(typed_assign_schema["exact_amount"].dataType, T.DecimalType)
-assert typed_assign_schema["business_date"].dataType == T.DateType()
-assert isinstance(typed_assign_schema["review_flags"].dataType, T.StructType)
-assert typed_row["rules_engine_assign"]["exact_amount"] == Decimal("12.34")
-assert typed_row["rules_engine_assign"]["business_date"] == date(2026, 8, 21)
-assert typed_row["rules_engine_assign"]["review_flags"] == {
+assert isinstance(
+    typed_assign_schema["exact_amount"].dataType["value"].dataType,
+    T.DecimalType,
+)
+assert typed_assign_schema["business_date"].dataType["value"].dataType == T.DateType()
+assert isinstance(
+    typed_assign_schema["review_flags"].dataType["value"].dataType,
+    T.StructType,
+)
+assert typed_row["rules_engine_assign"]["exact_amount"]["value"] == Decimal("12.34")
+assert typed_row["rules_engine_assign"]["business_date"]["value"] == date(2026, 8, 21)
+assert typed_row["rules_engine_assign"]["review_flags"]["value"] == {
     "material": True,
     "manual": False,
 }
@@ -921,10 +949,14 @@ rules:
 function_row = service.evaluate_dataframe(
     spark.createDataFrame([("one", 5)], ["row_id", "amount"]),
     ruleset=function_ruleset,
-).collect()[0].asDict(recursive=True)
+    key_columns=["row_id"],
+).results_df.collect()[0].asDict(recursive=True)
 
 assert function_row["rules_engine_matched_rule_ids"] == ["custom_function_rule"]
-assert function_row["rules_engine_assign"]["doubled"] == 10
+assert function_row["rules_engine_assign"]["doubled"] == {
+    "applied": True,
+    "value": 10,
+}
 
 print("PASS: Registered metadata and executable code work across the Spark worker boundary.")
 
@@ -955,21 +987,22 @@ ordinary_result_input = spark.createDataFrame(
     [("one", "keep-me")],
     ["row_id", "rules_engine_result"],
 )
-ordinary_result = service.evaluate_dataframe(
+ordinary_evaluation = service.evaluate_dataframe(
     ordinary_result_input,
     ruleset=collision_ruleset,
+    key_columns=["row_id"],
 )
-ordinary_row = ordinary_result.collect()[0].asDict(recursive=True)
+ordinary_row = ordinary_evaluation.apply_assignments().collect()[0].asDict(recursive=True)
 assert ordinary_row["rules_engine_result"] == "keep-me"
 
 custom_prefix = service.evaluate_dataframe(
     ordinary_result_input,
     ruleset=collision_ruleset,
+    key_columns=["row_id"],
     column_prefix="decision",
-)
+).results_df
 assert custom_prefix.columns == [
     "row_id",
-    "rules_engine_result",
     "decision_error",
     "decision_matched",
     "decision_matched_rule_ids",
@@ -987,6 +1020,7 @@ _expect_raises(
     lambda: service.evaluate_dataframe(
         full_only_conflict,
         ruleset=collision_ruleset,
+        key_columns=["row_id"],
         column_prefix="decision",
         full_audit=False,
     ),
@@ -1052,7 +1086,157 @@ print("PASS: Coverage reports counts, dead rules, broad rules, and clean no-matc
 
 # COMMAND ----------
 
+_start("ST-018", "Separate keyed results and apply scalar, null, and struct assignments")
+
+apply_ruleset = service.compile_yaml_text(
+    """
+ruleset_id: system_apply_assignments
+ruleset_name: System Apply Assignments
+version: "1"
+owner: ALM Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: clear_values
+    rule_name: Clear values
+    rule_order: 1
+    when:
+      all:
+        - left: {field: action}
+          operator: eq
+          right: {literal: clear}
+    assign:
+      status: {literal: null, value_type: string}
+      details: {literal: null}
+  - rule_id: replace_values
+    rule_name: Replace values
+    rule_order: 2
+    when:
+      all:
+        - left: {field: action}
+          operator: eq
+          right: {literal: replace}
+    assign:
+      status: updated
+      details:
+        literal:
+          material: true
+          manual: false
+      new_note: created
+"""
+)
+
+details_schema = T.StructType(
+    [
+        T.StructField("material", T.BooleanType(), True),
+        T.StructField("manual", T.BooleanType(), True),
+    ]
+)
+apply_input = spark.createDataFrame(
+    [
+        ("clear", "clear", "original", {"material": False, "manual": True}),
+        ("replace", "replace", "original", {"material": False, "manual": True}),
+        ("keep", "none", "original", {"material": False, "manual": True}),
+    ],
+    T.StructType(
+        [
+            T.StructField("row_id", T.StringType(), False),
+            T.StructField("action", T.StringType(), False),
+            T.StructField("status", T.StringType(), True),
+            T.StructField("details", details_schema, True),
+        ]
+    ),
+)
+
+apply_evaluation = service.evaluate_dataframe(
+    apply_input,
+    ruleset=apply_ruleset,
+    key_columns=["row_id"],
+    full_audit=True,
+).persist()
+
+assert apply_evaluation.results_df.columns == [
+    "row_id",
+    "rules_engine_error",
+    "rules_engine_matched",
+    "rules_engine_matched_rule_ids",
+    "rules_engine_assign",
+    "rules_engine_matched_rules",
+    "rules_engine_assignment_results",
+    "rules_engine_ruleset",
+    "rules_engine_engine_version",
+]
+result_rows = {
+    row["row_id"]: row.asDict(recursive=True)
+    for row in apply_evaluation.results_df.collect()
+}
+assert result_rows["clear"]["rules_engine_assign"]["status"] == {
+    "applied": True,
+    "value": None,
+}
+assert result_rows["keep"]["rules_engine_assign"]["status"] == {
+    "applied": False,
+    "value": None,
+}
+assert result_rows["replace"]["rules_engine_assign"]["details"] == {
+    "applied": True,
+    "value": {"material": True, "manual": False},
+}
+
+applied_df = apply_evaluation.apply_assignments()
+assert applied_df.columns == ["row_id", "action", "status", "details", "new_note"]
+applied_rows = {
+    row["row_id"]: row.asDict(recursive=True)
+    for row in applied_df.collect()
+}
+assert applied_rows["clear"]["status"] is None
+assert applied_rows["clear"]["details"] is None
+assert applied_rows["replace"]["status"] == "updated"
+assert applied_rows["replace"]["details"] == {
+    "material": True,
+    "manual": False,
+}
+assert applied_rows["replace"]["new_note"] == "created"
+assert applied_rows["keep"]["status"] == "original"
+assert applied_rows["keep"]["details"] == {
+    "material": False,
+    "manual": True,
+}
+assert applied_rows["keep"]["new_note"] is None
+apply_evaluation.unpersist()
+
+key_assignment_ruleset = service.compile_yaml_text(
+    """
+ruleset_id: system_immutable_keys
+ruleset_name: System Immutable Keys
+version: "1"
+owner: ALM Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: change_key
+    rule_name: Change key
+    when:
+      all:
+        - left: {field: row_id}
+          operator: is_not_null
+    assign:
+      row_id: changed
+"""
+)
+_expect_raises(
+    ValueError,
+    lambda: service.evaluate_dataframe(
+        apply_input,
+        ruleset=key_assignment_ruleset,
+        key_columns=["row_id"],
+    ),
+    contains="key columns",
+)
+
+print("PASS: Keyed results stay separate and assignments replace, clear, or append atomically.")
+
+# COMMAND ----------
+
 print()
 print("=" * 80)
-print("PASS: All 17 current-contract rules engine system tests completed.")
+print("PASS: All 18 current-contract rules engine system tests completed.")
 print("=" * 80)

@@ -361,7 +361,15 @@ def test_publish_evaluator_and_spark_worker_share_rule_ordering_semantics():
         actual = spark_evaluator(FakeSparkRow(row))
         if expected["assign"] is not None:
             expected["assign"] = {
-                field: expected["assign"].get(field)
+                field: {
+                    "applied": field in expected["assign"],
+                    "value": expected["assign"].get(field),
+                }
+                for field in ("first", "shared", "after")
+            }
+        else:
+            expected["assign"] = {
+                field: {"applied": False, "value": None}
                 for field in ("first", "shared", "after")
             }
 
