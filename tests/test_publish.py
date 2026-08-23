@@ -1,11 +1,19 @@
+from dataclasses import replace
+
+import pytest
+
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.exceptions import ValidationFailedError
 from rules_engine.publish import PublishService
 from rules_engine.registry import FunctionRegistry
-from rules_engine.testing import RulesetTester
 from rules_engine.validator import RulesetValidator
 
 
 class RecordingRepository:
+    def __init__(self):
+        self.saved = None
+        self.published_by = None
+
     def save_published(
         self,
         ruleset,
@@ -55,7 +63,6 @@ def _service():
     return PublishService(
         repository=RecordingRepository(),
         validator=RulesetValidator(FunctionRegistry()),
-        tester=RulesetTester(FunctionRegistry()),
     )
 
 
@@ -83,3 +90,13 @@ def test_publish_allows_omitted_provenance():
     service.publish(_ruleset())
 
     assert service._repository.published_by is None
+
+
+def test_publish_blocks_invalid_ruleset_before_repository_write():
+    """Semantic validation remains the only publication gate."""
+    service = _service()
+
+    with pytest.raises(ValidationFailedError, match="RULESET_OWNER_REQUIRED"):
+        service.publish(replace(_ruleset(), owner=None))
+
+    assert service._repository.saved is None

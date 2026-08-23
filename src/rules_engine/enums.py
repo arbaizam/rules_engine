@@ -66,7 +66,7 @@ class ObjectType(str, Enum):
     CONDITION = "condition"
     ASSIGNMENT = "assignment"
     FUNCTION = "function"
-    EXPECTED_CASE = "expected_case"
+
 
 UNARY_OPERATORS = {ComparisonOperator.IS_NULL, ComparisonOperator.IS_NOT_NULL}
 BINARY_OPERATORS = set(ComparisonOperator) - UNARY_OPERATORS

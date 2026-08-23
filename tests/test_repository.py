@@ -129,9 +129,7 @@ def test_save_published_rejects_duplicate_ruleset_name_and_version():
     """
     repo = _repository()
     repo._ruleset_row_dict = lambda ruleset_id, version: None
-    repo._ruleset_row_dict_by_name_version = lambda ruleset_name, version: {
-        "status": "published"
-    }
+    repo._ruleset_row_dict_by_name_version = lambda ruleset_name, version: {"status": "published"}
 
     with pytest.raises(RepositoryError, match="ruleset_name=Ruleset, version=1"):
         repo.save_published(
@@ -141,7 +139,6 @@ def test_save_published_rejects_duplicate_ruleset_name_and_version():
                 version="1",
             )
         )
-
 
 
 def test_save_published_rejects_duplicate_ruleset_id_and_version():

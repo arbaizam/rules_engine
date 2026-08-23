@@ -16,7 +16,7 @@ hashing, and summary counts.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -139,10 +139,7 @@ class ValidationResult:
         lines = [f"Validation passed: {self.passed}"]
         for issue in self.issues:
             details_text = f" | details={issue.details}" if issue.details else ""
-            lines.append(
-                f"[ERROR] {issue.check_name}: "
-                f"{issue.message}{details_text}"
-            )
+            lines.append(f"[ERROR] {issue.check_name}: {issue.message}{details_text}")
         return "\n".join(lines)
 
 
@@ -201,6 +198,24 @@ class CustomFunctionOperand:
 Operand = AssignedOperand | FieldOperand | LiteralOperand | CustomFunctionOperand
 
 
+def iter_nested_operands(value: Any) -> Iterator[Operand]:
+    """Yield operands contained directly or inside argument collections."""
+    if isinstance(
+        value,
+        (AssignedOperand, FieldOperand, LiteralOperand, CustomFunctionOperand),
+    ):
+        yield value
+        return
+    if isinstance(value, Mapping):
+        for item in value.values():
+            yield from iter_nested_operands(item)
+        return
+    if isinstance(value, (list, tuple, set)):
+        items = sorted(value, key=repr) if isinstance(value, set) else value
+        for item in items:
+            yield from iter_nested_operands(item)
+
+
 @dataclass(frozen=True)
 class Condition:
     """
@@ -256,15 +271,6 @@ class Rule:
 
 
 @dataclass(frozen=True)
-class RulesetExpectation:
-    """One executable example embedded in ruleset metadata."""
-
-    name: str
-    given: Mapping[str, Any]
-    then: Mapping[str, Any]
-
-
-@dataclass(frozen=True)
 class Ruleset:
     """
     Compiled ruleset metadata.
@@ -277,7 +283,6 @@ class Ruleset:
     description: str | None = None
     owner: str | None = None
     owner_department: str | None = None
-    expect: tuple[RulesetExpectation, ...] = ()
 
 
 @dataclass(frozen=True)

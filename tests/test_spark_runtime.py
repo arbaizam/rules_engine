@@ -9,7 +9,11 @@ import rules_engine.spark_runtime as spark_runtime_module
 from rules_engine.analytics import RulesetCoverageAnalyzer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exceptions import ValidationFailedError
-from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
+from rules_engine.registry import (
+    CustomFunctionArgSpec,
+    CustomFunctionSpec,
+    FunctionRegistry,
+)
 from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.spark_runtime import SparkRulesEngineRuntime, required_source_columns
 from rules_engine.standard_functions import register_standard_functions
@@ -36,10 +40,8 @@ def spark():
         yield active_session
         return
 
-    builder = (
-        SparkSession.builder
-        .appName("rules-engine-spark-runtime-tests")
-        .config("spark.ui.enabled", "false")
+    builder = SparkSession.builder.appName("rules-engine-spark-runtime-tests").config(
+        "spark.ui.enabled", "false"
     )
     connect_or_databricks = any(
         os.environ.get(name)
@@ -122,9 +124,7 @@ def test_spark_runtime_evaluates_row_rule(spark):
     evaluation = _evaluation(df, ruleset, full_audit=True)
     output = evaluation.results_df
     matched_rules_type = output.schema["rules_engine_matched_rules"].dataType
-    assignment_results_type = output.schema[
-        "rules_engine_assignment_results"
-    ].dataType
+    assignment_results_type = output.schema["rules_engine_assignment_results"].dataType
     condition_type = matched_rules_type.elementType["conditions"].dataType.elementType
     assert matched_rules_type.containsNull is False
     assert matched_rules_type.elementType["assignments_applied"].dataType.containsNull is False
@@ -146,9 +146,7 @@ def test_spark_runtime_evaluates_row_rule(spark):
         "value": "matched",
     }
     match_trace = rows[0]["rules_engine_matched_rules"][0]
-    assert [item["rule_id"] for item in rows[0]["rules_engine_matched_rules"]] == [
-        "r1"
-    ]
+    assert [item["rule_id"] for item in rows[0]["rules_engine_matched_rules"]] == ["r1"]
     assert rows[0]["rules_engine_assignment_results"][0]["effective"] is True
     assert rows[0]["rules_engine_assignment_results"][0]["authored_expression"] == (
         "bucket = 'matched'"
@@ -247,17 +245,15 @@ def test_spark_runtime_evaluates_row_rule(spark):
     )
     multi_row = multi_evaluation.results_df.collect()[0]
     multi_events = {
-        event["assignment_id"]: event
-        for event in multi_row["rules_engine_assignment_results"]
+        event["assignment_id"]: event for event in multi_row["rules_engine_assignment_results"]
     }
 
     assert multi_row["rules_engine_matched_rule_ids"] == ["first", "second"]
-    assert [
-        trace["rule_id"] for trace in multi_row["rules_engine_matched_rules"]
-    ] == ["first", "second"]
-    assert all(
-        trace["conditions"] for trace in multi_row["rules_engine_matched_rules"]
-    )
+    assert [trace["rule_id"] for trace in multi_row["rules_engine_matched_rules"]] == [
+        "first",
+        "second",
+    ]
+    assert all(trace["conditions"] for trace in multi_row["rules_engine_matched_rules"])
     assert multi_row["rules_engine_assign"].asDict(recursive=True) == {
         "bucket": {"applied": True, "value": "second"},
         "review": {"applied": True, "value": True},
@@ -269,9 +265,7 @@ def test_spark_runtime_evaluates_row_rule(spark):
     }
     assert multi_events["first_bucket"]["effective"] is False
     assert multi_events["first_bucket"]["overridden_by_rule_id"] == "second"
-    assert multi_events["first_bucket"]["overridden_by_assignment_id"] == (
-        "second_bucket"
-    )
+    assert multi_events["first_bucket"]["overridden_by_assignment_id"] == ("second_bucket")
     assert multi_events["second_bucket"]["old_value"] == "first"
     assert multi_events["second_bucket"]["changed"] is True
 
@@ -377,8 +371,7 @@ def test_dataframe_evaluation_separates_results_and_applies_atomic_values(spark)
         "rules_engine_engine_version",
     ]
     result_rows = {
-        row["row_id"]: row.asDict(recursive=True)
-        for row in evaluation.results_df.collect()
+        row["row_id"]: row.asDict(recursive=True) for row in evaluation.results_df.collect()
     }
     assert result_rows["clear"]["rules_engine_assign"]["status"] == {
         "applied": True,
@@ -406,10 +399,7 @@ def test_dataframe_evaluation_separates_results_and_applies_atomic_values(spark)
         "new_note",
         "new_flag",
     ]
-    applied_rows = {
-        row["row_id"]: row.asDict(recursive=True)
-        for row in applied.collect()
-    }
+    applied_rows = {row["row_id"]: row.asDict(recursive=True) for row in applied.collect()}
     assert applied_rows["clear"]["status"] is None
     assert applied_rows["clear"]["details"] is None
     assert applied_rows["clear"]["new_note"] is None
@@ -459,7 +449,7 @@ def test_persisted_projections_evaluate_custom_assignment_once_per_row(spark):
         CustomFunctionSpec(
             function_name="count_assignment",
             implementation_reference="tests.count_assignment",
-            arg_names=("value",),
+            arguments=(CustomFunctionArgSpec("value"),),
             allowed_in_condition_flag=False,
             allowed_in_assignment_flag=True,
             return_type_hint="string",
@@ -579,10 +569,7 @@ def test_spark_runtime_applies_typed_operand_defaults_before_comparison(spark):
         "numeric_default",
         "string_default",
     ]
-    traces = {
-        trace["rule_id"]: trace
-        for trace in row["rules_engine_matched_rules"]
-    }
+    traces = {trace["rule_id"]: trace for trace in row["rules_engine_matched_rules"]}
     numeric_left = traces["numeric_default"]["conditions"][0]["left"]
     string_left = traces["string_default"]["conditions"][0]["left"]
     assert numeric_left["original_value"] is None
@@ -686,10 +673,73 @@ def test_spark_runtime_evaluates_and_assigns_standard_date_functions(spark):
     review_date = row["rules_engine_assign"]["review_date"]
     assert review_date["applied"] is True
     assert review_date["value"] == date(2025, 1, 31)
-    review_outcome_type = output.schema["rules_engine_assign"].dataType[
-        "review_date"
-    ].dataType
+    review_outcome_type = output.schema["rules_engine_assign"].dataType["review_date"].dataType
     assert review_outcome_type["value"].dataType.typeName() == "date"
+
+
+def test_spark_runtime_executes_nested_array_and_optional_standard_arguments(spark):
+    """Recursive arguments and optional defaults survive the real worker boundary."""
+    registry = register_standard_functions(FunctionRegistry())
+    ruleset = _compile(
+        {
+            "left": {"literal": True},
+            "operator": "eq",
+            "right": {"literal": True},
+        },
+        assign={
+            "selected": {
+                "custom_function": {
+                    "name": "coalesce",
+                    "args": {
+                        "values": [
+                            {"field": "primary_code"},
+                            {"field": "secondary_code"},
+                        ]
+                    },
+                }
+            },
+            "suffix": {
+                "custom_function": {
+                    "name": "substring",
+                    "args": {
+                        "value": {"field": "secondary_code"},
+                        "start": 2,
+                    },
+                }
+            },
+            "has_tags": {
+                "custom_function": {
+                    "name": "array_contains_all",
+                    "args": {
+                        "values": {"field": "tags"},
+                        "candidates": ["review", "active"],
+                    },
+                }
+            },
+            "tags_text": {
+                "custom_function": {
+                    "name": "array_join",
+                    "args": {
+                        "values": {"field": "tags"},
+                        "separator": "|",
+                    },
+                }
+            },
+        },
+    )
+    df = spark.createDataFrame(
+        [("1", None, "ABC", ["review", "active"])],
+        "row_id string, primary_code string, secondary_code string, tags array<string>",
+    )
+    runtime = SparkRulesEngineRuntime(DummyRepository(), registry)
+
+    evaluation = _evaluation(df, ruleset, runtime=runtime, key_columns=["row_id"])
+    row = evaluation.apply_assignments().collect()[0]
+
+    assert row["selected"] == "ABC"
+    assert row["suffix"] == "BC"
+    assert row["has_tags"] is True
+    assert row["tags_text"] == "review|active"
 
 
 def test_spark_runtime_serializes_only_required_literal_source_columns(spark):
@@ -726,9 +776,7 @@ def test_spark_runtime_serializes_only_required_literal_source_columns(spark):
     assert row["rules_engine_matched"] is True
     assert row["rules_engine_assign"]["copied"]["value"] == "assigned"
     assert applied["copied"] == "assigned"
-    assert row["rules_engine_matched_rules"][0]["conditions"][0]["left"][
-        "value"
-    ] == "A"
+    assert row["rules_engine_matched_rules"][0]["conditions"][0]["left"]["value"] == "A"
 
 
 def test_spark_runtime_evaluates_literal_only_rule_without_source_dependencies(spark):
@@ -971,10 +1019,7 @@ def test_spark_runtime_preserves_mapping_literal_assignment_as_struct(spark):
     non_modeled_type = assign_type["non_modeled"].dataType["value"].dataType
     row = output.collect()[0]
 
-    assert {
-        field.name: field.dataType.simpleString()
-        for field in non_modeled_type.fields
-    } == {
+    assert {field.name: field.dataType.simpleString() for field in non_modeled_type.fields} == {
         "market_value": "boolean",
         "book_value": "boolean",
     }
@@ -1002,7 +1047,7 @@ def test_spark_runtime_preserves_decimal_and_array_assignments(spark):
             "existing_rate": 0.0425,
             "parsed_balance": {
                 "custom_function": {
-                    "name": "to_number",
+                    "name": "to_decimal",
                     "args": {"value": {"field": "balance_text"}},
                 }
             },
@@ -1054,6 +1099,7 @@ def test_spark_runtime_preserves_decimal_and_array_assignments(spark):
 
 def test_spark_runtime_quarantines_errors_without_failing_job(spark):
     """Production quarantine mode retains good rows and marks bad rows."""
+
     def error_on_bad_value(*, value):
         if value == "bad":
             raise ValueError("bad test value")
@@ -1064,7 +1110,7 @@ def test_spark_runtime_quarantines_errors_without_failing_job(spark):
         CustomFunctionSpec(
             function_name="error_on_bad_value",
             implementation_reference="tests.error_on_bad_value",
-            arg_names=("value",),
+            arguments=(CustomFunctionArgSpec("value"),),
             allowed_in_condition_flag=True,
             allowed_in_assignment_flag=False,
             return_type_hint="boolean",
@@ -1099,13 +1145,10 @@ def test_spark_runtime_quarantines_errors_without_failing_job(spark):
 
     by_value = {row["value"]: row for row in rows}
     assert by_value["good"]["rules_engine_error"] is None
-    assert by_value["bad"]["rules_engine_error"].startswith(
-        "ValueError: bad test value"
-    )
+    assert by_value["bad"]["rules_engine_error"].startswith("ValueError: bad test value")
     assert "Traceback" not in by_value["bad"]["rules_engine_error"]
     applied = {
-        row["value"]: row.asDict(recursive=True)
-        for row in evaluation.apply_assignments().collect()
+        row["value"]: row.asDict(recursive=True) for row in evaluation.apply_assignments().collect()
     }
     assert applied["good"]["bucket"] == "matched"
     assert applied["good"]["new_note"] == "created"

@@ -15,14 +15,12 @@ from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.enums import RulesetStatus
 from rules_engine.exporter_yaml import YamlRulesetExporter
 from rules_engine.models import (
-    AssignedOperand,
     ConditionGroup,
     CustomFunctionOperand,
-    FieldOperand,
-    LiteralOperand,
     Operand,
     Ruleset,
     RulesetVersionRow,
+    iter_nested_operands,
 )
 
 _JSON_TYPE_KEY = "$rules_engine_type"
@@ -72,9 +70,7 @@ class DeltaRowSerializer:
         """
         Reconstruct a canonical ruleset from one authoritative version row.
         """
-        payload = _decode_json_types(
-            json.loads(row.payload_json, parse_float=Decimal)
-        )
+        payload = _decode_json_types(json.loads(row.payload_json, parse_float=Decimal))
         return YamlRulesetCompiler().compile_payload(payload)
 
     def content_hash(self, ruleset: Ruleset) -> str:
@@ -141,16 +137,8 @@ class DeltaRowSerializer:
         count = 1 if isinstance(operand, operand_type) else 0
         if isinstance(operand, CustomFunctionOperand):
             for arg_value in operand.args.values():
-                if isinstance(
-                    arg_value,
-                    (
-                        AssignedOperand,
-                        FieldOperand,
-                        LiteralOperand,
-                        CustomFunctionOperand,
-                    ),
-                ):
-                    count += self._count_operand_tree(arg_value, operand_type)
+                for nested_operand in iter_nested_operands(arg_value):
+                    count += self._count_operand_tree(nested_operand, operand_type)
         return count
 
     def _payload_json(self, ruleset: Ruleset) -> str:
@@ -223,10 +211,7 @@ def _decode_json_types(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
     if set(value) != {_JSON_TYPE_KEY, _JSON_VALUE_KEY}:
-        return {
-            key: _decode_json_types(item)
-            for key, item in value.items()
-        }
+        return {key: _decode_json_types(item) for key, item in value.items()}
 
     type_name = value[_JSON_TYPE_KEY]
     encoded_value = value[_JSON_VALUE_KEY]
@@ -266,10 +251,7 @@ def _decode_json_types(value: Any) -> Any:
             raise _invalid_envelope(type_name, "value must be an object")
         # Decode the mapping's values only. Recursing on the inner mapping as a
         # whole would reinterpret an escaped user-owned $rules_engine_type key.
-        encoded_items = (
-            (key, _decode_json_types(item))
-            for key, item in encoded_value.items()
-        )
+        encoded_items = ((key, _decode_json_types(item)) for key, item in encoded_value.items())
         return dict(encoded_items)
     raise ValueError(f"Unsupported persisted literal type envelope: {type_name!r}.")
 

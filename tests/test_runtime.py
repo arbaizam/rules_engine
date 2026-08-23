@@ -8,7 +8,11 @@ from rules_engine import required_source_columns as public_required_source_colum
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.human_readable import HumanReadableRulesetFormatter
-from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
+from rules_engine.registry import (
+    CustomFunctionArgSpec,
+    CustomFunctionSpec,
+    FunctionRegistry,
+)
 from rules_engine.runtime import SparkRowEvaluator
 from rules_engine.spark_runtime import (
     COMPACT_RESULT_FIELD_NAMES,
@@ -182,9 +186,7 @@ def _assigned_chain_ruleset():
 
 def test_assigned_values_are_visible_to_later_rules_and_atomic_within_a_rule():
     """Later rules see commits, while sibling assignments share one snapshot."""
-    result = SparkRowEvaluator.for_embedded_ruleset(
-        FunctionRegistry()
-    ).evaluate_row(
+    result = SparkRowEvaluator.without_repository(FunctionRegistry()).evaluate_row(
         _assigned_chain_ruleset(),
         {"eligible": True, "bucket": "ORIGINAL"},
     )
@@ -244,9 +246,9 @@ def test_missing_prior_commit_is_null_and_can_use_default_if_null():
     }
     ruleset = YamlRulesetCompiler().compile_payload(payload)
 
-    result = SparkRowEvaluator.for_embedded_ruleset(
-        FunctionRegistry()
-    ).evaluate_row(ruleset, {"eligible": False})
+    result = SparkRowEvaluator.without_repository(FunctionRegistry()).evaluate_row(
+        ruleset, {"eligible": False}
+    )
 
     assert result["matched_rule_ids"] == ["fallback"]
     assert result["assign"] == {
@@ -631,9 +633,7 @@ def test_spark_row_evaluator_orders_date_ranges(operator):
         {
             "left": {"field": "as_of_date"},
             "operator": operator,
-            "right": {
-                "literal": [date(2024, 2, 1), date(2024, 2, 29)]
-            },
+            "right": {"literal": [date(2024, 2, 1), date(2024, 2, 29)]},
         }
     )
 
@@ -648,9 +648,7 @@ def test_spark_row_evaluator_orders_timezone_aware_timestamps():
         {
             "left": {"field": "received_at"},
             "operator": "gt",
-            "right": {
-                "literal": datetime(2024, 2, 29, 12, 0, tzinfo=timezone.utc)
-            },
+            "right": {"literal": datetime(2024, 2, 29, 12, 0, tzinfo=timezone.utc)},
         }
     )
 
@@ -845,9 +843,7 @@ def test_spark_row_evaluator_returns_native_matched_rule_trace():
     match_trace = result["matched_rules"][0]
 
     assert result["matched"] is True
-    assert result["assign"] == {
-        "bucket": {"applied": True, "value": "matched"}
-    }
+    assert result["assign"] == {"bucket": {"applied": True, "value": "matched"}}
     assert "rule_results" not in result
     assert match_trace["rule_id"] == "r1"
     assert match_trace["rule_name"] == "Rule 1"
@@ -885,9 +881,7 @@ def test_full_audit_distinguishes_inactive_conditions():
         }
     )
 
-    conditions = _evaluate_worker(ruleset, {"account": "A"})[
-        "matched_rules"
-    ][0]["conditions"]
+    conditions = _evaluate_worker(ruleset, {"account": "A"})["matched_rules"][0]["conditions"]
 
     assert [condition["condition_id"] for condition in conditions] == [
         "inactive_branch",
@@ -1012,9 +1006,7 @@ def test_spark_row_evaluator_match_trace_explanation_uses_any_joiner():
 
     result = _evaluate_worker(ruleset, {"account": "A", "status": "open"})
 
-    assert result["matched_rules"][0]["explanation"] == (
-        "account == 'A' OR status == 'open'"
-    )
+    assert result["matched_rules"][0]["explanation"] == ("account == 'A' OR status == 'open'")
 
 
 def test_spark_row_evaluator_match_trace_explanation_drops_failing_any_branches():
@@ -1087,8 +1079,7 @@ def test_spark_row_evaluator_match_trace_explanation_preserves_nested_groups():
     )
 
     assert result["matched_rules"][0]["explanation"] == (
-        "record_type == 'asset' AND "
-        "(market_value == true OR book_value == true)"
+        "record_type == 'asset' AND (market_value == true OR book_value == true)"
     )
 
 
@@ -1402,23 +1393,15 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
     assert all(item["conditions"] for item in result["matched_rules"])
     assert result["matched_rules"][0]["rule_id"] == "first_match"
     assert result["matched_rules"][0]["explanation"] == "account == 'A'"
-    assignment_results = {
-        item["assignment_id"]: item
-        for item in result["assignment_results"]
-    }
+    assignment_results = {item["assignment_id"]: item for item in result["assignment_results"]}
     assert assignment_results["first_bucket"]["effective"] is False
     assert assignment_results["first_bucket"]["old_value"] == "original"
     assert assignment_results["first_bucket"]["overridden_by_rule_id"] == "second_match"
-    assert (
-        assignment_results["first_bucket"]["overridden_by_assignment_id"]
-        == "second_bucket"
-    )
+    assert assignment_results["first_bucket"]["overridden_by_assignment_id"] == "second_bucket"
     assert assignment_results["second_bucket"]["effective"] is True
     assert assignment_results["second_bucket"]["old_value"] == "first"
     assert assignment_results["second_bucket"]["changed"] is True
-    assert assignment_results["second_bucket"]["authored_expression"] == (
-        "bucket = 'second'"
-    )
+    assert assignment_results["second_bucket"]["authored_expression"] == ("bucket = 'second'")
     assert assignment_results["second_risk"]["effective"] is True
     assert assignment_results["second_risk"]["changed"] is False
     assert assignment_results["clear_value"]["proposed_value"] is None
@@ -1476,20 +1459,13 @@ def test_compact_and_full_audit_payloads_have_core_result_parity():
         compact = _evaluate_worker(ruleset, row, full_audit=False)
         full = _evaluate_worker(ruleset, row, full_audit=True)
 
-        assert {
-            field_name: compact[field_name]
-            for field_name in COMPACT_RESULT_FIELD_NAMES
-        } == {
-            field_name: full[field_name]
-            for field_name in COMPACT_RESULT_FIELD_NAMES
+        assert {field_name: compact[field_name] for field_name in COMPACT_RESULT_FIELD_NAMES} == {
+            field_name: full[field_name] for field_name in COMPACT_RESULT_FIELD_NAMES
         }, case_name
         assert compact["matched"] is matched
         assert compact["matched_rule_ids"] == matched_rule_ids
         assert compact["assign"] == assign
-        assert not any(
-            field_name in compact
-            for field_name in FULL_AUDIT_ONLY_RESULT_FIELD_NAMES
-        )
+        assert not any(field_name in compact for field_name in FULL_AUDIT_ONLY_RESULT_FIELD_NAMES)
 
         if case_name == "success":
             assert full["error"] is None
@@ -1691,7 +1667,7 @@ def test_losing_custom_condition_is_invoked_once_during_full_audit():
         CustomFunctionSpec(
             function_name="never_matches",
             implementation_reference="tests.never_matches",
-            arg_names=("value",),
+            arguments=(CustomFunctionArgSpec("value"),),
             allowed_in_condition_flag=True,
             allowed_in_assignment_flag=False,
             return_type_hint="boolean",
@@ -1927,7 +1903,7 @@ def test_spark_row_evaluator_matched_rule_trace_includes_custom_function_args():
         CustomFunctionSpec(
             function_name="score",
             implementation_reference="tests.score",
-            arg_names=("x", "y"),
+            arguments=(CustomFunctionArgSpec("x"), CustomFunctionArgSpec("y")),
             allowed_in_condition_flag=True,
             allowed_in_assignment_flag=False,
         ),
@@ -1954,9 +1930,7 @@ def test_spark_row_evaluator_matched_rule_trace_includes_custom_function_args():
     assert left["source_columns"] == ["amount"]
     assert left["value"] == "5"
     assert left["arguments"] == {"x": "amount=2", "y": "3"}
-    assert result["matched_rules"][0]["explanation"] == (
-        "score(x=amount, y=3) == 5"
-    )
+    assert result["matched_rules"][0]["explanation"] == ("score(x=amount, y=3) == 5")
     assert calls == [{"x": 2, "y": 3}]
 
 
@@ -2031,7 +2005,7 @@ def test_spark_row_evaluator_default_if_null_applies_to_custom_function_result_o
         CustomFunctionSpec(
             function_name="missing_value",
             implementation_reference="tests.missing_value",
-            arg_names=(),
+            arguments=(),
             allowed_in_condition_flag=True,
             allowed_in_assignment_flag=False,
             return_type_hint="string",
@@ -2077,9 +2051,7 @@ def test_spark_row_evaluator_default_if_null_applies_to_assignment_operand():
 
     result = _evaluate_worker(ruleset, {})
 
-    assert result["assign"] == {
-        "bucket": {"applied": True, "value": "UNKNOWN"}
-    }
+    assert result["assign"] == {"bucket": {"applied": True, "value": "UNKNOWN"}}
 
 
 def test_spark_row_evaluator_error_on_null_returns_compact_error():
@@ -2161,7 +2133,7 @@ def test_spark_runtime_preflights_custom_function_serialization():
         CustomFunctionSpec(
             function_name="unserializable",
             implementation_reference="tests.unserializable",
-            arg_names=("value",),
+            arguments=(CustomFunctionArgSpec("value"),),
             allowed_in_condition_flag=True,
             allowed_in_assignment_flag=False,
         ),

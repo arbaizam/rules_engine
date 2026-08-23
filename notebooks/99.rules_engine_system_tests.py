@@ -21,7 +21,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-root = next((p for p in [Path.cwd(), *Path.cwd().parents] if (p/"databricks.yml").exists()), None)
+root = next((p for p in [Path.cwd(), *Path.cwd().parents] if (p / "databricks.yml").exists()), None)
 if root:
     src_path = os.path.normpath(root / "src")
     if src_path not in sys.path:
@@ -32,12 +32,13 @@ from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
 from rules_engine import (
+    CustomFunctionArgSpec,
     CustomFunctionSpec,
     DeltaRowSerializer,
     RulesEngineService,
     standard_function_rows,
 )
-from rules_engine.exceptions import RepositoryError, ValidationFailedError
+from rules_engine.exceptions import RepositoryError
 from rules_engine.models import FunctionRegistryRow
 
 
@@ -61,8 +62,7 @@ def _expect_raises(exception_type, operation, *, contains=None):
     except exception_type as exc:
         if contains is not None:
             assert contains in str(exc), (
-                f"Expected {exception_type.__name__} containing {contains!r}, "
-                f"found {exc!r}."
+                f"Expected {exception_type.__name__} containing {contains!r}, found {exc!r}."
             )
         return exc
     raise AssertionError(f"Expected {exception_type.__name__} to be raised.")
@@ -88,16 +88,11 @@ assert any(marker in schema_leaf for marker in ("test", "scratch", "tmp")), (
     "SCHEMA must visibly identify a disposable test, scratch, or tmp schema."
 )
 
-configured_ruleset_path = (
-    globals().get("RULESET_YAML_PATH") or _job_parameter("RULESET_YAML_PATH")
-)
+configured_ruleset_path = globals().get("RULESET_YAML_PATH") or _job_parameter("RULESET_YAML_PATH")
 RULESET_YAML_PATH = (
     Path(configured_ruleset_path).expanduser()
     if configured_ruleset_path
-    else REPO_ROOT
-    / "examples"
-    / "rulesets"
-    / "rules_engine_system_testing_rules.yaml"
+    else REPO_ROOT / "examples" / "rulesets" / "rules_engine_system_testing_rules.yaml"
 )
 if not RULESET_YAML_PATH.is_absolute():
     RULESET_YAML_PATH = (REPO_ROOT / RULESET_YAML_PATH).resolve()
@@ -171,6 +166,8 @@ service.save_standard_function_registry()
 service.save_standard_function_registry()
 
 standard_names = {row.function_name for row in standard_function_rows()}
+assert len(standard_names) == 58
+assert {"length", "contains_any", "to_number"}.isdisjoint(standard_names)
 persisted_standard_names = {
     row["function_name"]
     for row in spark.table(FUNCTION_REGISTRY_TABLE)
@@ -183,7 +180,16 @@ assert persisted_standard_names == standard_names
 metadata_only_row = FunctionRegistryRow(
     function_name="system_metadata_only",
     implementation_reference="alm.system_tests.system_metadata_only",
-    arg_contract_payload={"arg_names": ["value"]},
+    arg_contract_payload={
+        "arguments": [
+            {
+                "name": "value",
+                "required": True,
+                "type_hint": "integer",
+                "literal_only": False,
+            }
+        ]
+    },
     return_type_hint="string",
     allowed_in_condition_flag=True,
     allowed_in_assignment_flag=False,
@@ -365,10 +371,7 @@ assert service.load_published("System Identity Rules", "2") == identity_v2
 
 retired_rows = (
     spark.table(RULESET_VERSIONS_TABLE)
-    .where(
-        (F.col("ruleset_id") == "system_identity")
-        & (F.col("version") == "1")
-    )
+    .where((F.col("ruleset_id") == "system_identity") & (F.col("version") == "1"))
     .collect()
 )
 assert len(retired_rows) == 1
@@ -387,49 +390,7 @@ print("PASS: Retirement changes lifecycle only and cannot be repeated silently."
 
 # COMMAND ----------
 
-_start("ST-007", "Block publication when an embedded expected case fails")
-
-failing_expected_case = service.compile_yaml_text(
-    """
-ruleset_id: system_failed_expectation
-ruleset_name: System Failed Expectation
-version: "1"
-owner: ALM Rules Team
-owner_department: ALM Engineering
-rules:
-  - rule_id: expected_case_rule
-    rule_name: Expected case rule
-    when:
-      all:
-        - left: {field: row_id}
-          operator: is_not_null
-    assign:
-      expected_result: actual
-expect:
-  - name: deliberately wrong expected value
-    given: {row_id: one}
-    then:
-      expected_result: wrong
-"""
-)
-
-_expect_raises(
-    ValidationFailedError,
-    lambda: service.publish(failing_expected_case),
-    contains="expected cases failed",
-)
-assert (
-    spark.table(RULESET_VERSIONS_TABLE)
-    .where(F.col("ruleset_id") == "system_failed_expectation")
-    .count()
-    == 0
-)
-
-print("PASS: Failed examples prevent every repository write.")
-
-# COMMAND ----------
-
-_start("ST-008", "Keep compact and full-audit outcomes identical")
+_start("ST-007", "Keep compact and full-audit outcomes identical")
 
 parity_ruleset = service.compile_yaml_text(
     """
@@ -512,13 +473,9 @@ assert full.columns == [
 ]
 
 compact_rows = {
-    row["row_id"]: row.asDict(recursive=True)
-    for row in compact.orderBy("row_id").collect()
+    row["row_id"]: row.asDict(recursive=True) for row in compact.orderBy("row_id").collect()
 }
-full_rows = {
-    row["row_id"]: row.asDict(recursive=True)
-    for row in full.orderBy("row_id").collect()
-}
+full_rows = {row["row_id"]: row.asDict(recursive=True) for row in full.orderBy("row_id").collect()}
 
 for row_id in compact_rows:
     for field_name in (
@@ -551,7 +508,7 @@ print("PASS: Success, no-match, and error outcomes are identical across audit mo
 
 # COMMAND ----------
 
-_start("ST-009", "Emit complete condition identity in full audit")
+_start("ST-008", "Emit complete condition identity in full audit")
 
 matched_trace = full_rows["success"]["rules_engine_matched_rules"]
 assert len(matched_trace) == 1
@@ -576,7 +533,7 @@ print("PASS: Full audit distinguishes active and inactive condition branches.")
 
 # COMMAND ----------
 
-_start("ST-010", "Apply the stopping rule and skip every later rule")
+_start("ST-009", "Apply the stopping rule and skip every later rule")
 
 stop_ruleset = service.compile_yaml_text(
     """
@@ -609,12 +566,16 @@ rules:
 """
 )
 
-stop_row = service.evaluate_dataframe(
-    spark.createDataFrame([("one",)], ["row_id"]),
-    ruleset=stop_ruleset,
-    key_columns=["row_id"],
-    full_audit=True,
-).results_df.collect()[0].asDict(recursive=True)
+stop_row = (
+    service.evaluate_dataframe(
+        spark.createDataFrame([("one",)], ["row_id"]),
+        ruleset=stop_ruleset,
+        key_columns=["row_id"],
+        full_audit=True,
+    )
+    .results_df.collect()[0]
+    .asDict(recursive=True)
+)
 
 assert stop_row["rules_engine_matched_rule_ids"] == ["stop_first"]
 assert stop_row["rules_engine_assign"]["stage"] == {
@@ -625,15 +586,13 @@ assert stop_row["rules_engine_assign"]["later_rule_ran"] == {
     "applied": False,
     "value": None,
 }
-assert [item["rule_id"] for item in stop_row["rules_engine_matched_rules"]] == [
-    "stop_first"
-]
+assert [item["rule_id"] for item in stop_row["rules_engine_matched_rules"]] == ["stop_first"]
 
 print("PASS: The matching stopping rule commits before later evaluation stops.")
 
 # COMMAND ----------
 
-_start("ST-011", "Read committed earlier assignments through an atomic rule snapshot")
+_start("ST-010", "Read committed earlier assignments through an atomic rule snapshot")
 
 chain_ruleset = service.compile_yaml_text(
     """
@@ -679,12 +638,16 @@ rules:
 """
 )
 
-chain_row = service.evaluate_dataframe(
-    spark.createDataFrame([("one", "original")], ["row_id", "stage"]),
-    ruleset=chain_ruleset,
-    key_columns=["row_id"],
-    full_audit=True,
-).results_df.collect()[0].asDict(recursive=True)
+chain_row = (
+    service.evaluate_dataframe(
+        spark.createDataFrame([("one", "original")], ["row_id", "stage"]),
+        ruleset=chain_ruleset,
+        key_columns=["row_id"],
+        full_audit=True,
+    )
+    .results_df.collect()[0]
+    .asDict(recursive=True)
+)
 
 assert chain_row["rules_engine_matched_rule_ids"] == [
     "chain_producer",
@@ -705,7 +668,7 @@ print("PASS: Later rules see commits while sibling assignments share one pre-rul
 
 # COMMAND ----------
 
-_start("ST-012", "Substitute operand nulls before comparison and preserve explicit errors")
+_start("ST-011", "Substitute operand nulls before comparison and preserve explicit errors")
 
 null_ruleset = service.compile_yaml_text(
     """
@@ -750,12 +713,16 @@ null_input = spark.createDataFrame(
         ]
     ),
 )
-null_row = service.evaluate_dataframe(
-    null_input,
-    ruleset=null_ruleset,
-    key_columns=["row_id"],
-    full_audit=True,
-).results_df.collect()[0].asDict(recursive=True)
+null_row = (
+    service.evaluate_dataframe(
+        null_input,
+        ruleset=null_ruleset,
+        key_columns=["row_id"],
+        full_audit=True,
+    )
+    .results_df.collect()[0]
+    .asDict(recursive=True)
+)
 
 assert null_row["rules_engine_matched_rule_ids"] == ["numeric_default", "text_default"]
 assert null_row["rules_engine_assign"] == {
@@ -777,7 +744,7 @@ print("PASS: Numeric and text fallbacks run before comparison; explicit null err
 
 # COMMAND ----------
 
-_start("ST-013", "Record assignment override history against the effective prior value")
+_start("ST-012", "Record assignment override history against the effective prior value")
 
 history_ruleset = service.compile_yaml_text(
     """
@@ -808,12 +775,16 @@ rules:
 """
 )
 
-history_row = service.evaluate_dataframe(
-    spark.createDataFrame([("one", "original")], ["row_id", "target"]),
-    ruleset=history_ruleset,
-    key_columns=["row_id"],
-    full_audit=True,
-).results_df.collect()[0].asDict(recursive=True)
+history_row = (
+    service.evaluate_dataframe(
+        spark.createDataFrame([("one", "original")], ["row_id", "target"]),
+        ruleset=history_ruleset,
+        key_columns=["row_id"],
+        full_audit=True,
+    )
+    .results_df.collect()[0]
+    .asDict(recursive=True)
+)
 
 events = history_row["rules_engine_assignment_results"]
 assert len(events) == 2
@@ -838,7 +809,7 @@ print("PASS: Assignment history follows original value, prior commit, and final 
 
 # COMMAND ----------
 
-_start("ST-014", "Preserve decimal, date, and nested struct assignments through Spark")
+_start("ST-013", "Preserve decimal, date, and nested struct assignments through Spark")
 
 typed_ruleset = service.compile_yaml_text(
     """
@@ -893,7 +864,7 @@ print("PASS: Financial, temporal, and nested values cross the real worker bounda
 
 # COMMAND ----------
 
-_start("ST-015", "Execute a registered custom function in a real Spark worker")
+_start("ST-014", "Execute a registered custom function in a real Spark worker")
 
 
 def system_double(**kwargs):
@@ -906,7 +877,7 @@ if not service.registry.has_spec("system_double"):
         CustomFunctionSpec(
             function_name="system_double",
             implementation_reference="alm.system_tests.system_double",
-            arg_names=("value",),
+            arguments=(CustomFunctionArgSpec("value", type_hint="integer"),),
             allowed_in_condition_flag=True,
             allowed_in_assignment_flag=True,
             return_type_hint="integer",
@@ -944,11 +915,15 @@ rules:
 """
 )
 
-function_row = service.evaluate_dataframe(
-    spark.createDataFrame([("one", 5)], ["row_id", "amount"]),
-    ruleset=function_ruleset,
-    key_columns=["row_id"],
-).results_df.collect()[0].asDict(recursive=True)
+function_row = (
+    service.evaluate_dataframe(
+        spark.createDataFrame([("one", 5)], ["row_id", "amount"]),
+        ruleset=function_ruleset,
+        key_columns=["row_id"],
+    )
+    .results_df.collect()[0]
+    .asDict(recursive=True)
+)
 
 assert function_row["rules_engine_matched_rule_ids"] == ["custom_function_rule"]
 assert function_row["rules_engine_assign"]["doubled"] == {
@@ -960,7 +935,7 @@ print("PASS: Registered metadata and executable code work across the Spark worke
 
 # COMMAND ----------
 
-_start("ST-016", "Preserve ordinary result-named inputs and reject reserved output collisions")
+_start("ST-015", "Preserve ordinary result-named inputs and reject reserved output collisions")
 
 collision_ruleset = service.compile_yaml_text(
     """
@@ -1029,7 +1004,7 @@ print("PASS: Internal temp names are private and all public names remain reserve
 
 # COMMAND ----------
 
-_start("ST-017", "Report rule coverage and clean no-match rows")
+_start("ST-016", "Report rule coverage and clean no-match rows")
 
 coverage_ruleset = service.compile_yaml_text(
     """
@@ -1084,7 +1059,7 @@ print("PASS: Coverage reports counts, dead rules, broad rules, and clean no-matc
 
 # COMMAND ----------
 
-_start("ST-018", "Separate keyed results and apply scalar, null, and struct assignments")
+_start("ST-017", "Separate keyed results and apply scalar, null, and struct assignments")
 
 apply_ruleset = service.compile_yaml_text(
     """
@@ -1164,8 +1139,7 @@ assert apply_evaluation.results_df.columns == [
     "rules_engine_engine_version",
 ]
 result_rows = {
-    row["row_id"]: row.asDict(recursive=True)
-    for row in apply_evaluation.results_df.collect()
+    row["row_id"]: row.asDict(recursive=True) for row in apply_evaluation.results_df.collect()
 }
 assert result_rows["clear"]["rules_engine_assign"]["status"] == {
     "applied": True,
@@ -1182,10 +1156,7 @@ assert result_rows["replace"]["rules_engine_assign"]["details"] == {
 
 applied_df = apply_evaluation.apply_assignments()
 assert applied_df.columns == ["row_id", "action", "status", "details", "new_note"]
-applied_rows = {
-    row["row_id"]: row.asDict(recursive=True)
-    for row in applied_df.collect()
-}
+applied_rows = {row["row_id"]: row.asDict(recursive=True) for row in applied_df.collect()}
 assert applied_rows["clear"]["status"] is None
 assert applied_rows["clear"]["details"] is None
 assert applied_rows["replace"]["status"] == "updated"
@@ -1231,6 +1202,109 @@ _expect_raises(
 )
 
 print("PASS: Keyed results stay separate and assignments replace, clear, or append atomically.")
+
+# COMMAND ----------
+
+_start("ST-018", "Execute composition, array, decimal, and business-calendar functions")
+
+function_ruleset = service.compile_yaml_text(
+    """
+ruleset_id: system_standard_functions
+ruleset_name: System Standard Functions
+version: "1"
+owner: ALM Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: derive_values
+    rule_name: Derive values
+    when:
+      all:
+        - left: {literal: true}
+          operator: eq
+          right: {literal: true}
+    assign:
+      selected_code:
+        custom_function:
+          name: coalesce
+          args:
+            values:
+              - {field: primary_code}
+              - {field: secondary_code}
+      code_suffix:
+        custom_function:
+          name: substring
+          args:
+            value: {field: secondary_code}
+            start: 2
+      has_required_tags:
+        custom_function:
+          name: array_contains_all
+          args:
+            values: {field: tags}
+            candidates: [review, active]
+      tags_text:
+        custom_function:
+          name: array_join
+          args:
+            values: {field: tags}
+            separator: "|"
+      quarter_amount:
+        custom_function:
+          name: decimal_safe_divide
+          args:
+            numerator:
+              custom_function:
+                name: to_decimal
+                args:
+                  value: {field: annual_amount}
+            denominator: 4
+            scale: 2
+      first_business_date:
+        custom_function:
+          name: first_business_day_of_month
+          args:
+            value: {field: business_date}
+            holidays: ["2024-06-03"]
+      parsed_count:
+        custom_function:
+          name: to_integer
+          args:
+            value: {field: raw_count}
+            on_error: "null"
+"""
+)
+
+function_input = spark.createDataFrame(
+    [
+        (
+            "1",
+            None,
+            "ABC",
+            ["review", "active"],
+            "10.00",
+            "2024-06-15",
+            "not-an-integer",
+        )
+    ],
+    "row_id string, primary_code string, secondary_code string, "
+    "tags array<string>, annual_amount string, business_date string, raw_count string",
+)
+function_evaluation = service.evaluate_dataframe(
+    function_input,
+    ruleset=function_ruleset,
+    key_columns=["row_id"],
+)
+function_result = function_evaluation.apply_assignments().collect()[0].asDict(recursive=True)
+
+assert function_result["selected_code"] == "ABC"
+assert function_result["code_suffix"] == "BC"
+assert function_result["has_required_tags"] is True
+assert function_result["tags_text"] == "review|active"
+assert function_result["quarter_amount"] == Decimal("2.500000000000000000")
+assert function_result["first_business_date"] == date(2024, 6, 4)
+assert function_result["parsed_count"] is None
+
+print("PASS: Standard functions retain optional, nested, array, decimal, and date semantics.")
 
 # COMMAND ----------
 

@@ -28,17 +28,16 @@ from pyspark.sql import types as T
 from rules_engine.dataframe_evaluation import DataFrameEvaluation
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.models import (
-    AssignedOperand,
     Assignment,
     ConditionGroup,
     CustomFunctionOperand,
     FieldOperand,
-    LiteralOperand,
     Operand,
     ResolvedConditionTrace,
     Rule,
     RuleExecutionTrace,
     Ruleset,
+    iter_nested_operands,
 )
 from rules_engine.registry import FunctionRegistry
 from rules_engine.repository import RulesetRepository
@@ -70,16 +69,8 @@ def required_source_columns(ruleset: Ruleset) -> tuple[str, ...]:
             columns.append(operand.field_name)
         elif isinstance(operand, CustomFunctionOperand):
             for argument in operand.args.values():
-                if isinstance(
-                    argument,
-                    (
-                        AssignedOperand,
-                        FieldOperand,
-                        LiteralOperand,
-                        CustomFunctionOperand,
-                    ),
-                ):
-                    add_operand(argument)
+                for nested_operand in iter_nested_operands(argument):
+                    add_operand(nested_operand)
 
     def add_group(group: ConditionGroup) -> None:
         for condition in group.conditions:
@@ -237,12 +228,8 @@ def _assignment_outcome_schema(assign_schema: T.StructType) -> T.StructType:
 
 
 COMPACT_RESULT_FIELD_NAMES = tuple(_result_struct(T.StructType()).fieldNames())
-FULL_AUDIT_RESULT_FIELD_NAMES = tuple(
-    _result_struct(T.StructType(), full_audit=True).fieldNames()
-)
-FULL_AUDIT_ONLY_RESULT_FIELD_NAMES = tuple(
-    field.name for field in _FULL_AUDIT_ONLY_RESULT_FIELDS
-)
+FULL_AUDIT_RESULT_FIELD_NAMES = tuple(_result_struct(T.StructType(), full_audit=True).fieldNames())
+FULL_AUDIT_ONLY_RESULT_FIELD_NAMES = tuple(field.name for field in _FULL_AUDIT_ONLY_RESULT_FIELDS)
 
 
 def result_field_names(
@@ -251,11 +238,7 @@ def result_field_names(
 ) -> tuple[str, ...]:
     """Return result field names emitted for the requested audit detail."""
     _require_bool("full_audit", full_audit)
-    return (
-        FULL_AUDIT_RESULT_FIELD_NAMES
-        if full_audit
-        else COMPACT_RESULT_FIELD_NAMES
-    )
+    return FULL_AUDIT_RESULT_FIELD_NAMES if full_audit else COMPACT_RESULT_FIELD_NAMES
 
 
 class SparkRulesEngineRuntime:
@@ -271,8 +254,7 @@ class SparkRulesEngineRuntime:
         self._repository = repository
         self._function_registry = function_registry
         self._compatibility_validator = (
-            compatibility_validator
-            or SparkRulesetCompatibilityValidator(function_registry)
+            compatibility_validator or SparkRulesetCompatibilityValidator(function_registry)
         )
 
     def load_published_ruleset(self, ruleset_name: str, version: str | None = None) -> Ruleset:
@@ -359,10 +341,7 @@ class SparkRulesEngineRuntime:
         if not column_prefix:
             raise ValueError("column_prefix must be non-empty.")
         output_names = {
-            *{
-                f"{column_prefix}_{field_name}"
-                for field_name in FULL_AUDIT_RESULT_FIELD_NAMES
-            },
+            *{f"{column_prefix}_{field_name}" for field_name in FULL_AUDIT_RESULT_FIELD_NAMES},
             f"{column_prefix}_ruleset",
             f"{column_prefix}_engine_version",
         }
@@ -386,15 +365,11 @@ class SparkRulesEngineRuntime:
         )
         if validation.has_errors():
             raise ValidationFailedError(
-                "Ruleset validation failed for Spark evaluation.\n"
-                + validation.to_text()
+                "Ruleset validation failed for Spark evaluation.\n" + validation.to_text()
             )
         assign_schema = self._assignment_schema(ruleset, df.schema)
         assign_field_names = [field.name for field in assign_schema.fields]
-        assign_field_types = {
-            field.name: field.dataType
-            for field in assign_schema.fields
-        }
+        assign_field_types = {field.name: field.dataType for field in assign_schema.fields}
 
         row_evaluator = self._build_row_evaluator(
             ruleset,
@@ -473,11 +448,7 @@ class SparkRulesEngineRuntime:
         if invalid:
             raise ValueError("key_columns must contain only non-empty strings.")
         duplicates = sorted(
-            {
-                column_name
-                for column_name in normalized
-                if normalized.count(column_name) > 1
-            }
+            {column_name for column_name in normalized if normalized.count(column_name) > 1}
         )
         if duplicates:
             raise ValueError(f"key_columns contains duplicate names: {duplicates}")
@@ -485,9 +456,7 @@ class SparkRulesEngineRuntime:
         if missing:
             raise ValueError(f"key_columns are missing from the input DataFrame: {missing}")
         ambiguous = sorted(
-            column_name
-            for column_name in normalized
-            if df.columns.count(column_name) > 1
+            column_name for column_name in normalized if df.columns.count(column_name) > 1
         )
         if ambiguous:
             raise ValueError(f"key_columns are ambiguous in the input DataFrame: {ambiguous}")
@@ -500,8 +469,7 @@ class SparkRulesEngineRuntime:
         assigned_keys = sorted(set(normalized) & assignment_targets)
         if assigned_keys:
             raise ValueError(
-                "Assignment targets cannot modify immutable key columns: "
-                f"{assigned_keys}"
+                f"Assignment targets cannot modify immutable key columns: {assigned_keys}"
             )
         return normalized
 
@@ -575,9 +543,7 @@ class SparkRulesEngineRuntime:
     ):
         """Build the serializable Python callable used by the Spark UDF."""
         _require_bool("full_audit", full_audit)
-        runtime = _SparkRowUdfEvaluator.for_embedded_ruleset(
-            self._function_registry
-        )
+        runtime = _SparkRowUdfEvaluator.without_repository(self._function_registry)
         ordered_rules = sorted(ruleset.rules, key=lambda item: item.rule_order)
         active_rules: list[_PreparedRule] = []
         for rule in (item for item in ordered_rules if item.active_flag):
@@ -643,12 +609,8 @@ class SparkRulesEngineRuntime:
                                     explanation=explanation,
                                 )
                             )
-                        resolved_rule_assignments: list[
-                            tuple[Assignment, Any]
-                        ] = []
-                        for assignment, authored_expression in (
-                            prepared_rule.assignment_specs
-                        ):
+                        resolved_rule_assignments: list[tuple[Assignment, Any]] = []
+                        for assignment, authored_expression in prepared_rule.assignment_specs:
                             if full_audit:
                                 event = runtime._typed_assignment_event(
                                     rule,
@@ -669,9 +631,7 @@ class SparkRulesEngineRuntime:
                                     ),
                                     assign_field_types[assignment.target_field],
                                 )
-                            resolved_rule_assignments.append(
-                                (assignment, proposed_value)
-                            )
+                            resolved_rule_assignments.append((assignment, proposed_value))
                         for assignment, proposed_value in resolved_rule_assignments:
                             assignments[assignment.target_field] = proposed_value
                             assigned_values[assignment.target_field] = AssignedValue(
@@ -682,9 +642,7 @@ class SparkRulesEngineRuntime:
                         if rule.stop_on_match:
                             break
                 assignment_results = (
-                    runtime._assignment_results(assignment_events)
-                    if full_audit
-                    else []
+                    runtime._assignment_results(assignment_events) if full_audit else []
                 )
                 assign_payload = (
                     {
@@ -708,8 +666,7 @@ class SparkRulesEngineRuntime:
             except Exception as exc:
                 if raise_on_error:
                     raise RuntimeError(
-                        f"Rules engine row evaluation failed with "
-                        f"{type(exc).__name__}: {exc}"
+                        f"Rules engine row evaluation failed with {type(exc).__name__}: {exc}"
                     ) from exc
                 return runtime._error_payload(
                     exc,
@@ -741,9 +698,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         )
         assigned_value = (assigned_values or {}).get(assignment.target_field)
         old_value = (
-            assigned_value.value
-            if assigned_value is not None
-            else row.get(assignment.target_field)
+            assigned_value.value if assigned_value is not None else row.get(assignment.target_field)
         )
         return {
             "assignment_id": assignment.assignment_id,
@@ -787,9 +742,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
                         event["proposed_value"],
                     ),
                     "effective": effective,
-                    "overridden_by_rule_id": (
-                        None if effective else effective_event["rule_id"]
-                    ),
+                    "overridden_by_rule_id": (None if effective else effective_event["rule_id"]),
                     "overridden_by_assignment_id": (
                         None if effective else effective_event["assignment_id"]
                     ),
@@ -851,8 +804,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
             matched=False,
             matched_rule_ids=[],
             assign={
-                field_name: {"applied": False, "value": None}
-                for field_name in assign_field_names
+                field_name: {"applied": False, "value": None} for field_name in assign_field_names
             },
         )
         if full_audit:
@@ -874,11 +826,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         if isinstance(data_type, T.BooleanType):
             return self._spark_boolean_value(value)
         if isinstance(data_type, TIMESTAMP_TYPES):
-            return (
-                datetime.fromisoformat(value)
-                if isinstance(value, str)
-                else value
-            )
+            return datetime.fromisoformat(value) if isinstance(value, str) else value
         if isinstance(data_type, T.DateType):
             if isinstance(value, datetime):
                 return value.date()
@@ -886,10 +834,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         if isinstance(data_type, T.ArrayType):
             if isinstance(value, set):
                 value = sorted(value, key=repr)
-            return [
-                self._spark_assignment_value(item, data_type.elementType)
-                for item in value
-            ]
+            return [self._spark_assignment_value(item, data_type.elementType) for item in value]
         if isinstance(data_type, T.StructType):
             return self._spark_struct_value(value, data_type)
         return value
@@ -911,8 +856,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         limits = INTEGRAL_LIMITS[type(data_type)]
         if not limits[0] <= converted <= limits[1]:
             raise OverflowError(
-                f"Assignment value {value!r} is outside the range for "
-                f"{data_type.simpleString()}."
+                f"Assignment value {value!r} is outside the range for {data_type.simpleString()}."
             )
         return converted
 
@@ -944,8 +888,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         if isinstance(value, str) and value.lower() in {"true", "false"}:
             return value.lower() == "true"
         raise TypeError(
-            f"Assignment value {value!r} is not a boolean or a canonical "
-            "'true'/'false' string."
+            f"Assignment value {value!r} is not a boolean or a canonical 'true'/'false' string."
         )
 
     def _spark_struct_value(
@@ -956,8 +899,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         """Return a recursively coerced Spark struct assignment value."""
         if not isinstance(value, Mapping):
             raise TypeError(
-                f"Assignment value {value!r} must be a mapping for "
-                f"{data_type.simpleString()}."
+                f"Assignment value {value!r} must be a mapping for {data_type.simpleString()}."
             )
         return {
             field.name: self._spark_assignment_value(
@@ -996,8 +938,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
             "explanation": explanation,
             "assignments_applied": list(trace.assignments_applied),
             "conditions": [
-                self._spark_condition_trace(condition)
-                for condition in trace.condition_traces
+                self._spark_condition_trace(condition) for condition in trace.condition_traces
             ],
         }
 
@@ -1051,9 +992,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
             "default_applied": bool(trace.get("default_applied", False)),
             "function_name": trace.get("function_name"),
             "produced_by_rule_id": trace.get("produced_by_rule_id"),
-            "produced_by_assignment_id": trace.get(
-                "produced_by_assignment_id"
-            ),
+            "produced_by_assignment_id": trace.get("produced_by_assignment_id"),
             "source_columns": [str(column) for column in source_columns or []],
             "arguments": self._trace_arguments(trace),
         }
@@ -1085,10 +1024,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         if isinstance(value, (datetime, date)):
             return value.isoformat()
         if isinstance(value, Mapping):
-            return ", ".join(
-                f"{key}={self._trace_text(item)}"
-                for key, item in value.items()
-            )
+            return ", ".join(f"{key}={self._trace_text(item)}" for key, item in value.items())
         if isinstance(value, set):
             value = sorted(value, key=repr)
         if isinstance(value, (list, tuple)):

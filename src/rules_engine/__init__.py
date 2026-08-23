@@ -9,8 +9,12 @@ Delta tables. Production runtime evaluation is exposed through
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exporter_yaml import YamlRulesetExporter
-from rules_engine.models import Ruleset, RulesetExpectation
-from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
+from rules_engine.models import Ruleset
+from rules_engine.registry import (
+    CustomFunctionArgSpec,
+    CustomFunctionSpec,
+    FunctionRegistry,
+)
 from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.standard_functions import (
     register_standard_functions,
@@ -35,8 +39,6 @@ _LAZY_EXPORTS = {
         "rules_engine.spark_validator",
         "SparkRulesetCompatibilityValidator",
     ),
-    "RulesetTester": ("rules_engine.testing", "RulesetTester"),
-    "RulesetTestResult": ("rules_engine.testing", "RulesetTestResult"),
     "CoverageReport": ("rules_engine.analytics", "CoverageReport"),
     "RuleCoverage": ("rules_engine.analytics", "RuleCoverage"),
 }
@@ -55,8 +57,10 @@ def __getattr__(name: str):
     globals()[name] = attribute
     return attribute
 
+
 __all__ = [
     "CustomFunctionSpec",
+    "CustomFunctionArgSpec",
     "CoverageReport",
     "DataFrameEvaluation",
     "DeltaRowSerializer",
@@ -64,10 +68,7 @@ __all__ = [
     "PublishService",
     "RulesEngineService",
     "Ruleset",
-    "RulesetExpectation",
     "RuleCoverage",
-    "RulesetTester",
-    "RulesetTestResult",
     "RulesetValidator",
     "SparkRulesEngineRuntime",
     "SparkRulesetCompatibilityValidator",

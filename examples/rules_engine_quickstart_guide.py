@@ -57,13 +57,10 @@ DATABASE = globals().get(
 )
 
 if not DATABASE or DATABASE == "YOUR_CATALOG.YOUR_SCHEMA":
-    raise ValueError(
-        "Set RULES_ENGINE_QUICKSTART_DATABASE to a disposable catalog.schema."
-    )
+    raise ValueError("Set RULES_ENGINE_QUICKSTART_DATABASE to a disposable catalog.schema.")
 database_parts = DATABASE.split(".")
 if len(database_parts) != 2 or not all(
-    part.replace("_", "a").isalnum() and not part[0].isdigit()
-    for part in database_parts
+    part.replace("_", "a").isalnum() and not part[0].isdigit() for part in database_parts
 ):
     raise ValueError("RULES_ENGINE_QUICKSTART_DATABASE must be catalog.schema.")
 
@@ -100,18 +97,6 @@ rules:
           right: {literal: 100, value_type: number}
     assign:
       review_bucket: high_value_open
-expect:
-  - name: open high-value account
-    given: {status: OPEN, amount: 150}
-    then:
-      matched: true
-      matched_rule_ids: [open_high_value]
-      review_bucket: high_value_open
-  - name: open low-value account
-    given: {status: OPEN, amount: 25}
-    then:
-      matched: false
-      matched_rule_ids: []
 """
 
 ruleset = service.compile_yaml_text(ruleset_yaml)
@@ -120,11 +105,6 @@ print(validation.to_text())
 
 if validation.has_errors():
     raise ValueError(validation.to_text())
-
-expected_cases = service.test_ruleset(ruleset)
-print(expected_cases.to_text())
-if not expected_cases.passed:
-    raise AssertionError(expected_cases.to_text())
 
 # COMMAND ----------
 
@@ -181,8 +161,7 @@ display(applied_df.orderBy("account"))
 # COMMAND ----------
 
 rows = {
-    row["account"]: row.asDict(recursive=True)
-    for row in result_df.orderBy("account").collect()
+    row["account"]: row.asDict(recursive=True) for row in result_df.orderBy("account").collect()
 }
 
 assert rows["A"]["rules_engine_matched"] is True
@@ -190,9 +169,7 @@ assert rows["A"]["rules_engine_matched_rule_ids"] == ["open_high_value"]
 assert rows["A"]["rules_engine_assign"] == {
     "review_bucket": {"applied": True, "value": "high_value_open"}
 }
-assert rows["B"]["rules_engine_assign"] == {
-    "review_bucket": {"applied": False, "value": None}
-}
+assert rows["B"]["rules_engine_assign"] == {"review_bucket": {"applied": False, "value": None}}
 assert rows["B"]["rules_engine_matched"] is False
 assert rows["C"]["rules_engine_matched"] is False
 assert all(row["rules_engine_error"] is None for row in rows.values())

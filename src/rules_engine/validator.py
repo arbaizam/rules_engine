@@ -8,6 +8,7 @@ the semantic contract on compiled YAML metadata before publication.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -28,6 +29,7 @@ from rules_engine.models import (
     Rule,
     Ruleset,
     ValidationResult,
+    iter_nested_operands,
 )
 from rules_engine.registry import FunctionRegistry
 
@@ -103,8 +105,6 @@ class RulesetValidator:
                 ObjectType.RULESET,
                 ruleset.ruleset_id,
             )
-
-        self._validate_expectations(ruleset, result)
 
         seen_rule_orders: set[int] = set()
         seen_rule_ids: set[str] = set()
@@ -226,101 +226,14 @@ class RulesetValidator:
             references.append((operand, object_type, object_id))
         elif isinstance(operand, CustomFunctionOperand):
             for argument in operand.args.values():
-                if isinstance(argument, Operand):
+                for nested_operand in iter_nested_operands(argument):
                     self._collect_assigned_references(
-                        argument,
+                        nested_operand,
                         object_type,
                         object_id,
                         references,
                     )
 
-    def _validate_expectations(
-        self,
-        ruleset: Ruleset,
-        result: ValidationResult,
-    ) -> None:
-        """Validate the stable shape of embedded executable examples."""
-        seen_names: set[str] = set()
-        assignment_targets = {
-            assignment.target_field
-            for rule in ruleset.rules
-            for assignment in rule.assignments
-        }
-        reserved_keys = {"matched", "matched_rule_ids", "assign"}
-        for expectation in ruleset.expect:
-            object_id = expectation.name
-            if expectation.name in seen_names:
-                self._add(
-                    result,
-                    "EXPECTED_CASE_NAME_DUPLICATE",
-                    f"Duplicate expected case name: {expectation.name}",
-                    ObjectType.EXPECTED_CASE,
-                    object_id,
-                )
-            seen_names.add(expectation.name)
-            if not isinstance(expectation.then, Mapping) or not expectation.then:
-                self._add(
-                    result,
-                    "EXPECTED_CASE_THEN_REQUIRED",
-                    "Expected case then must be a non-empty mapping.",
-                    ObjectType.EXPECTED_CASE,
-                    object_id,
-                )
-                continue
-            matched = expectation.then.get("matched")
-            if matched is not None and not isinstance(matched, bool):
-                self._add(
-                    result,
-                    "EXPECTED_CASE_MATCHED_BOOLEAN_REQUIRED",
-                    "Expected matched value must be boolean.",
-                    ObjectType.EXPECTED_CASE,
-                    object_id,
-                )
-            matched_ids = expectation.then.get("matched_rule_ids")
-            if matched_ids is not None and not (
-                isinstance(matched_ids, (list, tuple))
-                and all(isinstance(item, str) for item in matched_ids)
-            ):
-                self._add(
-                    result,
-                    "EXPECTED_CASE_MATCHED_RULE_IDS_REQUIRED",
-                    "Expected matched_rule_ids must be a list of strings.",
-                    ObjectType.EXPECTED_CASE,
-                    object_id,
-                )
-            expected_assign = expectation.then.get("assign")
-            if "assign" in expectation.then and not isinstance(
-                expected_assign,
-                Mapping,
-            ):
-                self._add(
-                    result,
-                    "EXPECTED_CASE_ASSIGN_MAPPING_REQUIRED",
-                    "Expected assign value must be a mapping.",
-                    ObjectType.EXPECTED_CASE,
-                    object_id,
-                )
-            shorthand_keys = set(expectation.then) - reserved_keys
-            explicit_assign_keys = (
-                set(expected_assign) if isinstance(expected_assign, Mapping) else set()
-            )
-            unknown_keys = sorted(
-                (shorthand_keys | explicit_assign_keys) - assignment_targets,
-                key=str,
-            )
-            if unknown_keys:
-                self._add(
-                    result,
-                    "EXPECTED_CASE_UNKNOWN_KEY",
-                    "Expected assignment keys must match a target field declared "
-                    f"by the ruleset: {unknown_keys}",
-                    ObjectType.EXPECTED_CASE,
-                    object_id,
-                    details={
-                        "unknown_keys": unknown_keys,
-                        "known_target_fields": sorted(assignment_targets),
-                    },
-                )
     def _validate_rule(
         self,
         rule: Rule,
@@ -396,9 +309,7 @@ class RulesetValidator:
                 )
                 conflicting_ids.append(assignment.assignment_id)
             else:
-                assignments_by_target[assignment.target_field] = [
-                    assignment.assignment_id
-                ]
+                assignments_by_target[assignment.target_field] = [assignment.assignment_id]
             self._validate_operand(
                 assignment.value,
                 result,
@@ -474,7 +385,9 @@ class RulesetValidator:
             )
         self._validate_operand(condition.left, result, condition.condition_id, in_assignment=False)
         if condition.right is not None:
-            self._validate_operand(condition.right, result, condition.condition_id, in_assignment=False)
+            self._validate_operand(
+                condition.right, result, condition.condition_id, in_assignment=False
+            )
         self._validate_operator_operands(condition, result)
 
     def _validate_operator_operands(self, condition: Condition, result: ValidationResult) -> None:
@@ -497,12 +410,14 @@ class RulesetValidator:
                 ObjectType.CONDITION,
                 condition.condition_id,
             )
-        if condition.operator in COLLECTION_LITERAL_OPERATORS and isinstance(condition.right, LiteralOperand):
-            self._validate_collection_literal(condition, result)
-        if (
-            condition.operator in {ComparisonOperator.BETWEEN, ComparisonOperator.NOT_BETWEEN}
-            and condition.tolerance_abs != Decimal(0)
+        if condition.operator in COLLECTION_LITERAL_OPERATORS and isinstance(
+            condition.right, LiteralOperand
         ):
+            self._validate_collection_literal(condition, result)
+        if condition.operator in {
+            ComparisonOperator.BETWEEN,
+            ComparisonOperator.NOT_BETWEEN,
+        } and condition.tolerance_abs != Decimal(0):
             self._add(
                 result,
                 "BETWEEN_TOLERANCE_FORBIDDEN",
@@ -518,10 +433,10 @@ class RulesetValidator:
         right = condition.right
         if not isinstance(right, LiteralOperand):
             return
-        if (
-            condition.operator in {ComparisonOperator.IN, ComparisonOperator.NOT_IN}
-            and not isinstance(right.value, (list, tuple, set))
-        ):
+        if condition.operator in {
+            ComparisonOperator.IN,
+            ComparisonOperator.NOT_IN,
+        } and not isinstance(right.value, (list, tuple, set)):
             self._add(
                 result,
                 "IN_OPERATOR_COLLECTION_REQUIRED",
@@ -529,10 +444,8 @@ class RulesetValidator:
                 ObjectType.CONDITION,
                 condition.condition_id,
             )
-        if (
-            condition.operator
-            in {ComparisonOperator.BETWEEN, ComparisonOperator.NOT_BETWEEN}
-            and (not isinstance(right.value, (list, tuple)) or len(right.value) != 2)
+        if condition.operator in {ComparisonOperator.BETWEEN, ComparisonOperator.NOT_BETWEEN} and (
+            not isinstance(right.value, (list, tuple)) or len(right.value) != 2
         ):
             self._add(
                 result,
@@ -612,29 +525,120 @@ class RulesetValidator:
                 object_type,
                 object_id,
             )
-        expected = set(spec.arg_names)
-        actual = set(operand.args.keys())
-        if actual != expected:
+        try:
+            bound_args = spec.bind_args(operand.args)
+        except RegistryError:
+            required = {argument.name for argument in spec.arguments if argument.required}
+            allowed = set(spec.argument_names)
+            actual = set(operand.args)
             self._add(
                 result,
                 "CUSTOM_FUNCTION_ARGS_MISMATCH",
-                "Custom function args must exactly match the registered contract.",
+                "Custom function args do not match the registered contract.",
                 object_type,
                 object_id,
                 details={
                     "function_name": operand.function_name,
-                    "expected": sorted(expected),
+                    "required": sorted(required),
+                    "optional": sorted(allowed - required),
                     "actual": sorted(actual),
                 },
             )
-        for arg_name, arg_value in operand.args.items():
-            if isinstance(arg_value, Operand):
-                self._validate_operand(
+            bound_args = dict(operand.args)
+        argument_specs = {argument.name: argument for argument in spec.arguments}
+        for arg_name, arg_value in bound_args.items():
+            argument_spec = argument_specs.get(arg_name)
+            nested_operands = tuple(iter_nested_operands(arg_value))
+            if argument_spec is not None:
+                if argument_spec.literal_only and nested_operands:
+                    self._add(
+                        result,
+                        "CUSTOM_FUNCTION_ARG_LITERAL_REQUIRED",
+                        f"Argument {arg_name!r} for {operand.function_name!r} "
+                        "must be a literal value.",
+                        object_type,
+                        object_id,
+                    )
+                if not self._argument_matches_type(
                     arg_value,
+                    argument_spec.type_hint,
+                ):
+                    self._add(
+                        result,
+                        "CUSTOM_FUNCTION_ARG_TYPE_MISMATCH",
+                        f"Argument {arg_name!r} for {operand.function_name!r} "
+                        f"must have type {argument_spec.type_hint!r}.",
+                        object_type,
+                        object_id,
+                        details={"argument_name": arg_name},
+                    )
+                if (
+                    argument_spec.allowed_values is not None
+                    and not nested_operands
+                    and arg_value not in argument_spec.allowed_values
+                ):
+                    self._add(
+                        result,
+                        "CUSTOM_FUNCTION_ARG_VALUE_INVALID",
+                        f"Argument {arg_name!r} for {operand.function_name!r} "
+                        "has a value outside its allowed values.",
+                        object_type,
+                        object_id,
+                        details={
+                            "argument_name": arg_name,
+                            "allowed_values": list(argument_spec.allowed_values),
+                            "actual": arg_value,
+                        },
+                    )
+            for nested_operand in nested_operands:
+                self._validate_operand(
+                    nested_operand,
                     result,
                     f"{object_id}.{operand.function_name}.{arg_name}",
                     in_assignment=in_assignment,
                 )
+
+    def _argument_matches_type(self, value: Any, type_hint: str) -> bool:
+        """Validate statically knowable literal argument shapes."""
+        if value is None:
+            return True
+        if isinstance(value, Operand):
+            return True
+        if type_hint == "any":
+            return True
+        if type_hint == "string":
+            return isinstance(value, str)
+        if type_hint == "integer":
+            return isinstance(value, int) and not isinstance(value, bool)
+        if type_hint == "number":
+            return isinstance(value, (int, float, Decimal)) and not isinstance(
+                value,
+                bool,
+            )
+        if type_hint == "boolean":
+            return isinstance(value, bool)
+        if type_hint == "date":
+            return isinstance(value, date) and not isinstance(value, datetime)
+        if type_hint == "timestamp":
+            return isinstance(value, datetime)
+        if type_hint == "mapping":
+            return isinstance(value, Mapping)
+        if type_hint in {
+            "sequence",
+            "string_sequence",
+            "integer_sequence",
+            "date_sequence",
+        }:
+            if not isinstance(value, (list, tuple, set)):
+                return False
+            item_type = {
+                "sequence": "any",
+                "string_sequence": "string",
+                "integer_sequence": "integer",
+                "date_sequence": "date",
+            }[type_hint]
+            return all(self._argument_matches_type(item, item_type) for item in value)
+        return False
 
     def _add(
         self,

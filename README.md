@@ -80,15 +80,6 @@ rules:
           right: {literal: 100}
     assign:
       requires_review: true
-
-expect:
-  - name: material open account
-    given: {status: OPEN, amount: 150}
-    then:
-      matched: true
-      matched_rule_ids: [classify_open, escalate_open]
-      review_bucket: open
-      requires_review: true
 ```
 
 ## YAML contract reference
@@ -117,7 +108,6 @@ expect:
 | `description` | No | String or `null`; default `null` | Plain-English purpose of the ruleset. |
 | `owner` | Required for validation | Non-empty string; compile default `null` | Person or team accountable for the rules. YAML can compile without it, but validation and publication fail. |
 | `owner_department` | Required for validation | Non-empty string; compile default `null` | Department accountable for the rules. YAML can compile without it, but validation and publication fail. |
-| `expect` | No | YAML list of expected cases; default `[]` | Executable examples that become a publication gate. |
 
 ### Rule fields
 
@@ -216,10 +206,10 @@ left:
 right: {literal: ABC}
 ```
 
-Custom-function arguments may be another operand or a literal value. Nested
-custom functions are supported. Argument names are strings and must match the
-registered `arg_names` set exactly; missing and extra arguments fail
-validation.
+Custom-function arguments may be literals, operands, or lists/mappings that
+contain operands. Nested custom functions are supported at any of those
+levels. Required arguments must be present, optional arguments use their
+registered defaults when omitted, and unknown argument names fail validation.
 
 ### Literal type hints
 
@@ -237,6 +227,8 @@ notably for null literals and custom-function results assigned to a new field.
 | Timestamp | `timestamp` | The authored or returned value must be timestamp-compatible. |
 | Timestamp without timezone | `timestamp_ntz` | Available only when the installed PySpark runtime provides `TimestampNTZType`. |
 | Polymorphic custom return | `any` | Allowed for a custom function only when Spark already knows the assignment target type. It cannot define a new target field. |
+| Same as one argument | `same_as:<argument_name>` | The result takes the Spark type of the named argument. We use this for `null_if`. |
+| Common type of array items | `common_type:<argument_name>` | The result takes the safe common Spark type of items in the named argument. We use this for `coalesce`. |
 
 The compiler retains an unrecognized non-empty `value_type` as metadata, but
 Spark compatibility validation rejects it when it is needed for an
@@ -331,44 +323,11 @@ Assignments within one rule read the same pre-rule state and are committed
 together. An assignment cannot read another assignment from the same rule.
 Only a later active rule may read the committed value through `assigned`.
 
-### Executable expected cases
-
-`expect` cases run in declaration order without Spark. Publication is blocked
-when any case fails.
-
-| Field | Required | Type and allowed values | Definition |
-|---|---:|---|---|
-| `name` | Yes | Non-empty string, unique within the ruleset | Name shown in test results. |
-| `given` | Yes | YAML mapping | One input row. Keys are field names and values are row values. |
-| `then` | Yes | Non-empty YAML mapping | Assertions for the result. Allowed keys are listed below. |
-
-| `then` key | Allowed values | Definition |
-|---|---|---|
-| `matched` | `true` or `false` | Expected overall match flag. |
-| `matched_rule_ids` | List of rule-ID strings | Expected complete ordered list of matching rule IDs. |
-| `assign` | Mapping of declared assignment targets to expected values | Expected subset of final applied assignments. Unlisted targets are not compared. A listed target must actually be applied, including when its expected value is `null`. |
-| Any declared assignment target | Any expected value | Shorthand for placing that target inside `assign`. Unknown target names fail validation. A `null` expectation means the rule explicitly assigns null; it does not match an unapplied target. |
-
-```yaml
-expect:
-  - name: no match
-    given: {status: CLOSED, amount: 10}
-    then:
-      matched: false
-      matched_rule_ids: []
-```
-
-Expected cases have no Spark schema. They prove rule behavior, not whether an
-assignment can be represented losslessly in a particular DataFrame schema.
-We run Spark compatibility validation separately when we have the actual
-schema.
-
-## Compile, validate, test, and export
+## Compile, validate, and export
 
 ```python
 from rules_engine import (
     FunctionRegistry,
-    RulesetTester,
     RulesetValidator,
     YamlRulesetCompiler,
     YamlRulesetExporter,
@@ -382,18 +341,14 @@ validation = RulesetValidator(registry).validate(ruleset)
 if validation.has_errors():
     raise ValueError(validation.to_text())
 
-tests = RulesetTester(registry).test(ruleset)
-if not tests.passed:
-    raise ValueError(tests.to_text())
-
 canonical_yaml = YamlRulesetExporter().export_text(ruleset)
 ```
 
 Compilation checks YAML syntax, keys, primitive types, and structural shapes.
 Semantic validation checks ownership, unique identities, group contents,
-operator arity, assignment dependencies, function contracts, and expected
-cases. `SparkRulesetCompatibilityValidator` adds DataFrame field and exact
-type checks when we pass a DataFrame or `StructType`.
+operator arity, assignment dependencies, and function contracts.
+`SparkRulesetCompatibilityValidator` adds DataFrame field and exact type
+checks when we pass a DataFrame or `StructType`.
 
 The exporter emits canonical YAML that compiles back into the same dataclass
 model.
@@ -635,7 +590,7 @@ metadata and executable callables separate so persisted rulesets never contain
 executable code.
 
 ```python
-from rules_engine import CustomFunctionSpec, FunctionRegistry
+from rules_engine import CustomFunctionArgSpec, CustomFunctionSpec, FunctionRegistry
 
 def normalize_code(*, value):
     return None if value is None else str(value).strip().upper()
@@ -645,7 +600,7 @@ registry.register(
     CustomFunctionSpec(
         function_name="normalize_code",
         implementation_reference="my_package.rules.normalize_code",
-        arg_names=("value",),
+        arguments=(CustomFunctionArgSpec("value", type_hint="string"),),
         allowed_in_condition_flag=True,
         allowed_in_assignment_flag=True,
         return_type_hint="string",
@@ -660,11 +615,11 @@ registry.register(
 |---|---:|---|---|
 | `function_name` | Yes | Unique non-empty string | Name used in YAML. Duplicate registration fails. |
 | `implementation_reference` | Yes | Non-empty environment-defined string | Audit metadata only. We never import executable code from this string. |
-| `arg_names` | Yes | Tuple of unique argument-name strings | Exact keyword set required in YAML. |
+| `arguments` | Yes | Tuple of unique `CustomFunctionArgSpec` values; an empty tuple is allowed | Declares argument order, required and optional names, defaults, types, and literal constraints. |
 | `allowed_in_condition_flag` | Yes | `true` or `false` | Whether the function may appear in a condition operand. |
 | `allowed_in_assignment_flag` | Yes | `true` or `false` | Whether the function may appear in an assignment operand. |
 | `active_flag` | No | `true` or `false`; default `true` | Inactive functions fail ruleset validation. |
-| `return_type_hint` | No | Supported type hint, `any`, or `null` | Used for Spark assignment type resolution. New targets need a concrete supported type. |
+| `return_type_hint` | No | Fixed type hint, `any`, `same_as:<argument>`, `common_type:<argument>`, or `null` | Used for Spark assignment type resolution. A new target needs a type that can be resolved from the contract and authored arguments. |
 | `description` | No | String or `null` | Human-readable purpose. |
 | `version` | No | String or `null` | Implementation contract version stored as metadata. |
 
@@ -673,34 +628,148 @@ worker-serializable implementations for Spark evaluation. A spec without an
 implementation can support metadata validation, but runtime evaluation fails
 if a referenced implementation is missing.
 
+### `CustomFunctionArgSpec` contract
+
+| Field | Required | Allowed values | Definition |
+|---|---:|---|---|
+| `name` | Yes | Unique non-empty string within the function | Keyword passed to the callable and authored under `args`. |
+| `required` | No | `true` or `false`; default `true` | When `false`, YAML may omit the argument. |
+| `default` | No | JSON-compatible literal or collection; default `null` | Value bound by the runtime when an optional argument is omitted. |
+| `type_hint` | No | `any`, `string`, `integer`, `number`, `boolean`, `date`, `timestamp`, `mapping`, `sequence`, `string_sequence`, `integer_sequence`, or `date_sequence`; default `any` | Validates literal arguments immediately and field-backed arguments when Spark schema metadata is available. Null is allowed for every type. |
+| `allowed_values` | No | Non-empty tuple of JSON-compatible literal values or `null` | Restricts a configuration argument to an explicit set, such as `error` or `null`. It requires `literal_only=true`; an optional default must be in the set. |
+| `literal_only` | No | `true` or `false`; default `false` | When `true`, the argument cannot read a field, assignment, or nested function. We use this for modes and other plan-level configuration. |
+
 ### Standard functions
 
-`register_standard_functions(registry)` registers these package functions and
-their implementations. `standard_function_rows()` returns the corresponding
-persistence rows.
+`register_standard_functions(registry)` registers all 58 package functions and
+their implementations. `standard_function_rows()` returns their persistence
+rows. We allow every standard function in both conditions and assignments so a
+ruleset can also materialize flags, cleaned values, dates, and reporting fields.
+Optional arguments are shown with their defaults.
 
-| Function | Required YAML arguments | Allowed use | Return hint | Definition |
-|---|---|---|---|---|
-| `substring` | `value`, `start`, `length` | Condition and assignment | `string` | SQL-style one-based substring. Supply `length: null` to continue to the end. |
-| `left` | `value`, `length` | Condition and assignment | `string` | Leftmost characters. |
-| `right` | `value`, `length` | Condition and assignment | `string` | Rightmost characters. |
-| `trim` | `value` | Condition and assignment | `string` | Removes leading and trailing whitespace. |
-| `upper` | `value` | Condition and assignment | `string` | Converts text to uppercase. |
-| `lower` | `value` | Condition and assignment | `string` | Converts text to lowercase. |
-| `normalize_whitespace` | `value` | Condition and assignment | `string` | Trims text and collapses repeated whitespace. |
-| `length` | `value` | Condition and assignment | `integer` | Returns string length. |
-| `regex_extract` | `value`, `pattern`, `group` | Condition and assignment | `string` | Returns one regular-expression capture group. |
-| `regex_replace` | `value`, `pattern`, `replacement` | Condition and assignment | `string` | Replaces regular-expression matches. |
-| `contains_any` | `value`, `candidates` | Condition only | `boolean` | Tests whether text contains any candidate string. |
-| `null_if` | `value`, `compare_to` | Condition and assignment | `any` | Returns null when both values are equal; otherwise returns `value`. |
-| `to_number` | `value` | Condition and assignment | `decimal` | Converts text or numeric input to `Decimal`. |
-| `to_date` | `value` | Condition and assignment | `date` | Converts ISO `YYYY-MM-DD` input to a date. |
-| `date_add_days` | `value`, `days` | Condition and assignment | `date` | Adds integral calendar days. |
-| `date_add_months` | `value`, `months` | Condition and assignment | `date` | Adds calendar months with month-end clamping. |
-| `date_add_years` | `value`, `years` | Condition and assignment | `date` | Adds calendar years with leap-day clamping. |
-| `date_diff_days` | `start`, `end` | Condition and assignment | `integer` | Returns `end - start` in calendar days. |
-| `month_start` | `value` | Condition and assignment | `date` | Returns the first day of the month. |
-| `month_end` | `value` | Condition and assignment | `date` | Returns the final day of the month. |
+#### Text and pattern functions
+
+| Function | YAML arguments | Return hint | Definition |
+|---|---|---|---|
+| `substring` | `value`, `start`; optional `length=null` | `string` | Returns a SQL-style one-based substring. Null length means through the end. |
+| `left` | `value`, `length` | `string` | Returns the leftmost characters. Negative length behaves as zero. |
+| `right` | `value`, `length` | `string` | Returns the rightmost characters. Negative length behaves as zero. |
+| `trim` | `value` | `string` | Removes leading and trailing whitespace. |
+| `ltrim` | `value` | `string` | Removes leading whitespace. |
+| `rtrim` | `value` | `string` | Removes trailing whitespace. |
+| `upper` | `value` | `string` | Converts text to uppercase. |
+| `lower` | `value` | `string` | Converts text to lowercase. |
+| `normalize_whitespace` | `value` | `string` | Trims text and collapses repeated whitespace to one space. |
+| `text_length` | `value` | `integer` | Returns length after text conversion. |
+| `replace` | `value`, `old`, `new` | `string` | Replaces literal text; it does not interpret a regex. |
+| `split_part` | `value`, `delimiter`, `part` | `string` | Returns a positive, one-based delimited part or null when missing. |
+| `pad_left` | `value`, `length`; optional `pad=" "` | `string` | Pads or truncates on the left to an exact width. |
+| `pad_right` | `value`, `length`; optional `pad=" "` | `string` | Pads or truncates on the right to an exact width. |
+| `concat_ws` | `values`, `separator`; optional `skip_nulls=true` | `string` | Joins array items. With `skip_nulls=false`, any null item returns null. |
+| `regex_extract` | `value`, `pattern`; optional `group=1` | `string` | Returns a capture group or null when no match exists. |
+| `regex_replace` | `value`, `pattern`, `replacement` | `string` | Replaces regular-expression matches. |
+| `regex_match` | `value`, `pattern` | `boolean` | Tests whether a regex matches anywhere in the text. |
+| `text_contains_any` | `value`, string `candidates` | `boolean` | Tests whether text contains any non-null candidate string. |
+| `is_blank` | `value` | `boolean` | Returns true for null or whitespace-only text. |
+
+#### Null and conversion functions
+
+| Function | YAML arguments | Return hint | Definition |
+|---|---|---|---|
+| `null_if` | `value`, `compare_to` | `same_as:value` | Returns null when both values are equal; otherwise preserves `value`. |
+| `coalesce` | `values` | `common_type:values` | Returns the first non-null item from an ordered array. Items may be field, assigned, literal, or nested-function operands. |
+| `to_string` | `value`; optional `on_error=error` | `string` | Converts a scalar to deterministic text. Collections are rejected. |
+| `to_decimal` | `value`; optional `on_error=error` | `decimal` | Converts a finite scalar to exact `Decimal`. |
+| `to_integer` | `value`; optional `on_error=error` | `integer` | Converts only lossless whole values; it never rounds. |
+| `to_boolean` | `value`; optional `on_error=error` | `boolean` | Accepts booleans plus case-insensitive `true/false`, `t/f`, `yes/no`, `y/n`, and `1/0`. |
+| `to_date` | `value`; optional `on_error=error` | `date` | Converts an ISO `YYYY-MM-DD` string, date, or datetime. |
+| `to_timestamp` | `value`; optional `on_error=error` | `timestamp` | Requires an ISO timestamp with an offset and normalizes it to UTC. |
+| `to_timestamp_ntz` | `value`; optional `on_error=error` | `timestamp_ntz` | Requires an ISO wall-clock timestamp without an offset. |
+
+Every converter allows only `on_error: error` or `on_error: "null"`. `error`
+raises a row evaluation error for invalid nonblank input. `null` returns null,
+which may then be handled by the operand's `default_if_null`.
+
+#### Exact-decimal functions
+
+| Function | YAML arguments | Return hint | Definition |
+|---|---|---|---|
+| `decimal_abs` | `value` | `decimal` | Returns the absolute decimal value. |
+| `decimal_add` | `left`, `right` | `decimal` | Adds exact decimal values. |
+| `decimal_subtract` | `left`, `right` | `decimal` | Subtracts `right` from `left`. |
+| `decimal_multiply` | `left`, `right` | `decimal` | Multiplies exact decimal values. |
+| `decimal_divide` | `numerator`, `denominator`; optional `scale=18`, `rounding_mode=half_up` | `decimal` | Divides and rounds; zero denominator is an error. |
+| `decimal_safe_divide` | `numerator`, `denominator`; optional `scale=18`, `rounding_mode=half_up` | `decimal` | Divides and rounds; zero denominator returns null. |
+| `decimal_round` | `value`, `scale`; optional `rounding_mode=half_up` | `decimal` | Rounds at scale `-38` through `18`. |
+| `decimal_clamp` | `value`, `minimum`, `maximum` | `decimal` | Constrains a value to inclusive bounds. Minimum above maximum is an error. |
+| `decimal_min` | `left`, `right` | `decimal` | Returns the smaller decimal. |
+| `decimal_max` | `left`, `right` | `decimal` | Returns the larger decimal. |
+
+Allowed `rounding_mode` values are `half_up`, `half_even`, `half_down`, `up`,
+`down`, `ceiling`, and `floor`. Decimal functions propagate null when any
+required value operand is null.
+
+#### Calendar functions
+
+| Function | YAML arguments | Return hint | Definition |
+|---|---|---|---|
+| `date_add_days` | `value`, `days` | `date` | Adds integral calendar days. |
+| `date_add_months` | `value`, `months` | `date` | Adds calendar months with month-end clamping. |
+| `date_add_years` | `value`, `years` | `date` | Adds calendar years with leap-day clamping. |
+| `date_diff_days` | `start`, `end` | `integer` | Returns `end - start` in calendar days. |
+| `date_diff_months` | `start`, `end` | `integer` | Returns signed completed whole calendar months. |
+| `date_diff_years` | `start`, `end` | `integer` | Returns signed completed whole calendar years. |
+| `date_part` | `value`, `part` | `integer` | Returns `year`, `quarter`, `month`, `day`, ISO `day_of_week` (Monday=1), or `day_of_year`. |
+| `month_start` | `value` | `date` | Returns the first calendar day of the month. |
+| `month_end` | `value` | `date` | Returns the final calendar day of the month. |
+| `quarter_start` | `value` | `date` | Returns the first calendar day of the quarter. |
+| `quarter_end` | `value` | `date` | Returns the final calendar day of the quarter. |
+| `year_start` | `value` | `date` | Returns the first calendar day of the year. |
+| `year_end` | `value` | `date` | Returns the final calendar day of the year. |
+| `first_business_day_of_month` | `value`, `holidays`; optional `weekend_days=[6,7]` | `date` | Returns the month's first day not listed as a holiday or ISO weekend day. Pass `holidays: []` when no holiday calendar applies. |
+| `last_business_day_of_month` | `value`, `holidays`; optional `weekend_days=[6,7]` | `date` | Returns the month's last day not listed as a holiday or ISO weekend day. Pass `holidays: []` when no holiday calendar applies. |
+
+#### Array functions
+
+| Function | YAML arguments | Return hint | Definition |
+|---|---|---|---|
+| `array_size` | `values` | `integer` | Returns the item count. Null returns null; an empty array returns zero. |
+| `array_contains_any` | `values`, `candidates` | `boolean` | Returns true when at least one candidate is present. Empty candidates return false. |
+| `array_contains_all` | `values`, `candidates` | `boolean` | Returns true when every candidate is present. Empty candidates return true. |
+| `array_join` | `values`, `separator`; optional `skip_nulls=true` | `string` | Joins array items as text. With `skip_nulls=false`, any null item returns null. |
+
+Array functions require an actual array-like value. We intentionally reject a
+scalar string instead of treating it as a character array or silently wrapping
+it in a one-item array. A null required array returns null. Empty arrays remain
+distinct: size is zero, `contains_any` is false, `contains_all` is true for an
+empty candidate array, and joining an empty array returns an empty string.
+
+This assignment example composes field operands inside an argument array,
+uses an optional array default, and turns a bad conversion into an explicit
+null result:
+
+```yaml
+assign:
+  selected_code:
+    custom_function:
+      name: coalesce
+      args:
+        values:
+          - {field: primary_code}
+          - {field: secondary_code}
+  tags_text:
+    custom_function:
+      name: array_join
+      args:
+        values: {field: tags}
+        separator: "|"       # skip_nulls defaults to true
+  parsed_count:
+    custom_function:
+      name: to_integer
+      args:
+        value: {field: raw_count}
+        on_error: "null"     # quotes distinguish the mode from YAML null
+```
 
 ## Delta repository contract
 
@@ -735,8 +804,8 @@ Multiple different versions of the same ruleset may remain published at once.
 ## `RulesEngineService` API
 
 `RulesEngineService` is our normal public facade. It wires the compiler,
-registry, validators, expected-case tester, repository, runtime, formatter,
-and coverage analyzer into one object. It does not manage cluster libraries,
+registry, validators, repository, runtime, formatter, and coverage analyzer
+into one object. It does not manage cluster libraries,
 permissions, external logs, bundle deployment, or business approval.
 
 ### Public component attributes
@@ -749,8 +818,7 @@ needs to use a lower-level API directly.
 | `repository` | Configured repository object | Delta persistence and published-ruleset loading backend. |
 | `registry` | `FunctionRegistry` | In-memory function specs and executable callables. |
 | `validator` | `SparkRulesetCompatibilityValidator` | Shared semantic and Spark-schema validator. |
-| `tester` | `RulesetTester` | Pure-Python runner for embedded expected cases. |
-| `publish_service` | `PublishService` | Validation, expected-case, and persistence coordinator. |
+| `publish_service` | `PublishService` | Validation and persistence coordinator. |
 | `runtime` | `SparkRulesEngineRuntime` | Typed Spark DataFrame evaluator. |
 | `compiler` | `YamlRulesetCompiler` | Strict YAML compiler. |
 | `rule_formatter` | `HumanReadableRulesetFormatter` | Readable rule and assignment formatter. |
@@ -776,7 +844,7 @@ registry objects.
 | `registry` | `FunctionRegistry` | In-memory metadata and callables available to validation and evaluation. |
 | `validator` | `SparkRulesetCompatibilityValidator` or `None` | Optional shared validator. When omitted, the service creates one from `registry`. |
 
-The constructor creates the tester, publish service, Spark runtime, compiler,
+The constructor creates the publish service, Spark runtime, compiler,
 human-readable formatter, and coverage analyzer. It performs no Spark action
 and writes no data.
 
@@ -860,8 +928,8 @@ ruleset = service.compile_yaml_text(yaml_text)
 
 Compiles one YAML string into an immutable `Ruleset`. It rejects invalid YAML,
 duplicate keys, unknown keys, wrong primitive types, and invalid shapes by
-raising `CompilationError`. It does not perform semantic validation, run
-expected cases, access Spark, or persist anything.
+raising `CompilationError`. It does not perform semantic validation, access
+Spark, or persist anything.
 
 ### `compile_yaml_path`
 
@@ -873,32 +941,20 @@ Reads one UTF-8 YAML file and delegates to `compile_yaml_text`. `path` may be a
 string or `Path`. A missing file or invalid document raises
 `CompilationError`. It returns the compiled `Ruleset` and writes nothing.
 
-### `test_ruleset`
-
-```python
-result = service.test_ruleset(ruleset)
-```
-
-Runs every embedded `expect` case in pure Python and declaration order. It
-returns `RulesetTestResult` with `passed`, `failure_count`, individual case
-results, and `to_text()`. A ruleset with no cases returns a passing empty
-result. This method does not start Spark and does not publish.
-
 ### `publish`
 
 ```python
 service.publish(ruleset, published_by=None)
 ```
 
-Runs semantic validation, then runs embedded expected cases when present, and
-finally writes one immutable published row. `published_by` may be a string or
-`None`; the repository records `system` when no usable actor is supplied.
+Runs semantic validation and then writes one immutable published row.
+`published_by` may be a string or `None`; the repository records `system`
+when no usable actor is supplied.
 
 Returns `None`. `ValidationFailedError` is raised before any write when
-validation or an expected case fails. `RepositoryError` is raised for an
-identity collision or repository failure. Because this entry point has no
-input DataFrame, it cannot prove compatibility with a future DataFrame
-schema.
+validation fails. `RepositoryError` is raised for an identity collision or
+repository failure. Because this entry point has no input DataFrame, it cannot
+prove compatibility with a future DataFrame schema.
 
 ### `publish_yaml_text`
 
@@ -1071,21 +1127,20 @@ imports and behavior out of compile-only paths where practical.
 | `rules_engine.dataframe_evaluation` | Owns the one lazy source-plus-results Spark plan created by DataFrame evaluation. It exposes the key-only result projection, applies explicit assignment outcomes to business columns without a join, preserves column order, handles atomic struct values, and manages optional shared persistence. | `DataFrameEvaluation`. |
 | `rules_engine.enums` | Holds the only accepted lifecycle, logical, operand, comparison, and diagnostic object values. Centralizing these strings prevents aliases from drifting between compilation, validation, runtime behavior, and persistence. | `RulesetStatus`, `LogicalOperator`, `OperandKind`, `ComparisonOperator`, `ObjectType`. |
 | `rules_engine.exceptions` | Defines the package exception hierarchy so callers can distinguish compilation, validation, registry, and repository failures from ordinary Python errors. | `RulesEngineError`, `CompilationError`, `ValidationFailedError`, `RegistryError`, `RepositoryError`. |
-| `rules_engine.exporter_yaml` | Converts compiled dataclasses back to canonical YAML. It preserves explicit identities, nested groups, exact decimals and dates, operand forms, default values, mappings, and expected cases so export and recompile produce the same model. | `YamlRulesetExporter`. |
+| `rules_engine.exporter_yaml` | Converts compiled dataclasses back to canonical YAML. It preserves explicit identities, nested groups, exact decimals and dates, operand forms, default values, and mappings so export and recompile produce the same model. | `YamlRulesetExporter`. |
 | `rules_engine.human_readable` | Renders rules, groups, operands, operators, and assignments as readable text for reviewers and full-audit explanations. It formats authored logic; it does not evaluate or persist rules. | `HumanReadableRulesetFormatter`. |
-| `rules_engine.models` | Defines the canonical immutable rule tree, operands, assignments, expected cases, persistence rows, validation results, and runtime traces. These dataclasses are the shared language used by every other module. | `Ruleset`, `Rule`, `ConditionGroup`, `Condition`, operand classes, `Assignment`, `RulesetExpectation`, row and trace models. |
-| `rules_engine.publish` | Coordinates the publication gate. It runs validation, runs embedded expected cases when present, and calls the repository only after both pass. | `PublishService`. |
-| `rules_engine.registry` | Keeps custom-function metadata and executable implementations in memory under one exact function name. It enforces unique registration and provides focused errors for unknown specs or missing implementations. | `CustomFunctionSpec`, `FunctionRegistry`, `CustomFunction`. |
+| `rules_engine.models` | Defines the canonical immutable rule tree, operands, assignments, persistence rows, validation results, and runtime traces. These dataclasses are the shared language used by every other module. | `Ruleset`, `Rule`, `ConditionGroup`, `Condition`, operand classes, `Assignment`, row and trace models. |
+| `rules_engine.publish` | Coordinates publication. It runs semantic validation and calls the repository only when validation passes. | `PublishService`. |
+| `rules_engine.registry` | Keeps custom-function metadata and executable implementations in memory under one exact function name. It validates unique argument contracts, binds optional defaults in declared order, persists rich argument metadata, enforces unique registration, and provides focused errors for unknown specs or missing implementations. | `CustomFunctionArgSpec`, `CustomFunctionSpec`, `FunctionRegistry`, `CustomFunction`. |
 | `rules_engine.repository` | Owns the Delta table names, schemas, DDL, immutable publication, explicit-version loading, retirement, and registry metadata merge behavior. It detects duplicate identities instead of selecting an arbitrary row. | `RulesEngineTableNames`, `RulesetRepository`, `SparkDeltaRulesetRepository`. |
-| `rules_engine.runtime` | Implements the deterministic pure-Python row evaluator used inside the Spark UDF and by embedded expected cases. It evaluates Boolean trees, resolves operands and null defaults, calls registered functions, performs comparisons, commits assignments atomically by rule, and returns the same explicit `{applied, value}` assignment outcomes used at the Spark boundary. | `SparkRowEvaluator` and runtime result/trace behavior used by higher-level APIs. |
+| `rules_engine.runtime` | Implements the deterministic pure-Python row evaluator used inside the Spark UDF. It evaluates Boolean trees, resolves operands and null defaults, calls registered functions, performs comparisons, commits assignments atomically by rule, and returns explicit `{applied, value}` assignment outcomes. | `SparkRowEvaluator` and runtime result/trace behavior used by higher-level APIs. |
 | `rules_engine.serializer` | Creates deterministic canonical JSON, SHA-256 content hashes, queryable summary counts, and `RulesetVersionRow` objects. It also reconstructs a `Ruleset` while preserving supported Python literal types. | `DeltaRowSerializer`. |
-| `rules_engine.service` | Provides the public facade documented above. It wires the package components into the normal compile, test, publish, load, describe, evaluate, cover, and retire workflows. | `RulesEngineService`. |
+| `rules_engine.service` | Provides the public facade documented above. It wires the package components into the normal compile, publish, load, describe, evaluate, cover, and retire workflows. | `RulesEngineService`. |
 | `rules_engine.spark_runtime` | Adapts the pure row evaluator to a typed Spark Python UDF. It validates key metadata and the incoming schema, infers typed `{applied, value}` assignment outcomes, sends only required source columns to workers, checks callable serialization, builds ordered compact/full-audit fields, and returns one lazy `DataFrameEvaluation`. | `SparkRulesEngineRuntime`, `required_source_columns`. |
 | `rules_engine.spark_types` | Provides shared exact-fit helpers for Spark integer, decimal, date, and timestamp handling. We use it to prevent silent overflow, precision loss, and incompatible temporal assignments. | `decimal_literal_type`, `decimal_value_fits`, shared type constants. |
 | `rules_engine.spark_validator` | Extends semantic validation with actual Spark schema checks. It verifies field existence, default compatibility, function return hints, collection and temporal comparisons, assignment target consistency, and lossless type coercion, then builds the assignment `StructType`. | `SparkRulesetCompatibilityValidator`. |
-| `rules_engine.standard_functions` | Implements and declares the supported built-in string, regex, numeric, null, and calendar functions. It keeps implementation metadata, exact arguments, permissions, return hints, and package versions together. | Standard callables, `register_standard_functions`, `standard_function_rows`. |
-| `rules_engine.testing` | Runs YAML `expect` cases through the same pure row semantics used by Spark. It validates expected keys, compares the requested result subset, captures function errors as case failures, and produces readable aggregate results. | `RulesetTester`, `RulesetTestResult`, `ExpectationCaseResult`. |
-| `rules_engine.validator` | Applies semantic rules that are independent of a DataFrame schema. It checks ownership, non-empty content, unique IDs/orders, operand arity, null options, assignment dependencies, expected cases, and custom-function permissions and argument contracts. | `RulesetValidator`. |
+| `rules_engine.standard_functions` | Implements and declares 58 deterministic text, regex, conversion, exact-decimal, null-composition, calendar, business-day, and array functions. It keeps optional defaults, argument types, allowed configuration values, permissions, return hints, and implementation versions beside each callable. | Standard callables, `register_standard_functions`, `standard_function_rows`. |
+| `rules_engine.validator` | Applies semantic rules that are independent of a DataFrame schema. It checks ownership, non-empty content, unique IDs/orders, operand arity, null options, assignment dependencies, and custom-function permissions and argument contracts. | `RulesetValidator`. |
 | `rules_engine.version` | Stores the installed package version used by the top-level package and the `rules_engine_engine_version` output column. | `__version__`. |
 
 ## Repository layout

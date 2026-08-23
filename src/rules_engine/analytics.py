@@ -46,9 +46,7 @@ class CoverageReport:
 
     @property
     def suspiciously_broad_rule_ids(self) -> tuple[str, ...]:
-        return tuple(
-            rule.rule_id for rule in self.rules if rule.suspiciously_broad
-        )
+        return tuple(rule.rule_id for rule in self.rules if rule.suspiciously_broad)
 
 
 class RulesetCoverageAnalyzer:
@@ -76,10 +74,7 @@ class RulesetCoverageAnalyzer:
         if not column_prefix:
             raise ValueError("column_prefix must be non-empty.")
         if any(column.startswith(f"{column_prefix}_") for column in df.columns):
-            raise ValueError(
-                "Input contains reserved coverage columns beginning "
-                f"{column_prefix}_"
-            )
+            raise ValueError(f"Input contains reserved coverage columns beginning {column_prefix}_")
         evaluated, _ = self._runtime._evaluate_attached_dataframe(
             df,
             ruleset,
@@ -105,13 +100,11 @@ class RulesetCoverageAnalyzer:
             aggregates.extend(
                 [
                     F.sum(
-                        F.when(F.array_contains(matched_ids_col, rule.rule_id), 1)
-                        .otherwise(0)
+                        F.when(F.array_contains(matched_ids_col, rule.rule_id), 1).otherwise(0)
                     ).alias(f"match_{index}"),
                     F.sum(
                         F.when(
-                            F.try_element_at(matched_ids_col, F.lit(1))
-                            == rule.rule_id,
+                            F.try_element_at(matched_ids_col, F.lit(1)) == rule.rule_id,
                             1,
                         ).otherwise(0)
                     ).alias(f"first_{index}"),
@@ -133,9 +126,7 @@ class RulesetCoverageAnalyzer:
                     first_match_count=first_count,
                     match_rate=match_rate,
                     dead=match_count == 0,
-                    suspiciously_broad=(
-                        total_count > 0 and match_rate >= broad_match_threshold
-                    ),
+                    suspiciously_broad=(total_count > 0 and match_rate >= broad_match_threshold),
                 )
             )
         no_match_rows = evaluated.filter(clean_no_match)

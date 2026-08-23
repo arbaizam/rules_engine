@@ -23,7 +23,6 @@ from rules_engine.standard_functions import (
     register_standard_functions,
     standard_function_rows,
 )
-from rules_engine.testing import RulesetTester, RulesetTestResult
 
 
 class RulesEngineService:
@@ -48,11 +47,9 @@ class RulesEngineService:
         self.repository = repository
         self.registry = registry
         self.validator = validator or SparkRulesetCompatibilityValidator(registry)
-        self.tester = RulesetTester(registry)
         self.publish_service = PublishService(
             repository=repository,
             validator=self.validator,
-            tester=self.tester,
         )
         self.runtime = SparkRulesEngineRuntime(
             repository,
@@ -155,10 +152,6 @@ class RulesEngineService:
             ruleset,
             published_by=published_by,
         )
-
-    def test_ruleset(self, ruleset: Ruleset) -> RulesetTestResult:
-        """Execute embedded expected cases without starting Spark."""
-        return self.tester.test(ruleset)
 
     def publish_yaml_text(
         self,

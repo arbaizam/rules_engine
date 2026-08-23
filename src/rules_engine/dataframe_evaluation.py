@@ -71,16 +71,12 @@ class DataFrameEvaluation:
         columns are excluded because they remain available through ``results_df``.
         """
         source_names = set(self._source_columns)
-        assignment_by_name = {
-            field.name: field for field in self._assignment_fields
-        }
+        assignment_by_name = {field.name: field for field in self._assignment_fields}
         business_columns: list[Column] = []
         for column_name in self._source_columns:
             assignment_field = assignment_by_name.get(column_name)
             if assignment_field is None:
-                business_columns.append(
-                    _top_level_column(column_name).alias(column_name)
-                )
+                business_columns.append(_top_level_column(column_name).alias(column_name))
                 continue
             business_columns.append(
                 self._applied_value(
@@ -122,9 +118,7 @@ class DataFrameEvaluation:
         otherwise: Column,
     ) -> Column:
         """Choose the typed assigned value only when the target was applied."""
-        outcome = _top_level_column(self._assign_column).getField(
-            assignment_field.name
-        )
+        outcome = _top_level_column(self._assign_column).getField(assignment_field.name)
         return F.when(
             outcome.getField("applied"),
             outcome.getField("value"),

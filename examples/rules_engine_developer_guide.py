@@ -150,22 +150,6 @@ rules:
           tolerance_abs: "0"
     assign:
       review_bucket: high_value_open
-expect:
-  - name: open high-value account
-    given:
-      status: OPEN
-      amount: 60
-    then:
-      matched: true
-      matched_rule_ids: [high_value_open_account]
-      review_bucket: high_value_open
-  - name: closed account does not match
-    given:
-      status: CLOSED
-      amount: 500
-    then:
-      matched: false
-      matched_rule_ids: []
 """
 
 print(ruleset_yaml)
@@ -350,8 +334,8 @@ table_names
 # MAGIC %md
 # MAGIC ## 8. Publish Metadata
 # MAGIC
-# MAGIC `RulesEngineService` orchestrates validation, expected-case execution,
-# MAGIC and direct publication through the standard public facade.
+# MAGIC `RulesEngineService` orchestrates validation and direct publication
+# MAGIC through the standard public facade.
 # MAGIC
 # MAGIC Published metadata is immutable by both `(ruleset_id, version)` and
 # MAGIC `(ruleset_name, version)`. To rerun this cell, use a new version or reset
@@ -366,7 +350,7 @@ table_names
 # MAGIC
 # MAGIC 1. Uses the configured `RulesEngineService`.
 # MAGIC 2. Calls `service.publish(ruleset)`.
-# MAGIC 3. Runs metadata validation and the embedded expected cases.
+# MAGIC 3. Runs metadata validation.
 # MAGIC 4. Writes one published row into `ruleset_versions`.
 # MAGIC
 # MAGIC Tables affected by this cell:
@@ -383,11 +367,6 @@ table_names
 # MAGIC next section.
 
 # COMMAND ----------
-
-expected_cases = service.test_ruleset(ruleset)
-print(expected_cases.to_text())
-if not expected_cases.passed:
-    raise AssertionError(expected_cases.to_text())
 
 service.publish(ruleset)
 
@@ -496,8 +475,7 @@ display(applied_df.orderBy("row_id"))
 rows = result_df.orderBy("row_id").collect()
 for row in rows:
     matched_rule_explanations = [
-        trace["explanation"]
-        for trace in row["rules_engine_matched_rules"]
+        trace["explanation"] for trace in row["rules_engine_matched_rules"]
     ]
     print(
         row["row_id"],
@@ -526,10 +504,10 @@ evaluation.unpersist()
 # MAGIC %md
 # MAGIC ## 11. Inspect Coverage
 # MAGIC
-# MAGIC Embedded expected cases protect known examples before publish. Coverage
-# MAGIC reports expose dead, broad, and clean no-match behavior on representative
-# MAGIC data. Coverage starts one Spark action for aggregate counts; the returned
-# MAGIC `no_match_rows` is a filtered view of the same evaluation.
+# MAGIC Coverage reports expose dead, broad, and clean no-match behavior on
+# MAGIC representative data. Coverage starts one Spark action for aggregate
+# MAGIC counts; the returned `no_match_rows` is a filtered view of the same
+# MAGIC evaluation.
 
 # COMMAND ----------
 

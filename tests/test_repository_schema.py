@@ -25,7 +25,9 @@ class FakeSpark:
 
     def createDataFrame(self, data, schema=None):
         self.created_frames.append((data, schema))
-        raise AssertionError("create_base_tables should use explicit DDL, not empty DataFrame writes")
+        raise AssertionError(
+            "create_base_tables should use explicit DDL, not empty DataFrame writes"
+        )
 
     def sql(self, query):
         self.queries.append(query)

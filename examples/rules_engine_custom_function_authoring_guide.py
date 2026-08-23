@@ -30,6 +30,7 @@ if root:
 
 import rules_engine
 from rules_engine import (  # noqa: E402
+    CustomFunctionArgSpec,
     CustomFunctionSpec,
     FunctionRegistry,
     RulesetValidator,
@@ -52,6 +53,7 @@ print(f"rules_engine package: {rules_engine.__file__}")
 
 # COMMAND ----------
 
+
 def score_account(risk_score, balance):
     if risk_score is None or balance is None:
         return None
@@ -67,6 +69,7 @@ def risk_bucket(risk_score):
         return "medium"
     return "low"
 
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -81,7 +84,9 @@ def risk_bucket(risk_score):
 # MAGIC - `function_name`: name referenced by YAML.
 # MAGIC - `implementation_reference`: environment-specific metadata only; executable
 # MAGIC   code is not loaded from this string.
-# MAGIC - `arg_names`: exact keyword arguments allowed by the function.
+# MAGIC - `arguments`: ordered `CustomFunctionArgSpec` contracts. Each argument
+# MAGIC   declares its name, required/optional status, default, expected type,
+# MAGIC   optional allowed literal values, and whether it must remain literal.
 # MAGIC - `allowed_in_condition_flag`: allow use in `when` conditions.
 # MAGIC - `allowed_in_assignment_flag`: allow use in `assign` values.
 # MAGIC - `active_flag`: inactive functions fail validation.
@@ -94,7 +99,10 @@ registry.register(
     CustomFunctionSpec(
         function_name="score_account",
         implementation_reference="my_rules.functions.score_account",
-        arg_names=("risk_score", "balance"),
+        arguments=(
+            CustomFunctionArgSpec("risk_score", type_hint="number"),
+            CustomFunctionArgSpec("balance", type_hint="number"),
+        ),
         allowed_in_condition_flag=True,
         allowed_in_assignment_flag=False,
         active_flag=True,
@@ -112,7 +120,7 @@ registry.register(
     CustomFunctionSpec(
         function_name="risk_bucket",
         implementation_reference="my_rules.functions.risk_bucket",
-        arg_names=("risk_score",),
+        arguments=(CustomFunctionArgSpec("risk_score", type_hint="number"),),
         allowed_in_condition_flag=False,
         allowed_in_assignment_flag=True,
         active_flag=True,
@@ -137,17 +145,21 @@ registry.register(
 # MAGIC     arg_name: literal_value
 # MAGIC ```
 # MAGIC
-# MAGIC Arguments may be literal metadata values or operand-shaped values:
+# MAGIC Arguments may be literal metadata values, operand-shaped values, or
+# MAGIC lists/mappings that contain operands:
 # MAGIC
 # MAGIC ```yaml
 # MAGIC value: { field: account_code }
 # MAGIC ```
 # MAGIC
-# MAGIC For shared transformations—including substring, trim, regex extraction,
-# MAGIC numeric conversion, and calendar-safe date arithmetic—use
-# MAGIC `register_standard_functions`. Date functions include `to_date`,
-# MAGIC `date_add_days`, `date_add_months`, `date_add_years`, `date_diff_days`,
-# MAGIC `month_start`, and `month_end`.
+# MAGIC Optional arguments are omitted from YAML when their registered default is
+# MAGIC wanted. The runtime binds that default before calling the implementation.
+# MAGIC
+# MAGIC For shared transformations—including text cleaning, regex, strict
+# MAGIC conversion, exact-decimal arithmetic, null composition, calendar and
+# MAGIC business-day boundaries, and arrays—use `register_standard_functions`.
+# MAGIC The README lists every standard function, argument, allowed mode, return
+# MAGIC type, and null behavior.
 
 # COMMAND ----------
 
@@ -227,6 +239,7 @@ print(validation.to_text())
 # MAGIC evaluation uses Spark DataFrames.
 
 # COMMAND ----------
+
 
 class NotebookRepository:
     def load_published(self, ruleset_name, version=None):
@@ -342,12 +355,16 @@ evaluation.unpersist()
 # MAGIC
 # MAGIC - `CUSTOM_FUNCTION_REGISTRY_REQUIRED`: a ruleset references custom functions
 # MAGIC   but validation did not receive a registry.
-# MAGIC - `UNKNOWN_CUSTOM_FUNCTION`: YAML references a function name not registered
+# MAGIC - `CUSTOM_FUNCTION_UNKNOWN`: YAML references a function name not registered
 # MAGIC   in `FunctionRegistry`.
-# MAGIC - `INACTIVE_CUSTOM_FUNCTION`: the registered spec has `active_flag=False`.
-# MAGIC - `CUSTOM_FUNCTION_NOT_ALLOWED_IN_CONDITION`: a function was used in `when`
+# MAGIC - `CUSTOM_FUNCTION_INACTIVE`: the registered spec has `active_flag=False`.
+# MAGIC - `CUSTOM_FUNCTION_CONDITION_FORBIDDEN`: a function was used in `when`
 # MAGIC   but `allowed_in_condition_flag=False`.
-# MAGIC - `CUSTOM_FUNCTION_NOT_ALLOWED_IN_ASSIGNMENT`: a function was used in
+# MAGIC - `CUSTOM_FUNCTION_ASSIGNMENT_FORBIDDEN`: a function was used in
 # MAGIC   `assign` but `allowed_in_assignment_flag=False`.
-# MAGIC - `CUSTOM_FUNCTION_ARGS_MISMATCH`: YAML argument names do not exactly match
-# MAGIC   the registered `arg_names`.
+# MAGIC - `CUSTOM_FUNCTION_ARGS_MISMATCH`: required arguments are missing or unknown
+# MAGIC   argument names were supplied.
+# MAGIC - `CUSTOM_FUNCTION_ARG_TYPE_MISMATCH`: a literal argument has the wrong type.
+# MAGIC - `CUSTOM_FUNCTION_ARG_VALUE_INVALID`: a literal is outside its allowed set.
+# MAGIC - `CUSTOM_FUNCTION_ARG_LITERAL_REQUIRED`: an operand was supplied for a
+# MAGIC   configuration argument that must be fixed in metadata.

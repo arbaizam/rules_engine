@@ -30,7 +30,6 @@ from rules_engine.models import (
     Operand,
     Rule,
     Ruleset,
-    RulesetExpectation,
 )
 
 
@@ -179,7 +178,6 @@ class YamlRulesetCompiler:
                 "owner",
                 "owner_department",
                 "rules",
-                "expect",
             },
             "Ruleset",
         )
@@ -193,15 +191,7 @@ class YamlRulesetCompiler:
             raise CompilationError("rules must be a list.")
 
         rules = tuple(
-            self._compile_rule(raw_rule, index)
-            for index, raw_rule in enumerate(raw_rules, start=1)
-        )
-        raw_expectations = payload.get("expect", [])
-        if not isinstance(raw_expectations, list):
-            raise CompilationError("expect must be a list when provided.")
-        expectations = tuple(
-            self._compile_expectation(raw_expectation, index)
-            for index, raw_expectation in enumerate(raw_expectations, start=1)
+            self._compile_rule(raw_rule, index) for index, raw_rule in enumerate(raw_rules, start=1)
         )
         return Ruleset(
             ruleset_id=ruleset_id,
@@ -211,27 +201,6 @@ class YamlRulesetCompiler:
             description=self._optional_str(payload, "description"),
             owner=self._optional_str(payload, "owner"),
             owner_department=self._optional_str(payload, "owner_department"),
-            expect=expectations,
-        )
-
-    def _compile_expectation(
-        self,
-        payload: Any,
-        index: int,
-    ) -> RulesetExpectation:
-        """Compile one executable ruleset example."""
-        payload = self._ensure_mapping(payload, f"expected case at index {index}")
-        self._reject_unsupported_keys(
-            payload,
-            {"name", "given", "then"},
-            f"Expected case at index {index}",
-        )
-        given = self._require_mapping(payload, "given")
-        then = self._require_mapping(payload, "then")
-        return RulesetExpectation(
-            name=self._require_str(payload, "name"),
-            given=self._normalize_literal_value(dict(given)),
-            then=self._normalize_literal_value(dict(then)),
         )
 
     def _compile_rule(self, payload: Any, index: int) -> Rule:
@@ -397,9 +366,7 @@ class YamlRulesetCompiler:
             assignments: list[Assignment] = []
             for target_field, raw_value in payload.items():
                 if not isinstance(target_field, str) or not target_field:
-                    raise CompilationError(
-                        "Assignment target fields must be non-empty strings."
-                    )
+                    raise CompilationError("Assignment target fields must be non-empty strings.")
                 assignments.append(
                     Assignment(
                         assignment_id=f"assignment:{rule_id}:{target_field}",
@@ -451,9 +418,7 @@ class YamlRulesetCompiler:
         ``field``, ``assigned``, ``literal``, and ``custom_function``.
         """
         operand_keys = [
-            key
-            for key in ("field", "assigned", "literal", "custom_function")
-            if key in payload
+            key for key in ("field", "assigned", "literal", "custom_function") if key in payload
         ]
         if len(operand_keys) != 1:
             raise CompilationError(
@@ -484,9 +449,7 @@ class YamlRulesetCompiler:
             )
         if key == "literal":
             value_type = (
-                self._require_str(payload, "value_type")
-                if "value_type" in payload
-                else None
+                self._require_str(payload, "value_type") if "value_type" in payload else None
             )
             return LiteralOperand(
                 self._normalize_literal_value(payload[key], value_type),
@@ -520,11 +483,7 @@ class YamlRulesetCompiler:
                     "containing only literal and optional value_type."
                 )
             raw_value = value["literal"]
-            value_type = (
-                self._require_str(value, "value_type")
-                if "value_type" in value
-                else None
-            )
+            value_type = self._require_str(value, "value_type") if "value_type" in value else None
         else:
             raw_value = value
         if raw_value is None:
@@ -536,16 +495,23 @@ class YamlRulesetCompiler:
 
     def _compile_custom_function_arg(self, value: Any) -> Any:
         """
-        Compile operand-shaped custom function args and preserve literals.
+        Compile operand-shaped args recursively through lists and mappings.
         """
         if isinstance(value, Mapping):
             operand_keys = {
-                key
-                for key in ("field", "assigned", "literal", "custom_function")
-                if key in value
+                key for key in ("field", "assigned", "literal", "custom_function") if key in value
             }
             if operand_keys:
                 return self._compile_operand(value)
+            return {
+                str(key): self._compile_custom_function_arg(item) for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [self._compile_custom_function_arg(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(self._compile_custom_function_arg(item) for item in value)
+        if isinstance(value, set):
+            return {self._compile_custom_function_arg(item) for item in value}
         return self._normalize_literal_value(value)
 
     def _normalize_literal_value(
@@ -569,8 +535,7 @@ class YamlRulesetCompiler:
             return {self._normalize_literal_value(item, value_type) for item in value}
         if isinstance(value, Mapping):
             return {
-                key: self._normalize_literal_value(item, value_type)
-                for key, item in value.items()
+                key: self._normalize_literal_value(item, value_type) for key, item in value.items()
             }
         if isinstance(value, float) and not math.isfinite(value):
             raise CompilationError("Numeric literals must be finite.")
@@ -601,10 +566,7 @@ class YamlRulesetCompiler:
             if not decimal_value.is_finite():
                 raise CompilationError("Decimal literals must be finite.")
             return decimal_value
-        if (
-            normalized_type in {"number", "float", "double"}
-            and isinstance(value, Decimal)
-        ):
+        if normalized_type in {"number", "float", "double"} and isinstance(value, Decimal):
             return float(value)
         if normalized_type is not None:
             return value

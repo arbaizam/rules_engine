@@ -83,6 +83,7 @@ class RulesetRepository(Protocol):
     def load_published(self, ruleset_name: str, version: str | None = None) -> Ruleset:
         """Load published metadata."""
 
+
 class SparkDeltaRulesetRepository:
     """
     Spark-backed repository for Databricks Delta metadata tables.
@@ -301,8 +302,7 @@ class SparkDeltaRulesetRepository:
             )
         if row["status"] == RulesetStatus.RETIRED.value:
             raise RepositoryError(
-                f"Ruleset version is already retired: ruleset_id={ruleset_id}, "
-                f"version={version}"
+                f"Ruleset version is already retired: ruleset_id={ruleset_id}, version={version}"
             )
 
         retired_by = self._actor_or_system(retired_by)
@@ -323,9 +323,7 @@ class SparkDeltaRulesetRepository:
                 ruleset_id,
                 version,
             )
-            raise RepositoryError(
-                f"Retirement failed: ruleset_id={ruleset_id}, version={version}"
-            )
+            raise RepositoryError(f"Retirement failed: ruleset_id={ruleset_id}, version={version}")
         logger.info(
             "Ruleset version retired: ruleset_id=%s version=%s",
             ruleset_id,
@@ -336,9 +334,8 @@ class SparkDeltaRulesetRepository:
         """
         Load a published ruleset by name and optional version.
         """
-        ruleset_filter = (
-            (F.col("ruleset_name") == ruleset_name)
-            & (F.col("status") == RulesetStatus.PUBLISHED.value)
+        ruleset_filter = (F.col("ruleset_name") == ruleset_name) & (
+            F.col("status") == RulesetStatus.PUBLISHED.value
         )
         if version is not None:
             ruleset_filter = ruleset_filter & (F.col("version") == version)
@@ -351,7 +348,9 @@ class SparkDeltaRulesetRepository:
         rows_df = self.spark.table(self.table_names.ruleset_versions).where(ruleset_filter)
         collected = rows_df.limit(2).collect()
         if not collected:
-            logger.error("Published ruleset not found: ruleset_name=%s version=%s", ruleset_name, version)
+            logger.error(
+                "Published ruleset not found: ruleset_name=%s version=%s", ruleset_name, version
+            )
             raise RepositoryError(f"Published ruleset not found: {ruleset_name}")
         if len(collected) > 1:
             if version is None:
@@ -410,15 +409,17 @@ class SparkDeltaRulesetRepository:
             )
             return
         staging_view = f"_rules_engine_function_registry_{uuid4().hex}"
-        self.spark.createDataFrame(prepared_rows, schema=self.function_registry_schema).createOrReplaceTempView(
-            staging_view
-        )
+        self.spark.createDataFrame(
+            prepared_rows, schema=self.function_registry_schema
+        ).createOrReplaceTempView(staging_view)
         columns = [field.name for field in self.function_registry_schema.fields]
         insert_columns = ", ".join(columns)
         insert_values = ", ".join(f"source.{column}" for column in columns)
         matched_clause = ""
         if update_existing:
-            update_assignments = ", ".join(f"target.{column} = source.{column}" for column in columns)
+            update_assignments = ", ".join(
+                f"target.{column} = source.{column}" for column in columns
+            )
             matched_clause = f"WHEN MATCHED THEN UPDATE SET {update_assignments}"
         try:
             self.spark.sql(

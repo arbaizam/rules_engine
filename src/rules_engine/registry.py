@@ -8,11 +8,49 @@ Actual callables are registered by the runtime environment.
 
 from __future__ import annotations
 
+import json
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from rules_engine.exceptions import RegistryError
 from rules_engine.models import FunctionRegistryRow
+
+SUPPORTED_ARGUMENT_TYPE_HINTS = frozenset(
+    {
+        "any",
+        "boolean",
+        "date",
+        "date_sequence",
+        "integer",
+        "integer_sequence",
+        "mapping",
+        "number",
+        "sequence",
+        "string",
+        "string_sequence",
+        "timestamp",
+    }
+)
+SUPPORTED_RETURN_TYPE_HINTS = frozenset(
+    {
+        "any",
+        "bool",
+        "boolean",
+        "date",
+        "decimal",
+        "double",
+        "float",
+        "int",
+        "integer",
+        "long",
+        "number",
+        "str",
+        "string",
+        "timestamp",
+        "timestamp_ntz",
+    }
+)
 
 
 class CustomFunction(Protocol):
@@ -20,6 +58,67 @@ class CustomFunction(Protocol):
 
     def __call__(self, **kwargs: Any) -> Any:
         """Execute the custom function with keyword arguments."""
+
+
+@dataclass(frozen=True)
+class CustomFunctionArgSpec:
+    """Contract for one named custom-function argument."""
+
+    name: str
+    required: bool = True
+    default: Any = None
+    type_hint: str = "any"
+    allowed_values: tuple[Any, ...] | None = None
+    literal_only: bool = False
+
+    def __post_init__(self) -> None:
+        """Reject malformed or internally contradictory argument metadata."""
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise RegistryError("Function argument name must be a non-empty string.")
+        if not isinstance(self.required, bool):
+            raise RegistryError("Function argument required must be a boolean.")
+        if not isinstance(self.literal_only, bool):
+            raise RegistryError("Function argument literal_only must be a boolean.")
+        if (
+            not isinstance(self.type_hint, str)
+            or self.type_hint not in SUPPORTED_ARGUMENT_TYPE_HINTS
+        ):
+            raise RegistryError(f"Unsupported function argument type hint: {self.type_hint!r}")
+        if self.required and self.default is not None:
+            raise RegistryError("Required function arguments cannot define a default.")
+        if self.allowed_values is not None and not isinstance(
+            self.allowed_values,
+            tuple,
+        ):
+            raise RegistryError("Function argument allowed_values must be a tuple.")
+
+    def to_payload(self) -> dict[str, Any]:
+        """Return the JSON-compatible persisted argument contract."""
+        payload: dict[str, Any] = {
+            "name": self.name,
+            "required": self.required,
+            "type_hint": self.type_hint,
+            "literal_only": self.literal_only,
+        }
+        if not self.required:
+            payload["default"] = self._payload_value(self.default)
+        if self.allowed_values is not None:
+            payload["allowed_values"] = [
+                self._payload_value(value) for value in self.allowed_values
+            ]
+        return payload
+
+    def _payload_value(self, value: Any) -> Any:
+        """Normalize tuples and sets for deterministic JSON persistence."""
+        if isinstance(value, tuple):
+            return [self._payload_value(item) for item in value]
+        if isinstance(value, list):
+            return [self._payload_value(item) for item in value]
+        if isinstance(value, set):
+            return [self._payload_value(item) for item in sorted(value, key=repr)]
+        if isinstance(value, dict):
+            return {str(key): self._payload_value(item) for key, item in value.items()}
+        return value
 
 
 @dataclass(frozen=True)
@@ -33,8 +132,8 @@ class CustomFunctionSpec:
         Canonical function name referenced by ruleset metadata.
     implementation_reference : str
         Environment-specific implementation reference. This is metadata only.
-    arg_names : tuple[str, ...]
-        Exact keyword arguments allowed by the function.
+    arguments : tuple[CustomFunctionArgSpec, ...]
+        Ordered required and optional keyword-argument contracts.
     allowed_in_condition_flag : bool
         Whether this function may be used in conditions.
     allowed_in_assignment_flag : bool
@@ -45,13 +144,123 @@ class CustomFunctionSpec:
 
     function_name: str
     implementation_reference: str
-    arg_names: tuple[str, ...]
+    arguments: tuple[CustomFunctionArgSpec, ...]
     allowed_in_condition_flag: bool
     allowed_in_assignment_flag: bool
     active_flag: bool = True
     return_type_hint: str | None = None
     description: str | None = None
     version: str | None = None
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous registry contracts when they are constructed."""
+        if not isinstance(self.function_name, str) or not self.function_name.strip():
+            raise RegistryError("Function name must be a non-empty string.")
+        if (
+            not isinstance(self.implementation_reference, str)
+            or not self.implementation_reference.strip()
+        ):
+            raise RegistryError("Implementation reference must be a non-empty string.")
+        if not isinstance(self.arguments, tuple) or not all(
+            isinstance(argument, CustomFunctionArgSpec) for argument in self.arguments
+        ):
+            raise RegistryError(
+                "Function arguments must be a tuple of CustomFunctionArgSpec values."
+            )
+        names = [argument.name for argument in self.arguments]
+        if not isinstance(self.allowed_in_condition_flag, bool) or not isinstance(
+            self.allowed_in_assignment_flag,
+            bool,
+        ):
+            raise RegistryError("Function permission flags must be booleans.")
+        if not isinstance(self.active_flag, bool):
+            raise RegistryError("Function active_flag must be a boolean.")
+        if self.return_type_hint is not None and not isinstance(
+            self.return_type_hint,
+            str,
+        ):
+            raise RegistryError("Function return_type_hint must be a string or null.")
+        if isinstance(self.return_type_hint, str) and not self.return_type_hint.strip():
+            raise RegistryError("Function return_type_hint cannot be blank.")
+        if len(names) != len(set(names)):
+            raise RegistryError(f"Function argument names must be unique: {self.function_name}")
+        if self.return_type_hint is not None:
+            normalized_return_hint = self.return_type_hint.lower()
+            if normalized_return_hint not in SUPPORTED_RETURN_TYPE_HINTS:
+                prefix, separator, argument_name = normalized_return_hint.partition(":")
+                if (
+                    separator != ":"
+                    or prefix not in {"same_as", "common_type"}
+                    or argument_name not in names
+                ):
+                    raise RegistryError(
+                        f"Unsupported return type hint for {self.function_name}: "
+                        f"{self.return_type_hint!r}"
+                    )
+                if prefix == "common_type":
+                    argument = next(item for item in self.arguments if item.name == argument_name)
+                    if argument.type_hint not in {
+                        "sequence",
+                        "string_sequence",
+                        "integer_sequence",
+                        "date_sequence",
+                    }:
+                        raise RegistryError(
+                            f"common_type return hints require a sequence argument: "
+                            f"{self.function_name}.{argument_name}"
+                        )
+        for argument in self.arguments:
+            if argument.allowed_values is None:
+                continue
+            if not argument.allowed_values:
+                raise RegistryError(
+                    f"Allowed values cannot be empty: {self.function_name}.{argument.name}"
+                )
+            if not argument.literal_only:
+                raise RegistryError(
+                    f"Arguments with allowed values must be literal-only: "
+                    f"{self.function_name}.{argument.name}"
+                )
+            if not argument.required and argument.default not in argument.allowed_values:
+                raise RegistryError(
+                    f"Optional argument default must be allowed: "
+                    f"{self.function_name}.{argument.name}"
+                )
+        try:
+            json.dumps(
+                [argument.to_payload() for argument in self.arguments],
+                sort_keys=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise RegistryError(
+                f"Function argument metadata must be JSON-compatible: {self.function_name}"
+            ) from exc
+
+    @property
+    def argument_names(self) -> tuple[str, ...]:
+        """Return argument names in their declared order."""
+        return tuple(argument.name for argument in self.arguments)
+
+    def bind_args(self, authored_args: dict[str, Any] | Any) -> dict[str, Any]:
+        """Validate names and add declared optional defaults."""
+        actual = set(authored_args)
+        allowed = set(self.argument_names)
+        required = {argument.name for argument in self.arguments if argument.required}
+        missing = required - actual
+        extra = actual - allowed
+        if missing or extra:
+            raise RegistryError(
+                f"Invalid args for {self.function_name}: "
+                f"missing={sorted(missing)}, extra={sorted(extra)}"
+            )
+        return {
+            argument.name: (
+                authored_args[argument.name]
+                if argument.name in authored_args
+                else deepcopy(argument.default)
+            )
+            for argument in self.arguments
+        }
 
     def to_row(self) -> FunctionRegistryRow:
         """
@@ -60,7 +269,9 @@ class CustomFunctionSpec:
         return FunctionRegistryRow(
             function_name=self.function_name,
             implementation_reference=self.implementation_reference,
-            arg_contract_payload={"arg_names": list(self.arg_names)},
+            arg_contract_payload={
+                "arguments": [argument.to_payload() for argument in self.arguments]
+            },
             return_type_hint=self.return_type_hint,
             allowed_in_condition_flag=self.allowed_in_condition_flag,
             allowed_in_assignment_flag=self.allowed_in_assignment_flag,
@@ -92,6 +303,8 @@ class FunctionRegistry:
         """
         if spec.function_name in self._specs:
             raise RegistryError(f"Function already registered: {spec.function_name}")
+        if implementation is not None and not callable(implementation):
+            raise RegistryError(f"Function implementation must be callable: {spec.function_name}")
         self._specs[spec.function_name] = spec
         if implementation is not None:
             self._implementations[spec.function_name] = implementation

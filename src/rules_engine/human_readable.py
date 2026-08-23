@@ -74,10 +74,7 @@ class HumanReadableRulesetFormatter:
         """
         Render a condition group as an infix logical expression.
         """
-        parts = [
-            self._format_condition(condition)
-            for condition in group.conditions
-        ]
+        parts = [self._format_condition(condition) for condition in group.conditions]
         parts.extend(self._format_group(child_group, nested=True) for child_group in group.groups)
         if not parts:
             expression = "TRUE" if group.logical_operator is LogicalOperator.ALL else "FALSE"
@@ -155,8 +152,7 @@ class HumanReadableRulesetFormatter:
         Render the assignment payload emitted when a rule matches.
         """
         return ", ".join(
-            self.format_assignment_expression(assignment)
-            for assignment in assignments
+            self.format_assignment_expression(assignment) for assignment in assignments
         )
 
     def format_assignment_expression(self, assignment: Assignment) -> str:
@@ -189,8 +185,7 @@ class HumanReadableRulesetFormatter:
         Render a custom function operand.
         """
         args = ", ".join(
-            f"{name}={self._format_arg(value)}"
-            for name, value in operand.args.items()
+            f"{name}={self._format_arg(value)}" for name, value in operand.args.items()
         )
         return f"{operand.function_name}({args})"
 
@@ -203,6 +198,16 @@ class HumanReadableRulesetFormatter:
             (AssignedOperand, FieldOperand, LiteralOperand, CustomFunctionOperand),
         ):
             return self._format_operand(value)
+        if isinstance(value, set):
+            return "{" + ", ".join(self._format_arg(item) for item in sorted(value, key=repr)) + "}"
+        if isinstance(value, (list, tuple)):
+            return "[" + ", ".join(self._format_arg(item) for item in value) + "]"
+        if isinstance(value, dict):
+            return (
+                "{"
+                + ", ".join(f"{key}: {self._format_arg(item)}" for key, item in value.items())
+                + "}"
+            )
         return self._format_value(value)
 
     def _operator_label(self, operator: ComparisonOperator) -> str:
@@ -249,12 +254,7 @@ class HumanReadableRulesetFormatter:
             return value.value
         if isinstance(value, set):
             return (
-                "{"
-                + ", ".join(
-                    self._format_value(item)
-                    for item in sorted(value, key=repr)
-                )
-                + "}"
+                "{" + ", ".join(self._format_value(item) for item in sorted(value, key=repr)) + "}"
             )
         if isinstance(value, tuple):
             return "[" + ", ".join(self._format_value(item) for item in value) + "]"
@@ -263,10 +263,7 @@ class HumanReadableRulesetFormatter:
         if isinstance(value, dict):
             return (
                 "{"
-                + ", ".join(
-                    f"{key}: {self._format_value(item)}"
-                    for key, item in value.items()
-                )
+                + ", ".join(f"{key}: {self._format_value(item)}" for key, item in value.items())
                 + "}"
             )
         return str(value)

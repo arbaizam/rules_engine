@@ -1,5 +1,12 @@
+import pytest
+
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
+from rules_engine.exceptions import RegistryError
+from rules_engine.registry import (
+    CustomFunctionArgSpec,
+    CustomFunctionSpec,
+    FunctionRegistry,
+)
 from rules_engine.validator import RulesetValidator
 
 
@@ -63,13 +70,9 @@ def test_ruleset_requires_at_least_one_active_rule():
     )
     payload["rules"][0]["active_flag"] = False
 
-    result = RulesetValidator().validate(
-        YamlRulesetCompiler().compile_payload(payload)
-    )
+    result = RulesetValidator().validate(YamlRulesetCompiler().compile_payload(payload))
 
-    assert "RULESET_ACTIVE_RULE_REQUIRED" in {
-        issue.check_name for issue in result.issues
-    }
+    assert "RULESET_ACTIVE_RULE_REQUIRED" in {issue.check_name for issue in result.issues}
 
 
 def test_custom_function_args_mismatch_fails_validation():
@@ -83,7 +86,7 @@ def test_custom_function_args_mismatch_fails_validation():
         CustomFunctionSpec(
             function_name="score",
             implementation_reference="pkg.score",
-            arg_names=("x", "y"),
+            arguments=(CustomFunctionArgSpec("x"), CustomFunctionArgSpec("y")),
             allowed_in_condition_flag=True,
             allowed_in_assignment_flag=False,
         )
@@ -100,6 +103,115 @@ def test_custom_function_args_mismatch_fails_validation():
     assert any(issue.check_name == "CUSTOM_FUNCTION_ARGS_MISMATCH" for issue in result.issues)
 
 
+def test_custom_function_optional_defaults_and_argument_constraints_are_validated():
+    registry = FunctionRegistry()
+    registry.register(
+        CustomFunctionSpec(
+            function_name="score",
+            implementation_reference="pkg.score",
+            arguments=(
+                CustomFunctionArgSpec("value", type_hint="number"),
+                CustomFunctionArgSpec(
+                    "mode",
+                    required=False,
+                    default="strict",
+                    type_hint="string",
+                    allowed_values=("strict", "lenient"),
+                    literal_only=True,
+                ),
+            ),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=False,
+        )
+    )
+
+    valid = _validate_condition(
+        {
+            "left": {"custom_function": {"name": "score", "args": {"value": 1}}},
+            "operator": "gt",
+            "right": {"literal": 0},
+        },
+        registry=registry,
+    )
+    bad_type = _validate_condition(
+        {
+            "left": {
+                "custom_function": {
+                    "name": "score",
+                    "args": {"value": "not-numeric"},
+                }
+            },
+            "operator": "gt",
+            "right": {"literal": 0},
+        },
+        registry=registry,
+    )
+    bad_value = _validate_condition(
+        {
+            "left": {
+                "custom_function": {
+                    "name": "score",
+                    "args": {"value": 1, "mode": "unknown"},
+                }
+            },
+            "operator": "gt",
+            "right": {"literal": 0},
+        },
+        registry=registry,
+    )
+    dynamic_mode = _validate_condition(
+        {
+            "left": {
+                "custom_function": {
+                    "name": "score",
+                    "args": {"value": 1, "mode": {"field": "mode"}},
+                }
+            },
+            "operator": "gt",
+            "right": {"literal": 0},
+        },
+        registry=registry,
+    )
+
+    assert valid.passed
+    assert "CUSTOM_FUNCTION_ARG_TYPE_MISMATCH" in {issue.check_name for issue in bad_type.issues}
+    assert "CUSTOM_FUNCTION_ARG_VALUE_INVALID" in {issue.check_name for issue in bad_value.issues}
+    assert "CUSTOM_FUNCTION_ARG_LITERAL_REQUIRED" in {
+        issue.check_name for issue in dynamic_mode.issues
+    }
+
+
+def test_custom_function_registry_rejects_unenforceable_argument_metadata():
+    with pytest.raises(RegistryError, match="literal-only"):
+        CustomFunctionSpec(
+            function_name="bad_allowed_values",
+            implementation_reference="pkg.bad_allowed_values",
+            arguments=(
+                CustomFunctionArgSpec(
+                    "mode",
+                    allowed_values=("a", "b"),
+                ),
+            ),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=True,
+        )
+
+    with pytest.raises(RegistryError, match="JSON-compatible"):
+        CustomFunctionSpec(
+            function_name="bad_default",
+            implementation_reference="pkg.bad_default",
+            arguments=(
+                CustomFunctionArgSpec(
+                    "value",
+                    required=False,
+                    default=object(),
+                ),
+            ),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=True,
+        )
+
+
 def test_error_on_null_is_rejected_for_unary_null_operators():
     """Unary null checks cannot also demand an error for the value they inspect."""
     result = _validate_condition(
@@ -110,9 +222,7 @@ def test_error_on_null_is_rejected_for_unary_null_operators():
         }
     )
 
-    assert "ERROR_ON_NULL_UNARY_FORBIDDEN" in {
-        issue.check_name for issue in result.issues
-    }
+    assert "ERROR_ON_NULL_UNARY_FORBIDDEN" in {issue.check_name for issue in result.issues}
 
 
 def test_assigned_operand_requires_an_active_lower_order_producer():
@@ -128,9 +238,7 @@ def test_assigned_operand_requires_an_active_lower_order_producer():
 
     result = RulesetValidator().validate(ruleset)
 
-    assert "ASSIGNED_VALUE_PRIOR_PRODUCER_REQUIRED" in {
-        issue.check_name for issue in result.issues
-    }
+    assert "ASSIGNED_VALUE_PRIOR_PRODUCER_REQUIRED" in {issue.check_name for issue in result.issues}
 
 
 def test_assigned_operand_accepts_a_potential_prior_producer():
@@ -318,9 +426,7 @@ def test_duplicate_assignment_target_within_rule_fails_validation():
         },
     ]
 
-    result = RulesetValidator().validate(
-        YamlRulesetCompiler().compile_payload(payload)
-    )
+    result = RulesetValidator().validate(YamlRulesetCompiler().compile_payload(payload))
     issue = next(
         item
         for item in result.issues
@@ -367,14 +473,8 @@ def test_duplicate_assignment_id_across_rules_fails_validation():
         }
     )
 
-    result = RulesetValidator().validate(
-        YamlRulesetCompiler().compile_payload(payload)
-    )
-    issue = next(
-        item
-        for item in result.issues
-        if item.check_name == "ASSIGNMENT_ID_DUPLICATE"
-    )
+    result = RulesetValidator().validate(YamlRulesetCompiler().compile_payload(payload))
+    issue = next(item for item in result.issues if item.check_name == "ASSIGNMENT_ID_DUPLICATE")
 
     assert issue.details["ruleset_id"] == "rs1"
     assert issue.details["version"] == "1"
@@ -403,14 +503,8 @@ def test_duplicate_assignment_id_within_rule_has_clear_location():
         },
     ]
 
-    result = RulesetValidator().validate(
-        YamlRulesetCompiler().compile_payload(payload)
-    )
-    issue = next(
-        item
-        for item in result.issues
-        if item.check_name == "ASSIGNMENT_ID_DUPLICATE"
-    )
+    result = RulesetValidator().validate(YamlRulesetCompiler().compile_payload(payload))
+    issue = next(item for item in result.issues if item.check_name == "ASSIGNMENT_ID_DUPLICATE")
 
     assert "more than once in rule r1" in issue.message
 
@@ -433,9 +527,5 @@ def test_assignment_id_may_be_reused_when_versions_are_validated_independently()
     ]
     next_version = {**payload, "version": "2"}
 
-    assert RulesetValidator().validate(
-        YamlRulesetCompiler().compile_payload(payload)
-    ).passed
-    assert RulesetValidator().validate(
-        YamlRulesetCompiler().compile_payload(next_version)
-    ).passed
+    assert RulesetValidator().validate(YamlRulesetCompiler().compile_payload(payload)).passed
+    assert RulesetValidator().validate(YamlRulesetCompiler().compile_payload(next_version)).passed

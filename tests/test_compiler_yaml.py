@@ -6,7 +6,7 @@ import pytest
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.enums import ComparisonOperator
 from rules_engine.exceptions import CompilationError
-from rules_engine.models import AssignedOperand
+from rules_engine.models import AssignedOperand, FieldOperand
 
 
 def _minimal_payload():
@@ -61,9 +61,7 @@ rules:
 
     assert condition.right.value == Decimal("0.0425")
     assert assignment.value.value == Decimal("0.0425")
-    assert ruleset.rules[0].assignments[1].value.value == Decimal(
-        "0.123456789012345678901"
-    )
+    assert ruleset.rules[0].assignments[1].value.value == Decimal("0.123456789012345678901")
 
 
 def test_valid_simple_row_rule_compiles_and_validates():
@@ -231,6 +229,29 @@ def test_assigned_operand_compiles_as_a_custom_function_argument():
     assert isinstance(operand, AssignedOperand)
     assert operand.target_field == "bucket"
     assert operand.default_if_null.value == "UNKNOWN"
+
+
+def test_custom_function_arguments_compile_operands_inside_collections():
+    payload = _minimal_payload()
+    payload["rules"][0]["assign"] = {
+        "selected": {
+            "custom_function": {
+                "name": "coalesce",
+                "args": {
+                    "values": [
+                        {"field": "primary"},
+                        {"field": "secondary"},
+                    ]
+                },
+            }
+        }
+    }
+
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+    values = ruleset.rules[0].assignments[0].value.args["values"]
+
+    assert [type(value) for value in values] == [FieldOperand, FieldOperand]
+    assert [value.field_name for value in values] == ["primary", "secondary"]
 
 
 def test_assigned_operand_compiles_with_a_null_fallback():
@@ -455,7 +476,7 @@ def test_canonical_string_operators_compile():
 
 @pytest.mark.parametrize(
     "location",
-    ("ruleset", "rule", "condition", "expectation", "assignment", "function"),
+    ("ruleset", "rule", "condition", "assignment", "function"),
 )
 def test_unknown_mapping_keys_are_rejected_at_every_contract_level(location):
     """Every structured authoring mapping has an explicit closed key set."""
@@ -466,9 +487,6 @@ def test_unknown_mapping_keys_are_rejected_at_every_contract_level(location):
         target = payload["rules"][0]
     elif location == "condition":
         target = payload["rules"][0]["when"]["all"][0]
-    elif location == "expectation":
-        payload["expect"] = [{"name": "example", "given": {}, "then": {"matched": True}}]
-        target = payload["expect"][0]
     elif location == "assignment":
         payload["rules"][0]["assign"] = [
             {
@@ -483,9 +501,7 @@ def test_unknown_mapping_keys_are_rejected_at_every_contract_level(location):
             "name": "identity",
             "args": {"value": {"field": "account"}},
         }
-        payload["rules"][0]["when"]["all"][0]["left"] = {
-            "custom_function": function
-        }
+        payload["rules"][0]["when"]["all"][0]["left"] = {"custom_function": function}
         target = function
     target["unexpected"] = True
 
@@ -557,15 +573,13 @@ def test_generated_assignment_ids_are_stable_by_rule_and_target():
     reordered_ruleset = YamlRulesetCompiler().compile_payload(reordered)
 
     assert {
-        item.target_field: item.assignment_id
-        for item in first_ruleset.rules[0].assignments
+        item.target_field: item.assignment_id for item in first_ruleset.rules[0].assignments
     } == {
         "a": "assignment:r1:a",
         "b": "assignment:r1:b",
     }
     assert {
-        item.target_field: item.assignment_id
-        for item in reordered_ruleset.rules[0].assignments
+        item.target_field: item.assignment_id for item in reordered_ruleset.rules[0].assignments
     } == {
         "a": "assignment:r1:a",
         "b": "assignment:r1:b",
@@ -591,9 +605,7 @@ def test_explicit_assignment_list_uses_stable_generated_id_when_omitted():
                         }
                     ]
                 },
-                "assign": [
-                    {"target_field": "bucket", "value": {"literal": "A"}}
-                ],
+                "assign": [{"target_field": "bucket", "value": {"literal": "A"}}],
             }
         ],
     }

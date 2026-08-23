@@ -135,12 +135,14 @@ def test_serializer_counts_nested_custom_function_operands():
                                     "custom_function": {
                                         "name": "outer_score",
                                         "args": {
-                                            "inner": {
-                                                "custom_function": {
-                                                    "name": "inner_score",
-                                                    "args": {"value": {"field": "account"}},
+                                            "values": [
+                                                {
+                                                    "custom_function": {
+                                                        "name": "inner_score",
+                                                        "args": {"value": {"field": "account"}},
+                                                    }
                                                 }
-                                            }
+                                            ]
                                         },
                                     }
                                 },
@@ -324,9 +326,7 @@ def test_serializer_round_trips_exact_decimal_scalars_and_collections():
         Decimal("0.250000000000000000001"),
     ]
     assert reconstructed == original
-    reconstructed_values = (
-        reconstructed.rules[0].root_group.conditions[0].right.value
-    )
+    reconstructed_values = reconstructed.rules[0].root_group.conditions[0].right.value
     assert reconstructed_values[1].as_tuple() == Decimal(1).as_tuple()
     assert len(row.content_hash) == 64
     assert serializer.content_hash(reconstructed) == row.content_hash

@@ -19,4 +19,3 @@ class RegistryError(RulesEngineError):
 
 class RepositoryError(RulesEngineError):
     """Raised for repository persistence or loading problems."""
-

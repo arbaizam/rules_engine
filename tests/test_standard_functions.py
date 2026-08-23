@@ -1,12 +1,15 @@
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
+from pyspark.serializers import CloudPickleSerializer
 from pyspark.sql import types as T
 
+import rules_engine.standard_functions as sf
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.registry import FunctionRegistry
 from rules_engine.serializer import DeltaRowSerializer
-from rules_engine.spark_runtime import SparkRulesEngineRuntime
+from rules_engine.spark_runtime import SparkRulesEngineRuntime, required_source_columns
 from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
 from rules_engine.standard_functions import (
     date_add_days,
@@ -126,6 +129,166 @@ def test_date_diff_and_month_boundaries_have_explicit_calendar_semantics():
     assert month_end(date(2024, 2, 17)) == date(2024, 2, 29)
 
 
+def test_text_functions_cover_cleaning_parsing_padding_and_patterns():
+    assert sf.left("ABCDE", 2) == "AB"
+    assert sf.right("ABCDE", 2) == "DE"
+    assert sf.ltrim("  A  ") == "A  "
+    assert sf.rtrim("  A  ") == "  A"
+    assert sf.trim("  A  ") == "A"
+    assert sf.upper("Ab") == "AB"
+    assert sf.lower("Ab") == "ab"
+    assert sf.normalize_whitespace(" A\t B\nC ") == "A B C"
+    assert sf.text_length("ABC") == 3
+    assert sf.replace("A-B-A", "A", "X") == "X-B-X"
+    assert sf.split_part("A|B|C", "|", 2) == "B"
+    assert sf.split_part("A|B", "|", 3) is None
+    assert sf.pad_left("7", 3, "0") == "007"
+    assert sf.pad_right("7", 3, "0") == "700"
+    assert sf.concat_ws(["A", None, 2], "|") == "A|2"
+    assert sf.concat_ws(["A", None], "|", skip_nulls=False) is None
+    assert sf.regex_extract("AB-123", r"(\d+)") == "123"
+    assert sf.regex_replace("AB-123", r"\d", "X") == "AB-XXX"
+    assert sf.regex_match("AB-123", r"^AB") is True
+    assert sf.text_contains_any("alpha beta", ["gamma", "beta"]) is True
+    assert sf.text_contains_any("None", [None]) is False
+    assert sf.is_blank(" \t") is True
+    assert sf.is_blank(0) is False
+
+
+def test_null_composition_functions_preserve_value_types():
+    marker = {"quality": "good"}
+
+    assert sf.null_if("N/A", "N/A") is None
+    assert sf.null_if(marker, None) is marker
+    assert sf.coalesce([None, marker, "fallback"]) is marker
+    assert sf.coalesce([None, None]) is None
+
+
+def test_converters_are_strict_and_offer_an_explicit_null_failure_policy():
+    assert sf.to_string(True) == "true"
+    assert sf.to_string(Decimal("1.20")) == "1.20"
+    assert sf.to_decimal("1.20") == Decimal("1.20")
+    assert sf.to_integer("12.0") == 12
+    assert sf.to_boolean("YES") is True
+    assert sf.to_boolean("0") is False
+    assert sf.to_date("not-a-date", on_error="null") is None
+    assert sf.to_decimal("not-a-number", on_error="null") is None
+    assert sf.to_integer("1.5", on_error="null") is None
+    assert sf.to_boolean("maybe", on_error="null") is None
+
+    with pytest.raises(ValueError, match="Cannot convert value to integer"):
+        sf.to_integer("1.5")
+    with pytest.raises(ValueError, match="on_error"):
+        sf.to_decimal("x", on_error="ignore")
+    with pytest.raises(ValueError, match="on_error"):
+        sf.to_decimal("1", on_error="ignore")
+
+
+def test_timestamp_converters_distinguish_instant_and_wall_clock_values():
+    assert sf.to_timestamp("2024-01-01T01:00:00+01:00") == datetime(
+        2024,
+        1,
+        1,
+        tzinfo=timezone.utc,
+    )
+    expected_wall_clock = datetime(
+        2024,
+        1,
+        1,
+        1,
+        tzinfo=timezone.utc,
+    ).replace(tzinfo=None)
+    assert sf.to_timestamp_ntz("2024-01-01T01:00:00") == expected_wall_clock
+    assert sf.to_timestamp("2024-01-01T01:00:00", on_error="null") is None
+    assert (
+        sf.to_timestamp_ntz(
+            "2024-01-01T01:00:00Z",
+            on_error="null",
+        )
+        is None
+    )
+
+
+def test_decimal_functions_use_decimal_arithmetic_and_explicit_rounding():
+    assert sf.decimal_abs("-1.25") == Decimal("1.25")
+    assert sf.decimal_add("1.1", "2.2") == Decimal("3.3")
+    assert sf.decimal_subtract("5", "1.25") == Decimal("3.75")
+    assert sf.decimal_multiply("1.5", "2") == Decimal("3.0")
+    assert sf.decimal_divide("1", "3", 2) == Decimal("0.33")
+    assert sf.decimal_safe_divide("1", "0") is None
+    assert sf.decimal_round("2.345", 2, "half_up") == Decimal("2.35")
+    assert sf.decimal_round("2.345", 2, "half_even") == Decimal("2.34")
+    assert sf.decimal_clamp("12", "0", "10") == Decimal(10)
+    assert sf.decimal_min("2", "3") == Decimal(2)
+    assert sf.decimal_max("2", "3") == Decimal(3)
+    assert sf.decimal_add(None, "1") is None
+
+    with pytest.raises(ZeroDivisionError):
+        sf.decimal_divide("1", "0")
+    with pytest.raises(ValueError, match="minimum"):
+        sf.decimal_clamp("5", "10", "0")
+
+
+def test_calendar_boundary_and_completed_period_functions_are_explicit():
+    leap_day = date(2024, 2, 29)
+
+    assert sf.date_diff_months(date(2024, 1, 31), leap_day) == 1
+    assert sf.date_diff_months(leap_day, date(2024, 3, 28)) == 0
+    assert sf.date_diff_months(date(2024, 3, 28), leap_day) == 0
+    assert sf.date_diff_years(leap_day, date(2025, 2, 28)) == 1
+    assert sf.date_diff_years(date(2025, 2, 27), leap_day) == 0
+    assert sf.date_part(leap_day, "quarter") == 1
+    assert sf.date_part(leap_day, "day_of_week") == 4
+    assert sf.quarter_start(date(2024, 5, 15)) == date(2024, 4, 1)
+    assert sf.quarter_end(date(2024, 5, 15)) == date(2024, 6, 30)
+    assert sf.year_start(leap_day) == date(2024, 1, 1)
+    assert sf.year_end(leap_day) == date(2024, 12, 31)
+
+
+def test_business_month_boundaries_require_explicit_holiday_calendars():
+    holidays = ["2024-06-03", "2024-08-30"]
+
+    assert sf.first_business_day_of_month("2024-06-15", holidays) == date(
+        2024,
+        6,
+        4,
+    )
+    assert sf.last_business_day_of_month("2024-08-15", holidays) == date(
+        2024,
+        8,
+        29,
+    )
+    assert sf.first_business_day_of_month(
+        "2024-06-15",
+        [],
+        weekend_days=[5, 6],
+    ) == date(2024, 6, 2)
+
+    with pytest.raises(ValueError, match="every weekday"):
+        sf.first_business_day_of_month("2024-06-15", [], list(range(1, 8)))
+
+
+def test_array_functions_are_null_aware_and_reject_scalar_inputs():
+    assert sf.array_size(["A", None, "B"]) == 3
+    assert sf.array_size([]) == 0
+    assert sf.array_size(None) is None
+    assert sf.array_contains_any(["A", "B"], ["B", "C"]) is True
+    assert sf.array_contains_any(["A"], []) is False
+    assert sf.array_contains_all(["A", "B"], ["B", "A"]) is True
+    assert sf.array_contains_all(["A"], []) is True
+    assert sf.array_join(["A", None, 2], "|") == "A|2"
+    assert sf.array_join(["A", None], "|", skip_nulls=False) is None
+
+    for function, args in [
+        (sf.array_size, ("ABC",)),
+        (sf.array_contains_any, ("ABC", ["A"])),
+        (sf.array_contains_all, (["A"], "A")),
+        (sf.array_join, ("ABC", "|")),
+    ]:
+        with pytest.raises(TypeError, match="array"):
+            function(*args)
+
+
 def test_standard_functions_can_be_registered_for_runtime_field_args():
     """
     What: Registers standard functions and evaluates substring against row fields.
@@ -194,8 +357,109 @@ def test_standard_functions_can_be_registered_for_runtime_field_args():
     assert validation.passed
     assert '"field":"account_code"' in row.payload_json
     assert output["matched"] is True
+    assert output["assign"] == {"account_prefix": {"applied": True, "value": "AB"}}
+
+
+def test_optional_defaults_and_nested_argument_operands_work_end_to_end():
+    registry = register_standard_functions(FunctionRegistry())
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "composition",
+            "ruleset_name": "Composition",
+            "version": "1",
+            "owner": "Rules Team",
+            "owner_department": "ALM Engineering",
+            "rules": [
+                {
+                    "rule_id": "compose",
+                    "rule_name": "Compose",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"literal": True},
+                                "operator": "eq",
+                                "right": {"literal": True},
+                            }
+                        ]
+                    },
+                    "assign": {
+                        "selected_code": {
+                            "custom_function": {
+                                "name": "coalesce",
+                                "args": {
+                                    "values": [
+                                        {"field": "primary_code"},
+                                        {"field": "secondary_code"},
+                                    ]
+                                },
+                            }
+                        },
+                        "code_suffix": {
+                            "custom_function": {
+                                "name": "substring",
+                                "args": {
+                                    "value": {"field": "secondary_code"},
+                                    "start": 2,
+                                },
+                            }
+                        },
+                        "has_review_tag": {
+                            "custom_function": {
+                                "name": "array_contains_any",
+                                "args": {
+                                    "values": {"field": "tags"},
+                                    "candidates": ["review", "hold"],
+                                },
+                            }
+                        },
+                    },
+                }
+            ],
+        }
+    )
+    source_schema = T.StructType(
+        [
+            T.StructField("primary_code", T.StringType(), True),
+            T.StructField("secondary_code", T.StringType(), True),
+            T.StructField("tags", T.ArrayType(T.StringType()), True),
+        ]
+    )
+    validator = SparkRulesetCompatibilityValidator(registry)
+
+    validation = validator.validate(ruleset, source_schema)
+    assignment_schema = validator.assignment_schema(ruleset, source_schema)
+    evaluator = SparkRulesEngineRuntime(
+        DummyRepository(),
+        registry,
+    )._build_row_evaluator(
+        ruleset,
+        [field.name for field in assignment_schema.fields],
+        {field.name: field.dataType for field in assignment_schema.fields},
+    )
+    serializer = CloudPickleSerializer()
+    evaluator = serializer.loads(serializer.dumps(evaluator))
+    output = evaluator(
+        FakeSparkRow(
+            {
+                "primary_code": None,
+                "secondary_code": "ABC",
+                "tags": ["review"],
+            }
+        )
+    )
+
+    assert validation.passed, validation.to_text()
+    assert required_source_columns(ruleset) == (
+        "primary_code",
+        "secondary_code",
+        "tags",
+    )
+    assert assignment_schema["selected_code"].dataType == T.StringType()
     assert output["assign"] == {
-        "account_prefix": {"applied": True, "value": "AB"}
+        "selected_code": {"applied": True, "value": "ABC"},
+        "code_suffix": {"applied": True, "value": "BC"},
+        "has_review_tag": {"applied": True, "value": True},
     }
 
 
@@ -312,18 +576,48 @@ def test_standard_function_rows_expose_registry_metadata():
     rows = standard_function_rows()
     names = {row.function_name for row in rows}
 
-    assert "substring" in names
-    assert "regex_extract" in names
+    assert len(rows) == 58
     assert {
-        "to_date",
-        "date_add_days",
-        "date_add_months",
-        "date_add_years",
-        "date_diff_days",
-        "month_start",
-        "month_end",
+        "text_length",
+        "text_contains_any",
+        "to_decimal",
+        "coalesce",
+        "first_business_day_of_month",
+        "last_business_day_of_month",
+        "array_size",
+        "array_contains_any",
+        "array_contains_all",
+        "array_join",
     } <= names
+    assert {"length", "contains_any", "to_number"}.isdisjoint(names)
 
     hints = {row.function_name: row.return_type_hint for row in rows}
     assert hints["date_add_months"] == "date"
     assert hints["date_diff_days"] == "integer"
+    assert hints["null_if"] == "same_as:value"
+    assert hints["coalesce"] == "common_type:values"
+
+    substring_row = next(row for row in rows if row.function_name == "substring")
+    assert substring_row.arg_contract_payload == {
+        "arguments": [
+            {
+                "name": "value",
+                "required": True,
+                "type_hint": "any",
+                "literal_only": False,
+            },
+            {
+                "name": "start",
+                "required": True,
+                "type_hint": "integer",
+                "literal_only": False,
+            },
+            {
+                "name": "length",
+                "required": False,
+                "type_hint": "integer",
+                "literal_only": False,
+                "default": None,
+            },
+        ]
+    }

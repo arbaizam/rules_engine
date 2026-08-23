@@ -89,15 +89,6 @@ class YamlRulesetExporter:
         if ruleset.owner_department is not None:
             payload["owner_department"] = ruleset.owner_department
         payload["rules"] = [self._export_rule(rule) for rule in ruleset.rules]
-        if ruleset.expect:
-            payload["expect"] = [
-                {
-                    "name": expectation.name,
-                    "given": self._export_value(dict(expectation.given)),
-                    "then": self._export_value(dict(expectation.then)),
-                }
-                for expectation in ruleset.expect
-            ]
         return payload
 
     def export_text(self, ruleset: Ruleset) -> str:
@@ -131,10 +122,7 @@ class YamlRulesetExporter:
         if rule.description is not None:
             payload["description"] = rule.description
         payload["when"] = self._export_group(rule.root_group)
-        payload["assign"] = [
-            self._export_assignment(assignment)
-            for assignment in rule.assignments
-        ]
+        payload["assign"] = [self._export_assignment(assignment) for assignment in rule.assignments]
         return payload
 
     def _export_group(self, group: ConditionGroup) -> dict[str, Any]:
@@ -227,10 +215,7 @@ class YamlRulesetExporter:
         if isinstance(value, set):
             return {self._export_value(item) for item in value}
         if isinstance(value, dict):
-            return {
-                str(key): self._export_value(item)
-                for key, item in value.items()
-            }
+            return {str(key): self._export_value(item) for key, item in value.items()}
         if is_dataclass(value):
             raise TypeError(
                 f"Dataclass values are not YAML-authoring literals: {type(value).__name__}"
@@ -246,4 +231,12 @@ class YamlRulesetExporter:
             (AssignedOperand, FieldOperand, LiteralOperand, CustomFunctionOperand),
         ):
             return self._export_operand(value)
+        if isinstance(value, tuple):
+            return tuple(self._export_arg_value(item) for item in value)
+        if isinstance(value, list):
+            return [self._export_arg_value(item) for item in value]
+        if isinstance(value, set):
+            return {self._export_arg_value(item) for item in value}
+        if isinstance(value, dict):
+            return {str(key): self._export_arg_value(item) for key, item in value.items()}
         return self._export_value(value)

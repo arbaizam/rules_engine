@@ -27,9 +27,7 @@ INTEGRAL_DECIMAL_DIGITS = {
 }
 TIMESTAMP_NTZ_TYPE = getattr(T, "TimestampNTZType", None)
 TIMESTAMP_TYPES = (
-    (T.TimestampType, TIMESTAMP_NTZ_TYPE)
-    if TIMESTAMP_NTZ_TYPE is not None
-    else (T.TimestampType,)
+    (T.TimestampType, TIMESTAMP_NTZ_TYPE) if TIMESTAMP_NTZ_TYPE is not None else (T.TimestampType,)
 )
 TEMPORAL_TYPES = (T.DateType, *TIMESTAMP_TYPES)
 
@@ -53,6 +51,5 @@ def decimal_value_fits(value: Decimal, data_type: T.DecimalType) -> bool:
     return (
         inferred is not None
         and inferred.scale <= data_type.scale
-        and inferred.precision - inferred.scale
-        <= data_type.precision - data_type.scale
+        and inferred.precision - inferred.scale <= data_type.precision - data_type.scale
     )

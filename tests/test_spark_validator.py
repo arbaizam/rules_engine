@@ -5,7 +5,11 @@ import pytest
 from pyspark.sql import types as T
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
+from rules_engine.registry import (
+    CustomFunctionArgSpec,
+    CustomFunctionSpec,
+    FunctionRegistry,
+)
 from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
 from rules_engine.standard_functions import register_standard_functions
@@ -188,9 +192,7 @@ def test_spark_validator_infers_new_target_type_from_prior_assignment():
 
 
 def test_spark_validator_existing_target_supplies_null_literal_type():
-    ruleset = YamlRulesetCompiler().compile_payload(
-        _payload({"target": {"literal": None}})
-    )
+    ruleset = YamlRulesetCompiler().compile_payload(_payload({"target": {"literal": None}}))
     schema = T.StructType(
         [
             T.StructField("status", T.StringType(), True),
@@ -207,9 +209,7 @@ def test_spark_validator_existing_target_supplies_null_literal_type():
 
 
 def test_spark_validator_new_null_literal_requires_value_type():
-    ruleset = YamlRulesetCompiler().compile_payload(
-        _payload({"new_target": {"literal": None}})
-    )
+    ruleset = YamlRulesetCompiler().compile_payload(_payload({"new_target": {"literal": None}}))
     schema = T.StructType([T.StructField("status", T.StringType(), True)])
 
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
@@ -242,19 +242,13 @@ def test_spark_validator_new_custom_assignment_requires_return_type_hint():
         CustomFunctionSpec(
             function_name="untyped",
             implementation_reference="pkg.untyped",
-            arg_names=(),
+            arguments=(),
             allowed_in_condition_flag=False,
             allowed_in_assignment_flag=True,
         )
     )
     ruleset = YamlRulesetCompiler().compile_payload(
-        _payload(
-            {
-                "new_target": {
-                    "custom_function": {"name": "untyped", "args": {}}
-                }
-            }
-        )
+        _payload({"new_target": {"custom_function": {"name": "untyped", "args": {}}}})
     )
     schema = T.StructType([T.StructField("status", T.StringType(), True)])
 
@@ -269,7 +263,7 @@ def test_spark_validator_polymorphic_assignment_uses_existing_target_type():
         CustomFunctionSpec(
             function_name="identity",
             implementation_reference="pkg.identity",
-            arg_names=("value",),
+            arguments=(CustomFunctionArgSpec("value"),),
             allowed_in_condition_flag=False,
             allowed_in_assignment_flag=True,
             return_type_hint="any",
@@ -306,7 +300,7 @@ def test_spark_validator_polymorphic_assignment_requires_new_target_type():
         CustomFunctionSpec(
             function_name="identity",
             implementation_reference="pkg.identity",
-            arg_names=("value",),
+            arguments=(CustomFunctionArgSpec("value"),),
             allowed_in_condition_flag=False,
             allowed_in_assignment_flag=True,
             return_type_hint="any",
@@ -416,9 +410,7 @@ def test_spark_validator_accepts_yaml_fraction_for_existing_decimal_target():
 
 
 def test_spark_validator_infers_decimal_for_new_yaml_fraction_target():
-    ruleset = YamlRulesetCompiler().compile_payload(
-        _payload({"new_rate": 0.0425})
-    )
+    ruleset = YamlRulesetCompiler().compile_payload(_payload({"new_rate": 0.0425}))
     schema = T.StructType([T.StructField("status", T.StringType(), True)])
     validator = SparkRulesetCompatibilityValidator()
 
@@ -429,14 +421,14 @@ def test_spark_validator_infers_decimal_for_new_yaml_fraction_target():
     assert assignment_schema["new_rate"].dataType == T.DecimalType(4, 4)
 
 
-def test_spark_validator_accepts_to_number_for_existing_decimal_target():
+def test_spark_validator_accepts_to_decimal_for_existing_decimal_target():
     registry = register_standard_functions(FunctionRegistry())
     ruleset = YamlRulesetCompiler().compile_payload(
         _payload(
             {
                 "target": {
                     "custom_function": {
-                        "name": "to_number",
+                        "name": "to_decimal",
                         "args": {"value": {"field": "source_value"}},
                     }
                 }
@@ -456,14 +448,14 @@ def test_spark_validator_accepts_to_number_for_existing_decimal_target():
     assert result.passed
 
 
-def test_spark_validator_infers_decimal_for_new_to_number_target():
+def test_spark_validator_infers_decimal_for_new_to_decimal_target():
     registry = register_standard_functions(FunctionRegistry())
     ruleset = YamlRulesetCompiler().compile_payload(
         _payload(
             {
                 "parsed": {
                     "custom_function": {
-                        "name": "to_number",
+                        "name": "to_decimal",
                         "args": {"value": {"field": "source_value"}},
                     }
                 }
@@ -485,12 +477,104 @@ def test_spark_validator_infers_decimal_for_new_to_number_target():
     assert assignment_schema["parsed"].dataType == T.DecimalType(38, 18)
 
 
+def test_spark_validator_rejects_scalar_field_for_array_argument():
+    registry = register_standard_functions(FunctionRegistry())
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _payload(
+            {
+                "target": {
+                    "custom_function": {
+                        "name": "array_size",
+                        "args": {"values": {"field": "source_value"}},
+                    }
+                }
+            }
+        )
+    )
+    schema = T.StructType(
+        [
+            T.StructField("status", T.StringType(), True),
+            T.StructField("source_value", T.StringType(), True),
+        ]
+    )
+
+    result = SparkRulesetCompatibilityValidator(registry).validate(ruleset, schema)
+
+    assert "SPARK_CUSTOM_FUNCTION_ARG_TYPE_INCOMPATIBLE" in {
+        issue.check_name for issue in result.issues
+    }
+
+
+def test_spark_validator_resolves_same_as_argument_return_type():
+    registry = register_standard_functions(FunctionRegistry())
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _payload(
+            {
+                "cleaned": {
+                    "custom_function": {
+                        "name": "null_if",
+                        "args": {
+                            "value": {"field": "source_value"},
+                            "compare_to": -1,
+                        },
+                    }
+                }
+            }
+        )
+    )
+    schema = T.StructType(
+        [
+            T.StructField("status", T.StringType(), True),
+            T.StructField("source_value", T.IntegerType(), True),
+        ]
+    )
+    validator = SparkRulesetCompatibilityValidator(registry)
+
+    result = validator.validate(ruleset, schema)
+    assignment_schema = validator.assignment_schema(ruleset, schema)
+
+    assert result.passed, result.to_text()
+    assert assignment_schema["cleaned"].dataType == T.IntegerType()
+
+
+def test_spark_validator_rejects_incompatible_coalesce_item_types():
+    registry = register_standard_functions(FunctionRegistry())
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _payload(
+            {
+                "selected": {
+                    "custom_function": {
+                        "name": "coalesce",
+                        "args": {
+                            "values": [
+                                {"field": "text_value"},
+                                {"field": "integer_value"},
+                            ]
+                        },
+                    }
+                }
+            }
+        )
+    )
+    schema = T.StructType(
+        [
+            T.StructField("status", T.StringType(), True),
+            T.StructField("text_value", T.StringType(), True),
+            T.StructField("integer_value", T.IntegerType(), True),
+        ]
+    )
+
+    result = SparkRulesetCompatibilityValidator(registry).validate(ruleset, schema)
+
+    assert "SPARK_CUSTOM_FUNCTION_COMMON_TYPE_CONFLICT" in {
+        issue.check_name for issue in result.issues
+    }
+
+
 def test_spark_validator_rejects_date_compared_with_quoted_string():
     payload = _payload({"bucket": "A"}, condition_field="as_of_date")
     payload["rules"][0]["when"]["all"][0]["operator"] = "ge"
-    payload["rules"][0]["when"]["all"][0]["right"] = {
-        "literal": "2025-01-01"
-    }
+    payload["rules"][0]["when"]["all"][0]["right"] = {"literal": "2025-01-01"}
     ruleset = YamlRulesetCompiler().compile_payload(payload)
     schema = T.StructType([T.StructField("as_of_date", T.DateType(), True)])
 
@@ -503,9 +587,7 @@ def test_spark_validator_rejects_scalar_string_membership_field():
     """IN/NOT_IN require collection-valued fields at schema preflight."""
     payload = _payload({"bucket": "A"}, condition_field="flag")
     payload["rules"][0]["when"]["all"][0]["operator"] = "in"
-    payload["rules"][0]["when"]["all"][0]["right"] = {
-        "field": "flags_string"
-    }
+    payload["rules"][0]["when"]["all"][0]["right"] = {"field": "flags_string"}
     ruleset = YamlRulesetCompiler().compile_payload(payload)
     schema = T.StructType(
         [
@@ -523,9 +605,7 @@ def test_spark_validator_allows_array_membership_field():
     """A Spark array remains a valid field-backed IN operand."""
     payload = _payload({"bucket": "A"}, condition_field="flag")
     payload["rules"][0]["when"]["all"][0]["operator"] = "in"
-    payload["rules"][0]["when"]["all"][0]["right"] = {
-        "field": "flags"
-    }
+    payload["rules"][0]["when"]["all"][0]["right"] = {"field": "flags"}
     ruleset = YamlRulesetCompiler().compile_payload(payload)
     schema = T.StructType(
         [
@@ -560,9 +640,7 @@ def test_mapping_literal_schema_order_is_stable_after_persistence():
     schema = T.StructType([T.StructField("status", T.StringType(), True)])
     validator = SparkRulesetCompatibilityValidator()
     serializer = DeltaRowSerializer()
-    reloaded = serializer.deserialize_ruleset_version(
-        serializer.serialize_ruleset_version(ruleset)
-    )
+    reloaded = serializer.deserialize_ruleset_version(serializer.serialize_ruleset_version(ruleset))
 
     direct_type = validator.assignment_schema(ruleset, schema)["details"].dataType
     reloaded_type = validator.assignment_schema(reloaded, schema)["details"].dataType
@@ -627,9 +705,7 @@ def test_spark_validator_rejects_timestamp_representation_assignment_change():
 def test_spark_validator_rejects_timestamp_representation_condition_change():
     payload = _payload({"bucket": "A"}, condition_field="left_timestamp")
     payload["rules"][0]["when"]["all"][0]["operator"] = "ge"
-    payload["rules"][0]["when"]["all"][0]["right"] = {
-        "field": "right_timestamp"
-    }
+    payload["rules"][0]["when"]["all"][0]["right"] = {"field": "right_timestamp"}
     ruleset = YamlRulesetCompiler().compile_payload(payload)
     schema = T.StructType(
         [
@@ -655,15 +731,11 @@ def test_timestamp_ntz_literal_mismatch_explains_value_type_fix():
         "literal": datetime(2026, 1, 1)  # noqa: DTZ001 - TimestampNTZ is naive.
     }
     ruleset = YamlRulesetCompiler().compile_payload(payload)
-    schema = T.StructType(
-        [T.StructField("event_at", T.TimestampNTZType(), True)]
-    )
+    schema = T.StructType([T.StructField("event_at", T.TimestampNTZType(), True)])
 
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
     issue = next(
-        item
-        for item in result.issues
-        if item.check_name == "SPARK_CONDITION_TEMPORAL_MISMATCH"
+        item for item in result.issues if item.check_name == "SPARK_CONDITION_TEMPORAL_MISMATCH"
     )
 
     assert "timestamp_ntz" in issue.message
@@ -682,9 +754,7 @@ def test_timestamp_ntz_literal_hint_matches_ntz_field():
         "value_type": "timestamp_ntz",
     }
     ruleset = YamlRulesetCompiler().compile_payload(payload)
-    schema = T.StructType(
-        [T.StructField("event_at", T.TimestampNTZType(), True)]
-    )
+    schema = T.StructType([T.StructField("event_at", T.TimestampNTZType(), True)])
 
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
 
@@ -706,9 +776,7 @@ def test_timestamp_ntz_collection_hint_matches_ntz_field():
         "value_type": "timestamp_ntz",
     }
     ruleset = YamlRulesetCompiler().compile_payload(payload)
-    schema = T.StructType(
-        [T.StructField("event_at", T.TimestampNTZType(), True)]
-    )
+    schema = T.StructType([T.StructField("event_at", T.TimestampNTZType(), True)])
 
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
 

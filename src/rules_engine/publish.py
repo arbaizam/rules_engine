@@ -9,7 +9,6 @@ import logging
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.models import Ruleset
 from rules_engine.repository import RulesetRepository
-from rules_engine.testing import RulesetTester
 from rules_engine.validator import RulesetValidator
 
 logger = logging.getLogger(__name__)
@@ -24,14 +23,12 @@ class PublishService:
         self,
         repository: RulesetRepository,
         validator: RulesetValidator,
-        tester: RulesetTester,
     ) -> None:
         """
-        Create a publish service from repository, validator, and expected-case tester.
+        Create a publish service from a repository and validator.
         """
         self._repository = repository
         self._validator = validator
-        self._tester = tester
 
     def publish(
         self,
@@ -60,13 +57,6 @@ class PublishService:
                 f"Publish failed for ruleset={ruleset.ruleset_name}, "
                 f"version={ruleset.version}.\n{validation.to_text()}"
             )
-        if ruleset.expect:
-            test_result = self._tester.test(ruleset)
-            if not test_result.passed:
-                raise ValidationFailedError(
-                    "Ruleset expected cases failed; metadata was not published.\n"
-                    + test_result.to_text()
-                )
         self._repository.save_published(
             ruleset,
             published_by=published_by,

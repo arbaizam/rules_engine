@@ -28,9 +28,7 @@ def test_shipped_rulesets_validate_and_round_trip_hash_stably(path):
 
     assert RulesetValidator().validate(ruleset).passed
 
-    reconstructed = compiler.compile_text(
-        YamlRulesetExporter().export_text(ruleset)
-    )
+    reconstructed = compiler.compile_text(YamlRulesetExporter().export_text(ruleset))
 
     assert reconstructed == ruleset
     assert serializer.content_hash(reconstructed) == serializer.content_hash(ruleset)
@@ -107,9 +105,7 @@ def test_yaml_export_round_trips_compiled_ruleset():
                         {
                             "assignment_id": "a3",
                             "target_field": "rate",
-                            "value": {
-                                "literal": Decimal("0.042500000000000000001")
-                            },
+                            "value": {"literal": Decimal("0.042500000000000000001")},
                         },
                     ],
                 }
@@ -180,6 +176,49 @@ def test_yaml_export_text_is_stable_after_recompilation():
         "tolerance_abs",
         "active_flag",
     ]
+
+
+def test_yaml_exporter_preserves_operands_inside_function_argument_arrays():
+    compiler = YamlRulesetCompiler()
+    payload = {
+        "ruleset_id": "nested",
+        "ruleset_name": "Nested arguments",
+        "version": "1",
+        "rules": [
+            {
+                "rule_id": "r1",
+                "rule_name": "Compose",
+                "rule_order": 1,
+                "when": {
+                    "all": [
+                        {
+                            "left": {"literal": True},
+                            "operator": "eq",
+                            "right": {"literal": True},
+                        }
+                    ]
+                },
+                "assign": {
+                    "selected": {
+                        "custom_function": {
+                            "name": "coalesce",
+                            "args": {
+                                "values": [
+                                    {"field": "primary"},
+                                    {"field": "secondary"},
+                                ]
+                            },
+                        }
+                    }
+                },
+            }
+        ],
+    }
+    original = compiler.compile_payload(payload)
+
+    reconstructed = compiler.compile_text(YamlRulesetExporter().export_text(original))
+
+    assert reconstructed == original
 
 
 def test_yaml_export_round_trips_assigned_operands():

@@ -11,6 +11,7 @@ from typing import Any
 from pyspark.sql import types as T
 
 from rules_engine.enums import ComparisonOperator, ObjectType
+from rules_engine.exceptions import RegistryError
 from rules_engine.models import (
     AssignedOperand,
     Assignment,
@@ -23,6 +24,7 @@ from rules_engine.models import (
     Rule,
     Ruleset,
     ValidationResult,
+    iter_nested_operands,
 )
 from rules_engine.spark_types import (
     INTEGRAL_DECIMAL_DIGITS,
@@ -31,6 +33,7 @@ from rules_engine.spark_types import (
     INTEGRAL_TYPES,
     TEMPORAL_TYPES,
     TIMESTAMP_NTZ_TYPE,
+    TIMESTAMP_TYPES,
     decimal_literal_type,
     decimal_value_fits,
 )
@@ -123,6 +126,12 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
             result,
             assigned_types,
         )
+        self._validate_custom_function_argument_types(
+            ruleset,
+            schema,
+            result,
+            assigned_types,
+        )
         self._validate_membership_condition_types(
             ruleset,
             schema,
@@ -164,25 +173,16 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                     self._add(
                         result,
                         check_name,
-                        f"Spark input schema does not contain field "
-                        f"{operand.field_name!r}.",
+                        f"Spark input schema does not contain field {operand.field_name!r}.",
                         object_type,
                         object_id,
                         details={"field_name": operand.field_name},
                     )
             elif isinstance(operand, CustomFunctionOperand):
                 for argument in operand.args.values():
-                    if isinstance(
-                        argument,
-                        (
-                            AssignedOperand,
-                            FieldOperand,
-                            LiteralOperand,
-                            CustomFunctionOperand,
-                        ),
-                    ):
+                    for nested_operand in iter_nested_operands(argument):
                         validate_operand(
-                            argument,
+                            nested_operand,
                             object_type=object_type,
                             object_id=object_id,
                             check_name=check_name,
@@ -281,9 +281,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                 merged = self._common_type(common_type, inferred)
                 if merged is None:
                     if first_typed is None:
-                        raise RuntimeError(
-                            "Assignment type resolution lost its first typed value."
-                        )
+                        raise RuntimeError("Assignment type resolution lost its first typed value.")
                     self._add(
                         result,
                         "SPARK_ASSIGNMENT_TYPE_CONFLICT",
@@ -380,8 +378,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                     self._add(
                         result,
                         "SPARK_DEFAULT_IF_NULL_VALUE_TYPE_UNSUPPORTED",
-                        f"Unsupported default_if_null value_type "
-                        f"{default.value_type!r}.",
+                        f"Unsupported default_if_null value_type {default.value_type!r}.",
                         object_type,
                         object_id,
                     )
@@ -410,17 +407,9 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                     )
             if isinstance(operand, CustomFunctionOperand):
                 for argument in operand.args.values():
-                    if isinstance(
-                        argument,
-                        (
-                            AssignedOperand,
-                            FieldOperand,
-                            LiteralOperand,
-                            CustomFunctionOperand,
-                        ),
-                    ):
+                    for nested_operand in iter_nested_operands(argument):
                         validate_operand(
-                            argument,
+                            nested_operand,
                             object_type=object_type,
                             object_id=object_id,
                         )
@@ -497,6 +486,220 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         for rule in self._active_rules(ruleset):
             validate_group(rule.root_group)
 
+    def _validate_custom_function_argument_types(
+        self,
+        ruleset: Ruleset,
+        schema: T.StructType,
+        result: ValidationResult,
+        assigned_types: dict[str, T.DataType] | None = None,
+    ) -> None:
+        """Validate field-backed function arguments against registry types."""
+        if self._function_registry is None:
+            return
+        source_fields = {field.name: field.dataType for field in schema.fields}
+
+        def validate_operand(
+            operand: Operand | None,
+            *,
+            object_type: ObjectType,
+            object_id: str,
+        ) -> None:
+            if not isinstance(operand, CustomFunctionOperand):
+                return
+            if not self._function_registry.has_spec(operand.function_name):
+                return
+            spec = self._function_registry.get_spec(operand.function_name)
+            try:
+                bound_args = spec.bind_args(operand.args)
+            except RegistryError:
+                bound_args = dict(operand.args)
+            argument_specs = {argument.name: argument for argument in spec.arguments}
+            for argument_name, value in bound_args.items():
+                argument_spec = argument_specs.get(argument_name)
+                nested_operands = tuple(iter_nested_operands(value))
+                if argument_spec is not None and nested_operands:
+                    data_type = self._function_argument_type(
+                        value,
+                        source_fields,
+                        assigned_types,
+                    )
+                    if data_type is not None and not self._function_argument_type_matches(
+                        data_type,
+                        argument_spec.type_hint,
+                    ):
+                        self._add(
+                            result,
+                            "SPARK_CUSTOM_FUNCTION_ARG_TYPE_INCOMPATIBLE",
+                            f"Argument {argument_name!r} for "
+                            f"{operand.function_name!r} has Spark type "
+                            f"{data_type.simpleString()}, which is incompatible "
+                            f"with {argument_spec.type_hint!r}.",
+                            object_type,
+                            object_id,
+                            details={
+                                "argument_name": argument_name,
+                                "spark_type": data_type.simpleString(),
+                                "expected_type": argument_spec.type_hint,
+                            },
+                        )
+                if (
+                    (spec.return_type_hint or "").lower() == f"common_type:{argument_name.lower()}"
+                    and isinstance(value, (list, tuple, set))
+                    and self._function_argument_items_conflict(
+                        value,
+                        source_fields,
+                        assigned_types,
+                    )
+                ):
+                    self._add(
+                        result,
+                        "SPARK_CUSTOM_FUNCTION_COMMON_TYPE_CONFLICT",
+                        f"Function {operand.function_name!r} cannot resolve a "
+                        f"safe common Spark type from argument {argument_name!r}.",
+                        object_type,
+                        object_id,
+                        details={"argument_name": argument_name},
+                    )
+                for nested_operand in nested_operands:
+                    validate_operand(
+                        nested_operand,
+                        object_type=object_type,
+                        object_id=object_id,
+                    )
+
+        def validate_group(group: ConditionGroup) -> None:
+            for condition in group.conditions:
+                if condition.active_flag:
+                    validate_operand(
+                        condition.left,
+                        object_type=ObjectType.CONDITION,
+                        object_id=condition.condition_id,
+                    )
+                    validate_operand(
+                        condition.right,
+                        object_type=ObjectType.CONDITION,
+                        object_id=condition.condition_id,
+                    )
+            for child in group.groups:
+                validate_group(child)
+
+        for rule in self._active_rules(ruleset):
+            validate_group(rule.root_group)
+            for assignment in rule.assignments:
+                validate_operand(
+                    assignment.value,
+                    object_type=ObjectType.ASSIGNMENT,
+                    object_id=assignment.assignment_id,
+                )
+
+    def _function_argument_type(
+        self,
+        value: Any,
+        source_fields: dict[str, T.DataType],
+        assigned_types: dict[str, T.DataType] | None,
+    ) -> T.DataType | None:
+        """Infer one argument type, including collections of operands."""
+        if isinstance(value, Operand):
+            return self._operand_type(value, source_fields, assigned_types)
+        if isinstance(value, MappingABC):
+            if any(iter_nested_operands(value)):
+                return None
+            return self._literal_type(value)
+        if isinstance(value, (list, tuple, set)):
+            items = sorted(value, key=repr) if isinstance(value, set) else value
+            element_type: T.DataType | None = None
+            for item in items:
+                item_type = self._function_argument_type(
+                    item,
+                    source_fields,
+                    assigned_types,
+                )
+                if item_type is None:
+                    continue
+                element_type = (
+                    item_type
+                    if element_type is None
+                    else self._common_type(element_type, item_type)
+                )
+                if element_type is None:
+                    return None
+            return T.ArrayType(element_type or T.NullType(), True)
+        return self._literal_type(value)
+
+    def _function_argument_items_conflict(
+        self,
+        values: list[Any] | tuple[Any, ...] | set[Any],
+        source_fields: dict[str, T.DataType],
+        assigned_types: dict[str, T.DataType] | None,
+    ) -> bool:
+        """Return whether known item types lack a safe common Spark type."""
+        items = sorted(values, key=repr) if isinstance(values, set) else values
+        common_type: T.DataType | None = None
+        for item in items:
+            item_type = self._function_argument_type(
+                item,
+                source_fields,
+                assigned_types,
+            )
+            if item_type is None:
+                continue
+            if common_type is None:
+                common_type = item_type
+                continue
+            common_type = self._common_type(common_type, item_type)
+            if common_type is None:
+                return True
+        return False
+
+    def _function_argument_type_matches(
+        self,
+        data_type: T.DataType,
+        type_hint: str,
+    ) -> bool:
+        """Return whether a known Spark type satisfies an argument contract."""
+        if isinstance(data_type, T.NullType):
+            return True
+        if type_hint == "any":
+            return True
+        if type_hint == "string":
+            return isinstance(data_type, T.StringType)
+        if type_hint == "integer":
+            return isinstance(data_type, INTEGRAL_TYPES)
+        if type_hint == "number":
+            return isinstance(
+                data_type,
+                (*INTEGRAL_TYPES, T.FloatType, T.DoubleType, T.DecimalType),
+            )
+        if type_hint == "boolean":
+            return isinstance(data_type, T.BooleanType)
+        if type_hint == "date":
+            return isinstance(data_type, T.DateType)
+        if type_hint == "timestamp":
+            return isinstance(data_type, TIMESTAMP_TYPES)
+        if type_hint == "mapping":
+            return isinstance(data_type, (T.MapType, T.StructType))
+        if type_hint in {
+            "sequence",
+            "string_sequence",
+            "integer_sequence",
+            "date_sequence",
+        }:
+            if not isinstance(data_type, T.ArrayType):
+                return False
+            if isinstance(data_type.elementType, T.NullType):
+                return True
+            element_hint = {
+                "sequence": "any",
+                "string_sequence": "string",
+                "integer_sequence": "integer",
+                "date_sequence": "date",
+            }[type_hint]
+            return self._function_argument_type_matches(
+                data_type.elementType,
+                element_hint,
+            )
+        return False
+
     def _validate_temporal_condition_types(
         self,
         ruleset: Ruleset,
@@ -535,9 +738,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                 ):
                     type_names = sorted(
                         {
-                            data_type.simpleString()
-                            if data_type is not None
-                            else "unknown"
+                            data_type.simpleString() if data_type is not None else "unknown"
                             for data_type in collection_types
                         }
                     )
@@ -548,10 +749,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                         result,
                     )
                 return
-            if not (
-                self._is_temporal_type(left_type)
-                or self._is_temporal_type(right_type)
-            ):
+            if not (self._is_temporal_type(left_type) or self._is_temporal_type(right_type)):
                 return
             if left_type == right_type:
                 return
@@ -677,6 +875,8 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                     normalized_hint is not None
                     and normalized_hint not in SPARK_TYPE_HINTS
                     and normalized_hint != "any"
+                    and not normalized_hint.startswith("same_as:")
+                    and not normalized_hint.startswith("common_type:")
                 ):
                     self._add(
                         result,
@@ -789,11 +989,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
             if isinstance(operand.value, (list, tuple, set)):
                 if operand.value_type:
                     element_type = SPARK_TYPE_HINTS.get(operand.value_type.lower())
-                    return (
-                        T.ArrayType(element_type, True)
-                        if element_type is not None
-                        else None
-                    )
+                    return T.ArrayType(element_type, True) if element_type is not None else None
                 return self._literal_type(operand.value)
             if isinstance(operand.value, MappingABC):
                 return self._literal_type(operand.value)
@@ -801,8 +997,60 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                 return SPARK_TYPE_HINTS.get(operand.value_type.lower())
             return self._literal_type(operand.value)
         if isinstance(operand, CustomFunctionOperand):
-            hint = self._custom_return_type_hint(operand)
-            return SPARK_TYPE_HINTS.get(hint.lower()) if hint else None
+            return self._custom_return_type(
+                operand,
+                source_fields,
+                assigned_types,
+            )
+        return None
+
+    def _custom_return_type(
+        self,
+        operand: CustomFunctionOperand,
+        source_fields: dict[str, T.DataType],
+        assigned_types: dict[str, T.DataType] | None,
+    ) -> T.DataType | None:
+        """Resolve fixed and argument-derived custom-function return types."""
+        if self._function_registry is None:
+            return None
+        if not self._function_registry.has_spec(operand.function_name):
+            return None
+        spec = self._function_registry.get_spec(operand.function_name)
+        hint = spec.return_type_hint
+        if hint is None:
+            return None
+        normalized_hint = hint.lower()
+        fixed = SPARK_TYPE_HINTS.get(normalized_hint)
+        if fixed is not None:
+            return fixed
+        try:
+            bound_args = spec.bind_args(operand.args)
+        except RegistryError:
+            return None
+        if normalized_hint.startswith("same_as:"):
+            argument_name = normalized_hint.partition(":")[2]
+            if argument_name not in bound_args:
+                return None
+            return self._function_argument_type(
+                bound_args[argument_name],
+                source_fields,
+                assigned_types,
+            )
+        if normalized_hint.startswith("common_type:"):
+            argument_name = normalized_hint.partition(":")[2]
+            if argument_name not in bound_args:
+                return None
+            argument_type = self._function_argument_type(
+                bound_args[argument_name],
+                source_fields,
+                assigned_types,
+            )
+            return (
+                argument_type.elementType
+                if isinstance(argument_type, T.ArrayType)
+                and not isinstance(argument_type.elementType, T.NullType)
+                else None
+            )
         return None
 
     def _default_is_compatible(
@@ -888,9 +1136,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
             if item_type is None:
                 return None
             element_type = (
-                item_type
-                if element_type is None
-                else self._common_type(element_type, item_type)
+                item_type if element_type is None else self._common_type(element_type, item_type)
             )
             if element_type is None:
                 return None
@@ -980,11 +1226,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
             return True
         if operand.value_type is None and isinstance(value, bool):
             return isinstance(target_type, T.BooleanType)
-        if (
-            operand.value_type is None
-            and isinstance(value, int)
-            and not isinstance(value, bool)
-        ):
+        if operand.value_type is None and isinstance(value, int) and not isinstance(value, bool):
             for type_class, limits in INTEGRAL_LIMITS.items():
                 if isinstance(target_type, type_class):
                     return limits[0] <= value <= limits[1]
@@ -995,10 +1237,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         if operand.value_type is None and isinstance(value, float):
             return isinstance(target_type, (T.FloatType, T.DoubleType))
         if isinstance(value, Decimal):
-            return (
-                isinstance(target_type, T.DecimalType)
-                and decimal_value_fits(value, target_type)
-            )
+            return isinstance(target_type, T.DecimalType) and decimal_value_fits(value, target_type)
         return None
 
     def _common_type(
@@ -1017,12 +1256,8 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         ):
             return T.DoubleType()
         if (
-            isinstance(left, INTEGRAL_TYPES)
-            and isinstance(right, (T.FloatType, T.DoubleType))
-        ) or (
-            isinstance(right, INTEGRAL_TYPES)
-            and isinstance(left, (T.FloatType, T.DoubleType))
-        ):
+            isinstance(left, INTEGRAL_TYPES) and isinstance(right, (T.FloatType, T.DoubleType))
+        ) or (isinstance(right, INTEGRAL_TYPES) and isinstance(left, (T.FloatType, T.DoubleType))):
             return T.DoubleType()
         if isinstance(left, T.DecimalType) and isinstance(right, T.DecimalType):
             return self._common_decimal_type(left, right)
@@ -1057,11 +1292,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
             INTEGRAL_DECIMAL_DIGITS[type(integral_type)],
         )
         precision = integral_digits + decimal_type.scale
-        return (
-            T.DecimalType(precision, decimal_type.scale)
-            if precision <= 38
-            else None
-        )
+        return T.DecimalType(precision, decimal_type.scale) if precision <= 38 else None
 
     def _is_temporal_type(self, data_type: T.DataType) -> bool:
         """Return whether a type is a Spark date or timestamp representation."""
