@@ -1,6 +1,7 @@
 import pytest
 from pyspark.sql import types as T
 
+from rules_engine import RulesetCoverageAnalyzer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.registry import FunctionRegistry
 from rules_engine.runtime import SparkRowEvaluator
@@ -9,6 +10,8 @@ from rules_engine.spark_runtime import (
     _result_struct,
     result_field_names,
 )
+from rules_engine.standard_functions import STANDARD_FUNCTION_VERSION
+from rules_engine.version import __version__
 
 
 class NoOpRepository:
@@ -69,6 +72,12 @@ def _payload(*, version="1"):
 
 
 # Audit contracts and Python/Spark differential behavior
+
+
+def test_public_coverage_export_and_metadata_versions_stay_aligned():
+    """The documented analyzer imports publicly and registry metadata uses engine version."""
+    assert RulesetCoverageAnalyzer.__name__ == "RulesetCoverageAnalyzer"
+    assert STANDARD_FUNCTION_VERSION == __version__
 
 
 def test_full_audit_controls_detailed_schema_and_payload():

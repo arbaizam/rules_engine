@@ -8,6 +8,7 @@ The compiler performs shape checks and enum parsing. Semantic checks remain in
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -31,6 +32,7 @@ from rules_engine.models import (
     Rule,
     Ruleset,
 )
+from rules_engine.standard_functions import to_timestamp, to_timestamp_ntz
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -471,6 +473,7 @@ class YamlRulesetCompiler:
                 },
                 default_if_null=default_if_null,
             )
+        raise CompilationError(f"Unsupported operand kind: {key}")
 
     def _compile_default_if_null(self, value: Any) -> LiteralOperand:
         """Compile an operand's non-null literal fallback."""
@@ -541,14 +544,27 @@ class YamlRulesetCompiler:
             raise CompilationError("Numeric literals must be finite.")
         if isinstance(value, Decimal) and not value.is_finite():
             raise CompilationError("Decimal literals must be finite.")
-        if normalized_type == "date" and value is not None:
+        if normalized_type is not None:
+            return self._normalize_typed_literal(value, normalized_type)
+        if isinstance(value, float):
+            return Decimal(str(value))
+        return value
+
+    def _normalize_typed_literal(self, value: Any, normalized_type: str) -> Any:
+        """Normalize one non-collection literal according to its declared type."""
+        if value is None:
+            return None
+        if normalized_type == "date":
             if isinstance(value, datetime):
                 return value.date()
             if isinstance(value, date):
                 return value
             if isinstance(value, str):
+                text = value.strip()
                 try:
-                    return date.fromisoformat(value.strip())
+                    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) is None:
+                        raise ValueError("Expected ISO date format YYYY-MM-DD.")
+                    return date.fromisoformat(text)
                 except ValueError as exc:
                     raise CompilationError(
                         f"Date literal must use ISO YYYY-MM-DD format, found {value!r}."
@@ -556,7 +572,27 @@ class YamlRulesetCompiler:
             raise CompilationError(
                 f"Date literal must be a date or ISO YYYY-MM-DD string, found {value!r}."
             )
-        if normalized_type == "decimal" and value is not None:
+        if normalized_type in {"timestamp", "timestamp_ntz"}:
+            converter = to_timestamp if normalized_type == "timestamp" else to_timestamp_ntz
+            try:
+                return converter(value)
+            except (TypeError, ValueError) as exc:
+                representation = (
+                    "an ISO timestamp with a UTC offset"
+                    if normalized_type == "timestamp"
+                    else "an ISO timestamp without a UTC offset"
+                )
+                raise CompilationError(
+                    f"{normalized_type} literal must be a datetime or {representation}, "
+                    f"found {value!r}."
+                ) from exc
+        if normalized_type in {"boolean", "bool"}:
+            if not isinstance(value, bool):
+                raise CompilationError(
+                    f"Boolean literal must be an actual boolean, found {value!r}."
+                )
+            return value
+        if normalized_type == "decimal":
             try:
                 decimal_value = Decimal(str(value))
             except (InvalidOperation, ValueError) as exc:
@@ -568,10 +604,6 @@ class YamlRulesetCompiler:
             return decimal_value
         if normalized_type in {"number", "float", "double"} and isinstance(value, Decimal):
             return float(value)
-        if normalized_type is not None:
-            return value
-        if isinstance(value, float):
-            return Decimal(str(value))
         return value
 
     def _enum(self, enum_type: type, value: str, label: str) -> Any:

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -429,6 +429,79 @@ def test_explicit_date_literal_normalizes_quoted_iso_text():
 
     literal = ruleset.rules[0].root_group.conditions[0].right
     assert literal.value == date(2024, 2, 29)
+
+
+@pytest.mark.parametrize(
+    ("value_type", "authored", "expected"),
+    [
+        (
+            "timestamp",
+            "2024-02-29T05:00:00+05:00",
+            datetime(2024, 2, 29, tzinfo=timezone.utc),
+        ),
+        (
+            "timestamp_ntz",
+            "2024-02-29T05:00:00",
+            datetime(2024, 2, 29, 5, 0),  # noqa: DTZ001 - expected NTZ value.
+        ),
+    ],
+)
+def test_explicit_timestamp_literals_normalize_to_datetime(value_type, authored, expected):
+    """Timestamp hints compile strings into the runtime representation they declare."""
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["right"] = {
+        "literal": authored,
+        "value_type": value_type,
+    }
+
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+
+    assert ruleset.rules[0].root_group.conditions[0].right.value == expected
+
+
+@pytest.mark.parametrize(
+    ("value_type", "authored"),
+    [
+        ("timestamp", "2024-02-29T05:00:00"),
+        ("timestamp_ntz", "2024-02-29T05:00:00Z"),
+    ],
+)
+def test_explicit_timestamp_literals_enforce_offset_representation(value_type, authored):
+    """Timestamp and timestamp_ntz hints reject the opposite offset representation."""
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["right"] = {
+        "literal": authored,
+        "value_type": value_type,
+    }
+
+    with pytest.raises(CompilationError, match=f"{value_type} literal"):
+        YamlRulesetCompiler().compile_payload(payload)
+
+
+@pytest.mark.parametrize("value_type", ["boolean", "bool"])
+def test_boolean_literal_hint_requires_an_actual_boolean(value_type):
+    """Quoted boolean-looking text fails compilation instead of creating a dead rule."""
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["right"] = {
+        "literal": "true",
+        "value_type": value_type,
+    }
+
+    with pytest.raises(CompilationError, match="actual boolean"):
+        YamlRulesetCompiler().compile_payload(payload)
+
+
+@pytest.mark.parametrize("authored", ["20240229", "2024-W09-4"])
+def test_explicit_date_literal_rejects_noncanonical_iso_forms(authored):
+    """Date hints accept only the documented YYYY-MM-DD spelling."""
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["right"] = {
+        "literal": authored,
+        "value_type": "date",
+    }
+
+    with pytest.raises(CompilationError, match="ISO YYYY-MM-DD"):
+        YamlRulesetCompiler().compile_payload(payload)
 
 
 def test_canonical_string_operators_compile():

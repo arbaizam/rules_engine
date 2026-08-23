@@ -1,5 +1,8 @@
 from dataclasses import fields
 
+import pytest
+
+from rules_engine.exceptions import RepositoryError
 from rules_engine.models import FunctionRegistryRow
 from rules_engine.repository import RulesEngineTableNames, SparkDeltaRulesetRepository
 
@@ -78,6 +81,16 @@ def test_table_names_can_be_built_from_schema():
     assert table_names.function_registry == "catalog.schema.function_registry"
 
 
+@pytest.mark.parametrize(
+    "table_name",
+    ["catalog.schema.table;DROP_TABLE", "catalog..table", "four.part.table.name"],
+)
+def test_table_names_reject_unsafe_spark_identifiers(table_name):
+    """Operator-provided table names cannot escape into generated Spark SQL."""
+    with pytest.raises(RepositoryError, match="safe one-, two-, or three-part"):
+        RulesEngineTableNames(table_name, "function_registry")
+
+
 def test_create_base_tables_uses_explicit_delta_ddl_with_not_null_columns():
     """
     What: Creates metadata tables through SQL DDL with NOT NULL columns.
@@ -96,10 +109,10 @@ def test_create_base_tables_uses_explicit_delta_ddl_with_not_null_columns():
     repository.create_base_tables(mode="overwrite")
 
     assert spark.created_frames == []
-    assert any("DROP TABLE IF EXISTS ruleset_versions" in query for query in spark.queries)
-    assert any("DROP TABLE IF EXISTS function_registry" in query for query in spark.queries)
-    assert any("CREATE TABLE ruleset_versions" in query for query in spark.queries)
-    assert any("CREATE TABLE function_registry" in query for query in spark.queries)
+    assert any("DROP TABLE IF EXISTS `ruleset_versions`" in query for query in spark.queries)
+    assert any("DROP TABLE IF EXISTS `function_registry`" in query for query in spark.queries)
+    assert any("CREATE TABLE `ruleset_versions`" in query for query in spark.queries)
+    assert any("CREATE TABLE `function_registry`" in query for query in spark.queries)
     assert any("ruleset_id STRING NOT NULL" in query for query in spark.queries)
     assert any("payload_json STRING NOT NULL" in query for query in spark.queries)
     assert any("function_name STRING NOT NULL" in query for query in spark.queries)
@@ -125,5 +138,9 @@ def test_create_base_tables_uses_if_not_exists_for_ignore_mode():
     repository.create_base_tables(mode="ignore")
 
     assert not any("DROP TABLE" in query for query in spark.queries)
-    assert any("CREATE TABLE IF NOT EXISTS ruleset_versions" in query for query in spark.queries)
-    assert any("CREATE TABLE IF NOT EXISTS function_registry" in query for query in spark.queries)
+    assert any(
+        "CREATE TABLE IF NOT EXISTS `ruleset_versions`" in query for query in spark.queries
+    )
+    assert any(
+        "CREATE TABLE IF NOT EXISTS `function_registry`" in query for query in spark.queries
+    )

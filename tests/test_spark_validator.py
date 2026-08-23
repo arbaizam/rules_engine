@@ -11,7 +11,8 @@ from rules_engine.registry import (
     FunctionRegistry,
 )
 from rules_engine.serializer import DeltaRowSerializer
-from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
+from rules_engine.spark_types import decimal_value_fits
+from rules_engine.spark_validator import SPARK_TYPE_HINTS, SparkRulesetCompatibilityValidator
 from rules_engine.standard_functions import register_standard_functions
 
 
@@ -406,7 +407,67 @@ def test_spark_validator_accepts_yaml_fraction_for_existing_decimal_target():
 
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
 
+    trailing_zero_ruleset = YamlRulesetCompiler().compile_payload(
+        _payload({"target": Decimal("0.10")})
+    )
+    trailing_zero_schema = T.StructType(
+        [
+            T.StructField("status", T.StringType(), True),
+            T.StructField("target", T.DecimalType(18, 1), True),
+        ]
+    )
+    trailing_zero_result = SparkRulesetCompatibilityValidator().validate(
+        trailing_zero_ruleset,
+        trailing_zero_schema,
+    )
+
     assert result.passed
+    assert trailing_zero_result.passed
+    assert decimal_value_fits(Decimal("0.10"), T.DecimalType(18, 1))
+    assert not decimal_value_fits(Decimal("0.15"), T.DecimalType(18, 1))
+    assert decimal_value_fits(Decimal(10), T.DecimalType(3, -1))
+    assert not decimal_value_fits(Decimal(15), T.DecimalType(3, -1))
+
+
+def test_compiled_literals_honor_every_fixed_spark_type_hint():
+    """Every supported value_type compiles to a compatible Python worker value."""
+    representatives = {
+        "string": "A",
+        "str": "A",
+        "integer": 1,
+        "int": 1,
+        "long": 1,
+        "number": 1.5,
+        "float": 1.5,
+        "double": 1.5,
+        "decimal": "1.25",
+        "boolean": True,
+        "bool": True,
+        "date": "2024-02-29",
+        "timestamp": "2024-02-29T00:00:00+00:00",
+        "timestamp_ntz": "2024-02-29T00:00:00",
+    }
+    validator = SparkRulesetCompatibilityValidator()
+
+    assert set(representatives) == set(SPARK_TYPE_HINTS)
+    for value_type, authored in representatives.items():
+        payload = _payload({"target": {"literal": authored, "value_type": value_type}})
+        literal = (
+            YamlRulesetCompiler()
+            .compile_payload(payload)
+            .rules[0]
+            .assignments[0]
+            .value.value
+        )
+        declared_type = SPARK_TYPE_HINTS[value_type]
+        if isinstance(declared_type, T.DecimalType):
+            assert isinstance(literal, Decimal)
+            assert decimal_value_fits(literal, declared_type)
+        elif hasattr(T, "TimestampNTZType") and isinstance(declared_type, T.TimestampNTZType):
+            assert isinstance(literal, datetime)
+            assert literal.tzinfo is None
+        else:
+            assert validator._literal_type(literal) == declared_type
 
 
 def test_spark_validator_infers_decimal_for_new_yaml_fraction_target():

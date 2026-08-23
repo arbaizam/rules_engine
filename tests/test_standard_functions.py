@@ -241,6 +241,9 @@ def test_calendar_boundary_and_completed_period_functions_are_explicit():
     assert sf.date_part(leap_day, "day_of_week") == 4
     assert sf.quarter_start(date(2024, 5, 15)) == date(2024, 4, 1)
     assert sf.quarter_end(date(2024, 5, 15)) == date(2024, 6, 30)
+    assert sf.quarter_end(date(2023, 3, 31)) == date(2023, 3, 31)
+    assert sf.quarter_end(date(2024, 9, 30)) == date(2024, 9, 30)
+    assert sf.quarter_end(date(9999, 12, 31)) == date(9999, 12, 31)
     assert sf.year_start(leap_day) == date(2024, 1, 1)
     assert sf.year_end(leap_day) == date(2024, 12, 31)
 

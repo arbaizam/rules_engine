@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rules-engine"
-version = "2.1"
+dynamic = ["version"]
 description = "Strict YAML rules engine metadata package for Databricks."
 requires-python = ">=3.10"
 dependencies = [
@@ -20,6 +20,9 @@ test = [
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["rules_engine*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "rules_engine.version.__version__"}
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

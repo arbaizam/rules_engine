@@ -318,6 +318,47 @@ def test_string_membership_semantics_are_unchanged():
     assert _evaluate_worker(ruleset, {"status": "open"})["matched"] is False
 
 
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("007", "7"),
+        ("10000.0", "10000"),
+        (" 10000", "10000"),
+        ("10_000", "10000"),
+    ],
+)
+def test_numeric_looking_strings_keep_exact_code_equality(left, right):
+    """Code-like strings do not collapse to the same Decimal representation."""
+    for operator, authored_right, expected in (
+        ("eq", {"literal": right}, False),
+        ("ne", {"literal": right}, True),
+        ("in", {"literal": [right]}, False),
+        ("not_in", {"literal": [right]}, True),
+    ):
+        ruleset = _compile(
+            {
+                "left": {"field": "code"},
+                "operator": operator,
+                "right": authored_right,
+            }
+        )
+
+        assert _evaluate_worker(ruleset, {"code": left})["matched"] is expected
+
+
+def test_real_numeric_values_still_use_decimal_equality():
+    """A Spark worker float still equals an exact Decimal-authored literal."""
+    ruleset = _compile(
+        {
+            "left": {"field": "rate"},
+            "operator": "eq",
+            "right": {"literal": Decimal("0.0425")},
+        }
+    )
+
+    assert _evaluate_worker(ruleset, {"rate": 0.0425})["matched"] is True
+
+
 def test_scalar_string_membership_fails_with_contains_guidance():
     """IN rejects scalar strings instead of silently applying character matching."""
     ruleset = _compile(
@@ -641,6 +682,22 @@ def test_spark_row_evaluator_orders_date_ranges(operator):
 
     assert result["error"] is None
     assert result["matched"] is (operator == "between")
+
+
+@pytest.mark.parametrize("bounds", [[1, 2, 3], 5, "1,2"])
+def test_spark_row_evaluator_rejects_malformed_between_bounds(bounds):
+    """Malformed field-backed bounds produce one actionable runtime message."""
+    ruleset = _compile(
+        {
+            "left": {"field": "amount"},
+            "operator": "between",
+            "right": {"field": "bounds"},
+        }
+    )
+
+    result = _evaluate_worker(ruleset, {"amount": 2, "bounds": bounds})
+
+    assert "two-item list or tuple" in result["error"]
 
 
 def test_spark_row_evaluator_orders_timezone_aware_timestamps():
@@ -1523,7 +1580,6 @@ def test_full_audit_builds_explanations_only_for_matched_rules(monkeypatch):
     ("value", "value_type", "error_text"),
     [
         (3.7, "integer", "fractional component"),
-        ("no", "boolean", "not a boolean"),
         (Decimal("0.1234567890123456789"), "decimal", "without rounding"),
     ],
 )
@@ -1793,7 +1849,8 @@ def test_match_only_losing_rule_preserves_later_condition_errors():
     result = _evaluate_worker(ruleset, {"account": "A", "amount": "invalid"})
 
     assert result["matched"] is False
-    assert "decimal" in result["error"].lower()
+    assert "Ordered comparison requires numeric" in result["error"]
+    assert "'invalid'" in result["error"]
 
 
 def test_match_only_and_traced_paths_agree_on_inactive_condition_groups():

@@ -793,26 +793,6 @@ class SparkRowEvaluator:
                 "Operators in/not_in require a collection-valued right operand. "
                 "Use contains/not_contains for substring checks."
             )
-        numeric_left = self._numeric_decimal_or_none(left)
-        if numeric_left is not None:
-            for item in right:
-                numeric_item = self._numeric_decimal_or_none(item)
-                if numeric_item is not None:
-                    if abs(numeric_left - numeric_item) <= tolerance_abs:
-                        return True
-                elif self._equals(left, item, tolerance_abs):
-                    return True
-            return False
-        if self._is_temporal(left):
-            for item in right:
-                temporal_left, temporal_item = self._temporal_pair(
-                    left,
-                    item,
-                    tolerance_abs,
-                )
-                if temporal_left == temporal_item:
-                    return True
-            return False
         return any(self._equals(left, item, tolerance_abs) for item in right)
 
     def _between(
@@ -822,6 +802,11 @@ class SparkRowEvaluator:
         tolerance_abs: Decimal,
     ) -> bool:
         """Return whether ``left`` falls within the inclusive bound pair."""
+        if not isinstance(right, (list, tuple)) or len(right) != 2:
+            raise TypeError(
+                "Operators between/not_between require a two-item list or tuple "
+                f"right operand, found {right!r}."
+            )
         lower, upper = right
         ordered_lower, ordered_left = self._ordered_pair(
             lower,
@@ -839,8 +824,11 @@ class SparkRowEvaluator:
         """
         Compare equality, applying absolute tolerance for numeric values.
         """
-        if self._is_numeric(left) and self._is_numeric(right):
-            return abs(self._decimal(left) - self._decimal(right)) <= tolerance_abs
+        if self._has_numeric_runtime_type(left) or self._has_numeric_runtime_type(right):
+            numeric_left = self._numeric_decimal_or_none(left)
+            numeric_right = self._numeric_decimal_or_none(right)
+            if numeric_left is not None and numeric_right is not None:
+                return abs(numeric_left - numeric_right) <= tolerance_abs
         if self._is_temporal(left) or self._is_temporal(right):
             temporal_left, temporal_right = self._temporal_pair(
                 left,
@@ -928,11 +916,9 @@ class SparkRowEvaluator:
             return "date"
         return None
 
-    def _is_numeric(self, value: Any) -> bool:
-        """
-        Return whether a value can be safely treated as a non-boolean number.
-        """
-        return self._numeric_decimal_or_none(value) is not None
+    def _has_numeric_runtime_type(self, value: Any) -> bool:
+        """Return whether Spark supplies ``value`` as a concrete numeric type."""
+        return not isinstance(value, bool) and isinstance(value, (int, float, Decimal))
 
     def _numeric_decimal_or_none(self, value: Any) -> Decimal | None:
         """Return a finite numeric value, or ``None`` for non-numeric input."""
@@ -950,9 +936,15 @@ class SparkRowEvaluator:
         """
         Convert a runtime value to ``Decimal`` for numeric comparison.
         """
-        converted = Decimal(str(value))
+        try:
+            converted = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError(
+                "Ordered comparison requires numeric or matching temporal operands; "
+                f"found {value!r}."
+            ) from exc
         if not converted.is_finite():
-            raise ValueError("Numeric comparison values must be finite.")
+            raise ValueError(f"Numeric comparison values must be finite; found {value!r}.")
         return converted
 
     def _sql_like(self, value: str, pattern: str) -> bool:

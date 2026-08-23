@@ -243,6 +243,7 @@ def test_retire_records_lifecycle_state_and_actor():
     repo.retire("rs1", "1", retired_by="engineer")
 
     update_sql = "\n".join(spark.queries)
+    assert "UPDATE `ruleset_versions`" in update_sql
     assert "status = 'retired'" in update_sql
     assert "retired_by = 'engineer'" in update_sql
     assert "retired_at = '2026-04-30T23:59:59+00:00'" in update_sql
@@ -291,7 +292,7 @@ def test_save_function_registry_rows_skips_existing_rows_when_update_disabled():
     )
 
     merge_sql = "\n".join(spark.queries)
-    assert "MERGE INTO function_registry" in merge_sql
+    assert "MERGE INTO `function_registry`" in merge_sql
     assert "WHEN MATCHED THEN UPDATE" not in merge_sql
     assert "WHEN NOT MATCHED THEN INSERT" in merge_sql
     assert spark.catalog.dropped_views

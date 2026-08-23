@@ -224,8 +224,8 @@ notably for null literals and custom-function results assigned to a new field.
 | Exact decimal | `decimal` | Mapped to `DecimalType(38,18)` when a concrete target type is not already known. Values must be finite and fit. |
 | Boolean | `boolean`, `bool` | Values must be actual booleans; strings are not coerced. |
 | Date | `date` | ISO `YYYY-MM-DD` strings are converted to Python dates during compilation. |
-| Timestamp | `timestamp` | The authored or returned value must be timestamp-compatible. |
-| Timestamp without timezone | `timestamp_ntz` | Available only when the installed PySpark runtime provides `TimestampNTZType`. |
+| Timestamp | `timestamp` | ISO strings must include a UTC offset and compile to a UTC-normalized Python `datetime`. |
+| Timestamp without timezone | `timestamp_ntz` | ISO strings must omit a UTC offset and compile to a naive Python `datetime`. Available only when the installed PySpark runtime provides `TimestampNTZType`. |
 | Polymorphic custom return | `any` | Allowed for a custom function only when Spark already knows the assignment target type. It cannot define a new target field. |
 | Same as one argument | `same_as:<argument_name>` | The result takes the Spark type of the named argument. We use this for `null_if`. |
 | Common type of array items | `common_type:<argument_name>` | The result takes the safe common Spark type of items in the named argument. We use this for `coalesce`. |
@@ -265,13 +265,13 @@ nested `default_if_null`.
 
 | Operator | Right operand | Allowed values or shapes | Definition |
 |---|---|---|---|
-| `eq` | Required | Comparable scalar values | Equality. Numeric equality uses `tolerance_abs`. |
-| `ne` | Required | Comparable scalar values | Negation of `eq`. Numeric inequality uses `tolerance_abs`. |
+| `eq` | Required | Comparable scalar values | Equality. Numeric equality uses `tolerance_abs` when at least one operand has a numeric runtime type; two strings use exact string equality. |
+| `ne` | Required | Comparable scalar values | Negation of `eq`. Numeric inequality uses the same typed-numeric rule. |
 | `gt` | Required | Numeric pair or matching temporal pair | Left is greater than right. Numeric tolerance moves the boundary outward. Temporal tolerance must be `0`. |
 | `ge` | Required | Numeric pair or matching temporal pair | Left is greater than or equal to right. Numeric tolerance is supported. |
 | `lt` | Required | Numeric pair or matching temporal pair | Left is less than right. Numeric tolerance is supported. |
 | `le` | Required | Numeric pair or matching temporal pair | Left is less than or equal to right. Numeric tolerance is supported. |
-| `in` | Required | Right side must resolve to a list, tuple, or set | True when left equals any right-side item. Numeric membership uses `tolerance_abs`. |
+| `in` | Required | Right side must resolve to a list, tuple, or set | True when left equals any right-side item. Numeric membership uses `tolerance_abs` when either compared item has a numeric runtime type; string codes remain exact. |
 | `not_in` | Required | Right side must resolve to a list, tuple, or set | Negation of `in`. Strings and mappings are not treated as collections. |
 | `between` | Required | Right side must be a two-item list or tuple | Inclusive lower and upper bounds. `tolerance_abs` must be `0`. |
 | `not_between` | Required | Right side must be a two-item list or tuple | Negation of inclusive `between`. `tolerance_abs` must be `0`. |
@@ -736,7 +736,7 @@ required value operand is null.
 | `array_size` | `values` | `integer` | Returns the item count. Null returns null; an empty array returns zero. |
 | `array_contains_any` | `values`, `candidates` | `boolean` | Returns true when at least one candidate is present. Empty candidates return false. |
 | `array_contains_all` | `values`, `candidates` | `boolean` | Returns true when every candidate is present. Empty candidates return true. |
-| `array_join` | `values`, `separator`; optional `skip_nulls=true` | `string` | Joins array items as text. With `skip_nulls=false`, any null item returns null. |
+| `array_join` | `values`, `separator`; optional `skip_nulls=true` | `string` | Alias of `concat_ws`; joins array items as text. With `skip_nulls=false`, any null item returns null. |
 
 Array functions require an actual array-like value. We intentionally reject a
 scalar string instead of treating it as a character array or silently wrapping
@@ -866,9 +866,9 @@ This is the easiest way to build a service for Databricks.
 | Parameter | Allowed values and default | Definition |
 |---|---|---|
 | `spark` | Active `SparkSession` | Session used for Delta reads, writes, and Spark evaluation. |
-| `schema` | Non-empty `catalog.schema`-style string | Base namespace used to derive default table names. The service does not create the schema. |
-| `ruleset_versions_table` | Full table-name string or `None` | Overrides `<schema>.ruleset_versions`. |
-| `function_registry_table` | Full table-name string or `None` | Overrides `<schema>.function_registry`. |
+| `schema` | Safe one- or two-part identifier such as `schema` or `catalog.schema` | Base namespace used to derive default table names. Each part must match `[A-Za-z_][A-Za-z0-9_]*`. The service does not create the schema. |
+| `ruleset_versions_table` | Safe one-, two-, or three-part table name or `None` | Overrides `<schema>.ruleset_versions`. |
+| `function_registry_table` | Safe one-, two-, or three-part table name or `None` | Overrides `<schema>.function_registry`. |
 | `register_standard` | `true` or `false`; default `true` | Registers standard specs and executable implementations in memory. It does not persist them. |
 
 Returns a configured service without creating tables or starting a Spark job.
@@ -1166,7 +1166,7 @@ outputs/                               Additional generated YAML artifacts
 ## Development checks
 
 ```powershell
-python -m ruff check src tests
+python -m ruff check .
 python -m pytest tests
 ```
 
@@ -1178,3 +1178,8 @@ Spark tests are skipped unless `RULES_ENGINE_RUN_SPARK_TESTS=1` is set.
   input DataFrame.
 - Support for YAML authoring only.
 - Custom functions run as registered Python callables inside the row UDF.
+- `like` and `not_like` support `%` and `_` wildcards but do not provide an
+  escape character for matching those characters literally.
+- Ruleset publication checks identities before append, but it does not provide
+  an atomic cross-writer uniqueness guarantee. Serialize concurrent publishers
+  or enforce uniqueness in the surrounding deployment workflow.

@@ -25,8 +25,9 @@ from rules_engine.registry import (
     CustomFunctionSpec,
     FunctionRegistry,
 )
+from rules_engine.version import __version__
 
-STANDARD_FUNCTION_VERSION = "2.1"
+STANDARD_FUNCTION_VERSION = __version__
 _ON_ERROR_VALUES = ("error", "null")
 _ROUNDING_MODES = {
     "half_up": ROUND_HALF_UP,
@@ -543,8 +544,11 @@ def quarter_start(value: Any) -> date | None:
 
 def quarter_end(value: Any) -> date | None:
     """Return the final calendar day of a date's quarter."""
-    start = quarter_start(value)
-    return None if start is None else date_add_days(date_add_months(start, 3), -1)
+    parsed = to_date(value)
+    if parsed is None:
+        return None
+    end_month = ((parsed.month - 1) // 3 + 1) * 3
+    return date(parsed.year, end_month, calendar.monthrange(parsed.year, end_month)[1])
 
 
 def year_start(value: Any) -> date | None:

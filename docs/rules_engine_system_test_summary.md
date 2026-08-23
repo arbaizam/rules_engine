@@ -15,13 +15,13 @@ does not run pytest itself.
 | ST-002 | Function registry table | Standard metadata is rerunnable, and caller-supplied function metadata persists with its permissions. |
 | ST-003 | YAML, publication, and Delta | The shipped fixture compiles, validates, publishes, loads unchanged, and retains its deterministic content hash. |
 | ST-004 | Repository identity | Both `(ruleset_id, version)` and `(ruleset_name, version)` reject overwrite attempts. |
-| ST-005 | Published-version loading | Name-only loading fails when more than one version is published, while explicit versions load correctly. |
-| ST-006 | Repository lifecycle | Retirement uses stable ID plus exact version, records its actor and time, removes that row from published loading, and cannot be repeated silently. |
+| ST-005 | Published-version loading | Continuing ST-004, name-only loading fails when more than one version is published, while explicit versions load correctly. |
+| ST-006 | Repository lifecycle | Continuing ST-004/ST-005, retirement uses stable ID plus exact version, records its actor and time, removes that row from published loading, and cannot be repeated silently. |
 | ST-007 | Spark output contract | Compact and full-audit success, no-match, and error rows have identical business results and exact ordered columns. |
-| ST-008 | Full-audit trace | Every condition reports its condition ID, containing group ID, group operator, active state, pass state, and source columns. |
+| ST-008 | Full-audit trace | Continuing ST-007, every condition reports its condition ID, containing group ID, group operator, active state, pass state, and source columns. |
 | ST-009 | Rule control flow | A matching `stop_on_match: true` rule commits its assignments and skips later rules. |
 | ST-010 | Prior assignments | Later rules read committed values through `assigned`, while assignments within one rule share a pre-rule snapshot. |
-| ST-011 | Null substitution | Numeric and text `default_if_null` values are applied before comparison, while explicit unresolved-null errors remain row errors. |
+| ST-011 | Null substitution | Numeric and text `default_if_null` values are applied before comparison. |
 | ST-012 | Assignment history | Full audit records the original value, each proposed value, overrides, and the final effective assignment. |
 | ST-013 | Typed worker values | Decimal, date, and nested struct assignments retain their Spark types and values across the Python-worker boundary. |
 | ST-014 | Custom-function worker | A registered custom function works in both a condition and an assignment inside a real Spark worker. |

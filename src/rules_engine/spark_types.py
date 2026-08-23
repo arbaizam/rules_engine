@@ -47,9 +47,18 @@ def decimal_literal_type(value: Decimal) -> T.DecimalType | None:
 
 def decimal_value_fits(value: Decimal, data_type: T.DecimalType) -> bool:
     """Return whether ``value`` fits a Spark decimal without loss."""
-    inferred = decimal_literal_type(value)
+    if not value.is_finite():
+        return False
+    if value.is_zero():
+        return True
+    _, authored_digits, authored_exponent = value.as_tuple()
+    digits = list(authored_digits)
+    exponent = authored_exponent
+    while digits and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    integral_digits = max(len(digits) + exponent, 0)
     return (
-        inferred is not None
-        and inferred.scale <= data_type.scale
-        and inferred.precision - inferred.scale <= data_type.precision - data_type.scale
+        exponent >= -data_type.scale
+        and integral_digits <= data_type.precision - data_type.scale
     )

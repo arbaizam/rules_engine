@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Protocol
@@ -33,6 +34,18 @@ from rules_engine.models import FunctionRegistryRow, Ruleset, RulesetVersionRow
 from rules_engine.serializer import DeltaRowSerializer
 
 logger = logging.getLogger(__name__)
+_IDENTIFIER_PART = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _quoted_identifier(value: str, label: str = "table name") -> str:
+    """Return a safely quoted one-, two-, or three-part Spark identifier."""
+    parts = value.split(".") if isinstance(value, str) else []
+    if not 1 <= len(parts) <= 3 or any(_IDENTIFIER_PART.fullmatch(part) is None for part in parts):
+        raise RepositoryError(
+            f"{label} must be a safe one-, two-, or three-part Spark identifier, "
+            f"found {value!r}."
+        )
+    return ".".join(f"`{part}`" for part in parts)
 
 
 @dataclass(frozen=True)
@@ -43,6 +56,11 @@ class RulesEngineTableNames:
 
     ruleset_versions: str
     function_registry: str
+
+    def __post_init__(self) -> None:
+        """Reject unsafe table identifiers before any Spark SQL is built."""
+        _quoted_identifier(self.ruleset_versions, "ruleset_versions")
+        _quoted_identifier(self.function_registry, "function_registry")
 
     @classmethod
     def from_schema(cls, schema: str) -> RulesEngineTableNames:
@@ -177,13 +195,14 @@ class SparkDeltaRulesetRepository:
                 "Base table creation mode must be one of: error, errorifexists, ignore, overwrite"
             )
         exists_clause = "IF NOT EXISTS " if normalized_mode == "ignore" else ""
+        quoted_table_name = _quoted_identifier(table_name)
         if normalized_mode == "overwrite":
-            self.spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+            self.spark.sql(f"DROP TABLE IF EXISTS {quoted_table_name}")
 
         column_sql = ",\n                ".join(ddl_columns)
         self.spark.sql(
             f"""
-            CREATE TABLE {exists_clause}{table_name} (
+            CREATE TABLE {exists_clause}{quoted_table_name} (
                 {column_sql}
             )
             USING DELTA
@@ -306,9 +325,10 @@ class SparkDeltaRulesetRepository:
             )
 
         retired_by = self._actor_or_system(retired_by)
+        ruleset_versions_table = _quoted_identifier(self.table_names.ruleset_versions)
         self.spark.sql(
             f"""
-            UPDATE {self.table_names.ruleset_versions}
+            UPDATE {ruleset_versions_table}
             SET status = {self._sql(RulesetStatus.RETIRED.value)},
                 retired_by = {self._sql_nullable(retired_by)},
                 retired_at = {self._sql_nullable(retired_at)}
@@ -422,10 +442,12 @@ class SparkDeltaRulesetRepository:
             )
             matched_clause = f"WHEN MATCHED THEN UPDATE SET {update_assignments}"
         try:
+            function_registry_table = _quoted_identifier(self.table_names.function_registry)
+            staging_view_name = _quoted_identifier(staging_view, "staging view")
             self.spark.sql(
                 f"""
-                MERGE INTO {self.table_names.function_registry} AS target
-                USING {staging_view} AS source
+                MERGE INTO {function_registry_table} AS target
+                USING {staging_view_name} AS source
                 ON target.function_name = source.function_name
                 {matched_clause}
                 WHEN NOT MATCHED THEN INSERT ({insert_columns})

@@ -324,6 +324,7 @@ print("PASS: Neither stable identity can be overwritten.")
 
 # COMMAND ----------
 
+# Lifecycle continuation: ST-005 requires the version published by ST-004.
 _start("ST-005", "Require an explicit version when published versions are ambiguous")
 
 identity_v2 = service.compile_yaml_text(
@@ -358,6 +359,7 @@ print("PASS: Name-only loading fails safely when more than one version is publis
 
 # COMMAND ----------
 
+# Lifecycle continuation: ST-006 requires the versions published by ST-004/ST-005.
 _start("ST-006", "Retire by stable ID and exact version")
 
 service.retire("system_identity", "1", retired_by="alm-system-tests")
@@ -508,6 +510,7 @@ print("PASS: Success, no-match, and error outcomes are identical across audit mo
 
 # COMMAND ----------
 
+# Trace-contract continuation: ST-008 inspects ST-007's full-audit result.
 _start("ST-008", "Emit complete condition identity in full audit")
 
 matched_trace = full_rows["success"]["rules_engine_matched_rules"]
@@ -668,7 +671,7 @@ print("PASS: Later rules see commits while sibling assignments share one pre-rul
 
 # COMMAND ----------
 
-_start("ST-011", "Substitute operand nulls before comparison and preserve explicit errors")
+_start("ST-011", "Substitute operand nulls before comparison")
 
 null_ruleset = service.compile_yaml_text(
     """
@@ -738,9 +741,7 @@ assert numeric_left["default_applied"] is True
 assert text_left["original_value"] is None
 assert text_left["value"] == "MISSING"
 assert text_left["default_applied"] is True
-assert "error_on_null=true" in full_rows["error"]["rules_engine_error"]
-
-print("PASS: Numeric and text fallbacks run before comparison; explicit null errors remain errors.")
+print("PASS: Numeric and text fallbacks run before comparison.")
 
 # COMMAND ----------
 

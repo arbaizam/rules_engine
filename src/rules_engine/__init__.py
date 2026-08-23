@@ -41,6 +41,7 @@ _LAZY_EXPORTS = {
     ),
     "CoverageReport": ("rules_engine.analytics", "CoverageReport"),
     "RuleCoverage": ("rules_engine.analytics", "RuleCoverage"),
+    "RulesetCoverageAnalyzer": ("rules_engine.analytics", "RulesetCoverageAnalyzer"),
 }
 
 
@@ -69,6 +70,7 @@ __all__ = [
     "RulesEngineService",
     "Ruleset",
     "RuleCoverage",
+    "RulesetCoverageAnalyzer",
     "RulesetValidator",
     "SparkRulesEngineRuntime",
     "SparkRulesetCompatibilityValidator",

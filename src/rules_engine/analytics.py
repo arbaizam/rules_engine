@@ -42,10 +42,12 @@ class CoverageReport:
 
     @property
     def dead_rule_ids(self) -> tuple[str, ...]:
+        """Return active rule IDs that matched no evaluated rows."""
         return tuple(rule.rule_id for rule in self.rules if rule.dead)
 
     @property
     def suspiciously_broad_rule_ids(self) -> tuple[str, ...]:
+        """Return active rule IDs at or above the configured broad threshold."""
         return tuple(rule.rule_id for rule in self.rules if rule.suspiciously_broad)
 
 
