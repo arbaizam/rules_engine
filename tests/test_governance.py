@@ -359,21 +359,74 @@ def test_publish_evaluator_and_spark_worker_share_rule_ordering_semantics():
     ):
         expected = row_evaluator.evaluate_row(ruleset, row)
         actual = spark_evaluator(FakeSparkRow(row))
-        if expected["assign"] is not None:
-            expected["assign"] = {
-                field: {
-                    "applied": field in expected["assign"],
-                    "value": expected["assign"].get(field),
-                }
-                for field in ("first", "shared", "after")
-            }
-        else:
-            expected["assign"] = {
-                field: {"applied": False, "value": None}
-                for field in ("first", "shared", "after")
-            }
 
         assert {
             key: actual[key]
             for key in ("matched", "matched_rule_ids", "assign")
         } == expected
+
+
+def test_expected_null_assignment_fails_when_the_target_was_not_applied():
+    """The publish gate cannot confuse an explicit null with no assignment."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "explicit_null_expectation",
+            "ruleset_name": "Explicit Null Expectation",
+            "version": "1",
+            "owner": "Data Quality",
+            "owner_department": "ALM Engineering",
+            "rules": [
+                {
+                    "rule_id": "open_bucket",
+                    "rule_name": "Open Bucket",
+                    "rule_order": 1,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "status"},
+                                "operator": "eq",
+                                "right": {"literal": "OPEN"},
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "open"},
+                },
+                {
+                    "rule_id": "closed_note",
+                    "rule_name": "Closed Note",
+                    "rule_order": 2,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "status"},
+                                "operator": "eq",
+                                "right": {"literal": "CLOSED"},
+                            }
+                        ]
+                    },
+                    "assign": {
+                        "note": {"literal": None, "value_type": "string"}
+                    },
+                },
+            ],
+            "expect": [
+                {
+                    "name": "open row must not claim note was cleared",
+                    "given": {"status": "OPEN"},
+                    "then": {"bucket": "open", "note": None},
+                },
+                {
+                    "name": "closed row explicitly clears note",
+                    "given": {"status": "CLOSED"},
+                    "then": {"note": None},
+                },
+            ],
+        }
+    )
+
+    result = RulesetTester(FunctionRegistry()).test(ruleset)
+
+    assert result.passed is False
+    assert result.failure_count == 1
+    assert "expected an applied value None" in result.cases[0].failures[0]
+    assert result.cases[1].passed is True

@@ -166,7 +166,7 @@ evaluation = service.evaluate_dataframe(
     version="1",
     key_columns=["account"],
     fail_on_error=True,
-)
+).persist()
 result_df = evaluation.results_df
 applied_df = evaluation.apply_assignments()
 
@@ -203,5 +203,6 @@ assert all(row["rules_engine_engine_version"] == rules_engine.__version__ for ro
 assert result_df.where(F.col("rules_engine_matched")).count() == 1
 assert applied_df.columns == ["account", "amount", "status", "review_bucket"]
 assert applied_df.where(F.col("account") == "A").first()["review_bucket"] == "high_value_open"
+evaluation.unpersist()
 
 print("Quickstart passed.")

@@ -161,9 +161,17 @@ class RulesetTester:
             return []
         if not isinstance(actual, Mapping):
             return [f"assign expected fields {sorted(expected)}, got {actual!r}"]
-        return [
-            f"assign.{field_name} expected {expected_value!r}, "
-            f"got {actual.get(field_name)!r}"
-            for field_name, expected_value in expected.items()
-            if actual.get(field_name) != expected_value
-        ]
+        failures: list[str] = []
+        for field_name, expected_value in expected.items():
+            outcome = actual.get(field_name)
+            if not isinstance(outcome, Mapping) or outcome.get("applied") is not True:
+                failures.append(
+                    f"assign.{field_name} expected an applied value "
+                    f"{expected_value!r}, got {outcome!r}"
+                )
+            elif outcome.get("value") != expected_value:
+                failures.append(
+                    f"assign.{field_name} expected {expected_value!r}, "
+                    f"got {outcome.get('value')!r}"
+                )
+        return failures

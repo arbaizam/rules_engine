@@ -95,8 +95,6 @@ RULESET_YAML_PATH = (
     Path(configured_ruleset_path).expanduser()
     if configured_ruleset_path
     else REPO_ROOT
-    / "bundles"
-    / "rules_engine"
     / "examples"
     / "rulesets"
     / "rules_engine_system_testing_rules.yaml"

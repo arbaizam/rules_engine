@@ -103,11 +103,23 @@ class SparkRowEvaluator:
         expected cases. It deliberately returns only stable business results,
         independent of Spark schemas and audit rendering.
         """
+        active_rules = tuple(
+            rule
+            for rule in sorted(ruleset.rules, key=lambda item: item.rule_order)
+            if rule.active_flag
+        )
+        assignment_targets = tuple(
+            dict.fromkeys(
+                assignment.target_field
+                for rule in active_rules
+                for assignment in rule.assignments
+            )
+        )
         matched_rule_ids: list[str] = []
         assignments: dict[str, Any] = {}
         assigned_values: dict[str, AssignedValue] = {}
-        for rule in sorted(ruleset.rules, key=lambda item: item.rule_order):
-            if not rule.active_flag or not self._rule_matches(
+        for rule in active_rules:
+            if not self._rule_matches(
                 rule,
                 row,
                 assigned_values,
@@ -135,7 +147,13 @@ class SparkRowEvaluator:
         return {
             "matched": bool(matched_rule_ids),
             "matched_rule_ids": matched_rule_ids,
-            "assign": assignments or None,
+            "assign": {
+                target_field: {
+                    "applied": target_field in assignments,
+                    "value": assignments.get(target_field),
+                }
+                for target_field in assignment_targets
+            },
         }
 
     def _evaluate_rule(

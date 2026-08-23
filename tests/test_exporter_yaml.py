@@ -13,16 +13,7 @@ from rules_engine.validator import RulesetValidator
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _SHIPPED_RULESETS = tuple(
     sorted(
-        [
-            *_REPOSITORY_ROOT.joinpath("bundles", "rules_engine", "rulesets").glob(
-                "*.yaml"
-            )
-        ]
-        + [
-            *_REPOSITORY_ROOT.joinpath(
-                "bundles", "rules_engine", "examples", "rulesets"
-            ).glob("*.yaml")
-        ]
+        [*_REPOSITORY_ROOT.joinpath("examples", "rulesets").glob("*.yaml")]
         + [*_REPOSITORY_ROOT.joinpath("outputs").glob("*.yaml")]
     )
 )

@@ -446,6 +446,58 @@ def test_dataframe_evaluation_persists_one_shared_plan(spark):
     assert not evaluation._evaluated_df.storageLevel.useMemory
 
 
+def test_persisted_projections_evaluate_custom_assignment_once_per_row(spark):
+    """Both public projections reuse one cached worker evaluation."""
+    invocation_count = spark.sparkContext.accumulator(0)
+
+    def count_assignment(*, value):
+        invocation_count.add(1)
+        return value
+
+    registry = FunctionRegistry()
+    registry.register(
+        CustomFunctionSpec(
+            function_name="count_assignment",
+            implementation_reference="tests.count_assignment",
+            arg_names=("value",),
+            allowed_in_condition_flag=False,
+            allowed_in_assignment_flag=True,
+            return_type_hint="string",
+        ),
+        count_assignment,
+    )
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "is_not_null",
+        },
+        assign={
+            "copied": {
+                "custom_function": {
+                    "name": "count_assignment",
+                    "args": {"value": {"field": "account"}},
+                }
+            }
+        },
+    )
+    evaluation = _evaluation(
+        spark.createDataFrame(
+            [("1", "A"), ("2", "B"), ("3", "C")],
+            ["row_id", "account"],
+        ).coalesce(1),
+        ruleset,
+        runtime=SparkRulesEngineRuntime(DummyRepository(), registry),
+        key_columns=["row_id"],
+    ).persist()
+
+    try:
+        evaluation.results_df.collect()
+        evaluation.apply_assignments().collect()
+        assert invocation_count.value == 3
+    finally:
+        evaluation.unpersist(blocking=True)
+
+
 def test_spark_runtime_preserves_input_column_named_like_old_temp_result(spark):
     """Internal UDF plumbing cannot reserve or overwrite a caller column."""
     ruleset = _compile(
@@ -856,6 +908,39 @@ def test_spark_runtime_validates_schema_before_building_udf(spark):
         _evaluation(df, ruleset)
 
 
+def test_spark_runtime_rejects_a_ruleset_with_no_active_rules(spark):
+    """Evaluation cannot expose an unwritable zero-field assignment struct."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "inactive_ruleset",
+            "ruleset_name": "Inactive Ruleset",
+            "version": "1",
+            "owner": "Engineering",
+            "owner_department": "Technology",
+            "rules": [
+                {
+                    "rule_id": "inactive_rule",
+                    "rule_name": "Inactive Rule",
+                    "active_flag": False,
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"field": "account"},
+                                "operator": "eq",
+                                "right": {"literal": "A"},
+                            }
+                        ]
+                    },
+                    "assign": {"bucket": "inactive"},
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValidationFailedError, match="At least one active rule"):
+        _evaluation(spark.createDataFrame([("A",)], ["account"]), ruleset)
+
+
 def test_spark_runtime_preserves_mapping_literal_assignment_as_struct(spark):
     """
     What: Emits mapping literal assignments as nested Spark structs.
@@ -996,9 +1081,13 @@ def test_spark_runtime_quarantines_errors_without_failing_job(spark):
             },
             "operator": "eq",
             "right": {"literal": True},
-        }
+        },
+        assign={"bucket": "matched", "new_note": "created"},
     )
-    df = spark.createDataFrame([{"value": "good"}, {"value": "bad"}])
+    df = spark.createDataFrame(
+        [("good", "original"), ("bad", "original")],
+        ["value", "bucket"],
+    )
 
     evaluation = _evaluation(
         df,
@@ -1014,6 +1103,14 @@ def test_spark_runtime_quarantines_errors_without_failing_job(spark):
         "ValueError: bad test value"
     )
     assert "Traceback" not in by_value["bad"]["rules_engine_error"]
+    applied = {
+        row["value"]: row.asDict(recursive=True)
+        for row in evaluation.apply_assignments().collect()
+    }
+    assert applied["good"]["bucket"] == "matched"
+    assert applied["good"]["new_note"] == "created"
+    assert applied["bad"]["bucket"] == "original"
+    assert applied["bad"]["new_note"] is None
 
     fail_fast_output = _evaluation(
         df,
@@ -1036,12 +1133,19 @@ def test_fail_on_error_remains_lazy_until_callers_action(spark):
     )
     df = spark.createDataFrame([{"account": "A"}])
 
-    evaluation = _evaluation(df, ruleset)
-    output = evaluation.results_df
+    group_id = "rules-engine-lazy-plan-test"
+    tracker = spark.sparkContext.statusTracker()
+    spark.sparkContext.setJobGroup(group_id, "rules engine lazy plan test")
+    try:
+        evaluation = _evaluation(df, ruleset)
+        output = evaluation.results_df
+        _ = evaluation.apply_assignments()
 
-    assert not output.storageLevel.useMemory
-    assert not output.storageLevel.useDisk
-    assert output.collect()[0]["rules_engine_matched"] is True
+        assert tracker.getJobIdsForGroup(group_id) == []
+        assert output.collect()[0]["rules_engine_matched"] is True
+        assert tracker.getJobIdsForGroup(group_id)
+    finally:
+        spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
 
 
 def test_spark_runtime_preserves_timestamp_assignment_type(spark):

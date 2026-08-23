@@ -433,7 +433,7 @@ evaluation = service.evaluate_dataframe(
     key_columns=["row_id"],
     fail_on_error=True,
     full_audit=True,
-)
+).persist()
 result_df = evaluation.results_df
 applied_df = evaluation.apply_assignments()
 
@@ -519,6 +519,7 @@ assert all(
     and row["rules_engine_engine_version"] == rules_engine.__version__
     for row in rows
 )
+evaluation.unpersist()
 
 # COMMAND ----------
 

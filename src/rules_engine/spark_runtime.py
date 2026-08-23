@@ -309,7 +309,7 @@ class SparkRulesEngineRuntime:
         fail_on_error : bool, default True
             Raise from the worker during the caller's first materializing Spark
             action when a row-level evaluator error is produced. Building the
-            returned DataFrame does not start a hidden validation job.
+            returned evaluation does not start a hidden validation job.
         include_error_traceback : bool, default False
             Include full Python tracebacks in row error payloads. Keep disabled
             for production data because tracebacks substantially enlarge rows.
@@ -686,13 +686,17 @@ class SparkRulesEngineRuntime:
                     if full_audit
                     else []
                 )
-                assign_payload = {
-                    field_name: {
-                        "applied": field_name in assignments,
-                        "value": assignments.get(field_name),
+                assign_payload = (
+                    {
+                        field_name: {
+                            "applied": field_name in assignments,
+                            "value": assignments.get(field_name),
+                        }
+                        for field_name in assign_field_names
                     }
-                    for field_name in assign_field_names
-                }
+                    if assignments
+                    else base_payload_template["assign"]
+                )
                 return runtime._success_payload(
                     matched_rule_ids=matched_rule_ids,
                     matched_rules=matched_rules,

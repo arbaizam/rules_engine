@@ -95,6 +95,14 @@ class RulesetValidator:
                 ObjectType.RULESET,
                 ruleset.ruleset_id,
             )
+        elif not any(rule.active_flag for rule in ruleset.rules):
+            self._add(
+                result,
+                "RULESET_ACTIVE_RULE_REQUIRED",
+                "At least one active rule is required.",
+                ObjectType.RULESET,
+                ruleset.ruleset_id,
+            )
 
         self._validate_expectations(ruleset, result)
 

@@ -256,7 +256,7 @@ evaluation = runtime.evaluate_dataframe(
     ruleset,
     key_columns=["account_id"],
     full_audit=True,
-)
+).persist()
 output_df = evaluation.results_df
 
 display(output_df)
@@ -288,6 +288,7 @@ assert authored_expressions == {
     "review_date": "review_date = date_add_years(value=funded_date, years=1)",
     "age_days": "age_days = date_diff_days(start=funded_date, end=as_of_date)",
 }
+evaluation.unpersist()
 
 # COMMAND ----------
 

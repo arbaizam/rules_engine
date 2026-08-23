@@ -1,6 +1,6 @@
 # Rules Engine System Test Summary
 
-Source: `bundles/rules_engine/notebooks/99.rules_engine_system_tests.py`.
+Source: `notebooks/99.rules_engine_system_tests.py`.
 
 ALM Engineering uses this Databricks notebook for behavior that needs a real
 Spark, Python-worker, or Delta boundary. Compiler and validator permutations
@@ -41,7 +41,7 @@ Provide these inputs before execution:
 | Input | Required | Allowed values | Definition |
 |---|---:|---|---|
 | `SCHEMA` | Yes | Safe two-part `catalog.schema` whose schema name contains `test`, `scratch`, or `tmp` | Disposable namespace used by the system-test metadata tables. |
-| `RULESET_YAML_PATH` | No | Absolute path or path relative to the repository root | Fixture override. The default is `bundles/rules_engine/examples/rulesets/rules_engine_system_testing_rules.yaml`. |
+| `RULESET_YAML_PATH` | No | Absolute path or path relative to the repository root | Fixture override. The default is `examples/rulesets/rules_engine_system_testing_rules.yaml`. |
 
 The setup cell creates the supplied schema when it does not exist. ST-001 then
 overwrites only these two tables inside that verified disposable schema:

@@ -1,17 +1,14 @@
 # Rules Engine
 
-ALM Engineering built `rules_engine` to apply clear, reviewable, row-level
-business rules to PySpark DataFrames. Rules are authored in strict YAML,
-compiled into immutable Python dataclasses, and validated. When we need a
-governed release process, we publish immutable ruleset versions and custom-
-function metadata to Delta tables.
-
+ALM Engineering designed the `rules_engine` to apply clear, reviewable,
+**row-level**, business rules to PySpark DataFrames. Rules are authored
+in strict YAML, compiled into immutable Python dataclasses, and validated.
 The rules engine supports one authoring language: canonical YAML. The
 dataclasses are the compiled in-memory model.
 
 ## Why we designed it this way
 
-We elected to keep the core contract narrow and explicit.  We:
+We elected to keep the core contract narrow and explicit to:
 
 - evaluate one row at a time. Cross-row facts must already be present as
   DataFrame columns;
@@ -35,7 +32,7 @@ We elected to keep the core contract narrow and explicit.  We:
 
 ## How one row is evaluated
 
-For each active rule, in ascending `rule_order`, we:
+For each active rule, in ascending `rule_order`, the engine will:
 
 1. evaluate every active condition in its `when` tree;
 2. resolve all assignment expressions against one pre-rule snapshot;
@@ -94,9 +91,6 @@ expect:
       requires_review: true
 ```
 
-Ruleset lifecycle status is not authored in YAML. `published` and `retired`
-belong only to repository rows.
-
 ## YAML contract reference
 
 ### Document rules
@@ -119,7 +113,7 @@ belong only to repository rows.
 | `ruleset_id` | Yes | Non-empty string | Stable technical identity for the ruleset across versions. |
 | `ruleset_name` | Yes | Non-empty string | Human-facing name used by `load_published`. The same name may have multiple versions. |
 | `version` | Yes | Non-empty string | Immutable caller-defined version. We do not parse or order the value as semantic versioning. |
-| `rules` | Yes | YAML list with at least one rule before validation can pass | Rules are evaluated by `rule_order`, not by list position once explicit orders are supplied. |
+| `rules` | Yes | YAML list containing at least one active rule before validation can pass | Rules are evaluated by `rule_order`, not by list position once explicit orders are supplied. An all-inactive ruleset is rejected because it has no writable assignment contract. |
 | `description` | No | String or `null`; default `null` | Plain-English purpose of the ruleset. |
 | `owner` | Required for validation | Non-empty string; compile default `null` | Person or team accountable for the rules. YAML can compile without it, but validation and publication fail. |
 | `owner_department` | Required for validation | Non-empty string; compile default `null` | Department accountable for the rules. YAML can compile without it, but validation and publication fail. |
@@ -134,7 +128,7 @@ belong only to repository rows.
 | `assign` | Yes | Non-empty mapping or explicit assignment list | — | Values committed when the rule matches. Validation rejects a rule with no assignments. |
 | `rule_id` | No | Non-empty string, unique within the ruleset | `rule:<YAML position>` | Stable technical rule identity. We recommend authoring it explicitly. |
 | `rule_order` | No | Integer, unique within the ruleset | One-based YAML position | Evaluation order. Lower values run first; values do not need to be consecutive. |
-| `active_flag` | No | `true` or `false` | `true` | An inactive rule is not evaluated and does not produce assignments. |
+| `active_flag` | No | `true` or `false` | `true` | An inactive rule is not evaluated and does not produce assignments. At least one rule in the ruleset must remain active. |
 | `stop_on_match` | No | `true` or `false` | `false` | When this rule matches, we apply its assignments and skip all later rules. A non-matching rule never stops evaluation. |
 | `description` | No | String or `null` | `null` | Plain-English purpose or business explanation. |
 
@@ -352,8 +346,8 @@ when any case fails.
 |---|---|---|
 | `matched` | `true` or `false` | Expected overall match flag. |
 | `matched_rule_ids` | List of rule-ID strings | Expected complete ordered list of matching rule IDs. |
-| `assign` | Mapping of declared assignment targets to expected values | Expected subset of final assignments. Unlisted targets are not compared. |
-| Any declared assignment target | Any expected value | Shorthand for placing that target inside `assign`. Unknown target names fail validation. |
+| `assign` | Mapping of declared assignment targets to expected values | Expected subset of final applied assignments. Unlisted targets are not compared. A listed target must actually be applied, including when its expected value is `null`. |
+| Any declared assignment target | Any expected value | Shorthand for placing that target inside `assign`. Unknown target names fail validation. A `null` expectation means the rule explicitly assigns null; it does not match an unapplied target. |
 
 ```yaml
 expect:
@@ -629,7 +623,7 @@ one Spark aggregation action. It returns:
 | `first_match_distribution` | Mapping of rule ID to integer count | Derived first-match counts. |
 | `dead_rule_ids` | Tuple of rule IDs | Active rules with zero matches. |
 | `suspiciously_broad_rule_ids` | Tuple of rule IDs | Rules whose match rate is at or above `broad_match_threshold`. |
-| `no_match_rows` | Spark DataFrame | Lazy filtered view containing only clean no-match rows and the coverage-prefixed result columns. |
+| `no_match_rows` | Spark DataFrame | Lazy diagnostic view retaining every original input column plus the coverage-prefixed result columns, filtered to clean no-match rows. |
 
 `broad_match_threshold` must be between `0` and `1`, inclusive. Coverage is a
 diagnostic summary; it does not change or publish the ruleset.
@@ -1083,7 +1077,7 @@ imports and behavior out of compile-only paths where practical.
 | `rules_engine.publish` | Coordinates the publication gate. It runs validation, runs embedded expected cases when present, and calls the repository only after both pass. | `PublishService`. |
 | `rules_engine.registry` | Keeps custom-function metadata and executable implementations in memory under one exact function name. It enforces unique registration and provides focused errors for unknown specs or missing implementations. | `CustomFunctionSpec`, `FunctionRegistry`, `CustomFunction`. |
 | `rules_engine.repository` | Owns the Delta table names, schemas, DDL, immutable publication, explicit-version loading, retirement, and registry metadata merge behavior. It detects duplicate identities instead of selecting an arbitrary row. | `RulesEngineTableNames`, `RulesetRepository`, `SparkDeltaRulesetRepository`. |
-| `rules_engine.runtime` | Implements the deterministic pure-Python row evaluator used inside the Spark UDF and by embedded expected cases. It evaluates Boolean trees, resolves operands and null defaults, calls registered functions, performs comparisons, commits assignments atomically by rule, and creates trace/provenance data. | `SparkRowEvaluator` and runtime result/trace behavior used by higher-level APIs. |
+| `rules_engine.runtime` | Implements the deterministic pure-Python row evaluator used inside the Spark UDF and by embedded expected cases. It evaluates Boolean trees, resolves operands and null defaults, calls registered functions, performs comparisons, commits assignments atomically by rule, and returns the same explicit `{applied, value}` assignment outcomes used at the Spark boundary. | `SparkRowEvaluator` and runtime result/trace behavior used by higher-level APIs. |
 | `rules_engine.serializer` | Creates deterministic canonical JSON, SHA-256 content hashes, queryable summary counts, and `RulesetVersionRow` objects. It also reconstructs a `Ruleset` while preserving supported Python literal types. | `DeltaRowSerializer`. |
 | `rules_engine.service` | Provides the public facade documented above. It wires the package components into the normal compile, test, publish, load, describe, evaluate, cover, and retire workflows. | `RulesEngineService`. |
 | `rules_engine.spark_runtime` | Adapts the pure row evaluator to a typed Spark Python UDF. It validates key metadata and the incoming schema, infers typed `{applied, value}` assignment outcomes, sends only required source columns to workers, checks callable serialization, builds ordered compact/full-audit fields, and returns one lazy `DataFrameEvaluation`. | `SparkRulesEngineRuntime`, `required_source_columns`. |
@@ -1097,21 +1091,17 @@ imports and behavior out of compile-only paths where practical.
 ## Repository layout
 
 ```text
-bundles/
-  rules_engine/
-    docs/
-      rules_engine_system_test_summary.md
-      rules_engine_unit_test_summary.md
-    examples/
-      rulesets/
-        rules_engine_system_testing_rules.yaml
-      rules_engine_custom_function_authoring_guide.py
-      rules_engine_developer_guide.py
-      rules_engine_quickstart_guide.py
-    notebooks/
-      99.rules_engine_system_tests.py
-    rulesets/
-      account_key_mra.yaml
+docs/
+  rules_engine_system_test_summary.md
+  rules_engine_unit_test_summary.md
+examples/
+  rulesets/
+    rules_engine_system_testing_rules.yaml
+  rules_engine_custom_function_authoring_guide.py
+  rules_engine_developer_guide.py
+  rules_engine_quickstart_guide.py
+notebooks/
+  99.rules_engine_system_tests.py
 src/
   rules_engine/                        Package source
 tests/                                 Unit and Spark tests
@@ -1129,14 +1119,7 @@ Spark tests are skipped unless `RULES_ENGINE_RUN_SPARK_TESTS=1` is set.
 
 ## Known boundaries
 
-- We evaluate rows, not aggregates or windows. Cross-row facts belong in the
+- Row evaluation, not aggregates or windows. Cross-row facts belong in the
   input DataFrame.
-- We support YAML authoring only.
-- We run custom functions as registered Python callables inside the row UDF.
-- We use full audit for targeted explainability, not as the default production
-  payload.
-- We require the environment to create catalogs/schemas, grant permissions,
-  install the wheel, and manage deployment.
-- We do not publish automatically when we compile or evaluate.
-- We do not provide business approval, UAT workflow, external logging, or
-  Databricks Asset Bundle configuration.
+- Support for YAML authoring only.
+- Custom functions run as registered Python callables inside the row UDF.

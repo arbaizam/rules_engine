@@ -52,6 +52,26 @@ def test_missing_owner_metadata_fails_validation():
     } <= {issue.check_name for issue in result.issues}
 
 
+def test_ruleset_requires_at_least_one_active_rule():
+    """A valid ruleset must have a writable active assignment contract."""
+    payload = _base_payload(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    payload["rules"][0]["active_flag"] = False
+
+    result = RulesetValidator().validate(
+        YamlRulesetCompiler().compile_payload(payload)
+    )
+
+    assert "RULESET_ACTIVE_RULE_REQUIRED" in {
+        issue.check_name for issue in result.issues
+    }
+
+
 def test_custom_function_args_mismatch_fails_validation():
     """
     What: Validates custom function argument names against the registry contract.

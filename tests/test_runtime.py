@@ -192,7 +192,11 @@ def test_assigned_values_are_visible_to_later_rules_and_atomic_within_a_rule():
     assert result == {
         "matched": True,
         "matched_rule_ids": ["producer", "consumer"],
-        "assign": {"bucket": "A", "score": 20, "copied_score": 10},
+        "assign": {
+            "bucket": {"applied": True, "value": "A"},
+            "score": {"applied": True, "value": 20},
+            "copied_score": {"applied": True, "value": 10},
+        },
     }
 
 
@@ -245,7 +249,10 @@ def test_missing_prior_commit_is_null_and_can_use_default_if_null():
     ).evaluate_row(ruleset, {"eligible": False})
 
     assert result["matched_rule_ids"] == ["fallback"]
-    assert result["assign"] == {"review": True}
+    assert result["assign"] == {
+        "bucket": {"applied": False, "value": None},
+        "review": {"applied": True, "value": True},
+    }
 
 
 def test_full_audit_identifies_the_assignment_that_produced_an_operand():
@@ -485,6 +492,29 @@ def test_dataframe_evaluation_rejects_invalid_key_metadata(key_columns, message)
             input_frame,
             ruleset,
             key_columns=key_columns,
+        )
+
+
+def test_dataframe_evaluation_rejects_an_ambiguous_key_column():
+    """Duplicate source names cannot provide deterministic row identity."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    input_frame = type(
+        "InputFrame",
+        (),
+        {"columns": ["row_id", "row_id", "account"]},
+    )()
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        _spark_runtime().evaluate_dataframe(
+            input_frame,
+            ruleset,
+            key_columns=["row_id"],
         )
 
 
