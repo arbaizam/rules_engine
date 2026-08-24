@@ -263,6 +263,21 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                             inferred,
                             target_type,
                         )
+                for rule, assignment in unresolved_items:
+                    if not isinstance(assignment.value, LiteralOperand):
+                        continue
+                    literal_compatible = self._literal_assignment_is_compatible(
+                        assignment.value,
+                        target_type,
+                    )
+                    if literal_compatible is False:
+                        self._add_target_type_issue(
+                            result,
+                            rule,
+                            assignment,
+                            None,
+                            target_type,
+                        )
                 self._add_unusable_hint_issues(
                     result,
                     unresolved_items,
@@ -916,22 +931,25 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         result: ValidationResult,
         rule: Rule,
         assignment: Assignment,
-        proposed_type: T.DataType,
+        proposed_type: T.DataType | None,
         target_type: T.DataType,
     ) -> None:
         """Add an existing-target compatibility error."""
+        proposed_type_text = (
+            proposed_type.simpleString() if proposed_type is not None else "an incompatible literal"
+        )
         self._add(
             result,
             "SPARK_ASSIGNMENT_TARGET_TYPE_INCOMPATIBLE",
             f"Assignment {assignment.assignment_id!r} in rule {rule.rule_id!r} "
-            f"cannot assign {proposed_type.simpleString()} to existing field "
+            f"cannot assign {proposed_type_text} to existing field "
             f"{assignment.target_field!r} of type {target_type.simpleString()}.",
             ObjectType.ASSIGNMENT,
             assignment.assignment_id,
             details={
                 "rule_id": rule.rule_id,
                 "target_field": assignment.target_field,
-                "proposed_type": proposed_type.simpleString(),
+                "proposed_type": proposed_type_text,
                 "target_type": target_type.simpleString(),
             },
         )
@@ -1224,6 +1242,11 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         value = operand.value
         if value is None:
             return True
+        if isinstance(value, MappingABC):
+            return isinstance(
+                target_type,
+                T.StructType,
+            ) and self._mapping_literal_assignment_is_compatible(value, target_type)
         if operand.value_type is None and isinstance(value, bool):
             return isinstance(target_type, T.BooleanType)
         if operand.value_type is None and isinstance(value, int) and not isinstance(value, bool):
@@ -1239,6 +1262,56 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         if isinstance(value, Decimal):
             return isinstance(target_type, T.DecimalType) and decimal_value_fits(value, target_type)
         return None
+
+    def _mapping_literal_assignment_is_compatible(
+        self,
+        value: MappingABC,
+        target_type: T.StructType,
+    ) -> bool:
+        """Match a mapping literal to a target struct recursively by field name."""
+        literal_fields: dict[str, Any] = {}
+        for raw_name, field_value in value.items():
+            field_name = str(raw_name)
+            if field_name in literal_fields:
+                return False
+            literal_fields[field_name] = field_value
+        target_fields = {field.name: field for field in target_type.fields}
+        if len(target_fields) != len(target_type.fields):
+            return False
+        if set(literal_fields) != set(target_fields):
+            return False
+        for field_name, field in target_fields.items():
+            field_value = literal_fields[field_name]
+            if field_value is None:
+                if not field.nullable:
+                    return False
+                continue
+            if not self._literal_value_is_compatible(field_value, field.dataType):
+                return False
+        return True
+
+    def _literal_value_is_compatible(
+        self,
+        value: Any,
+        target_type: T.DataType,
+    ) -> bool:
+        """Return whether a nested literal value can populate one Spark field."""
+        literal_compatible = self._literal_assignment_is_compatible(
+            LiteralOperand(value),
+            target_type,
+        )
+        if literal_compatible is not None:
+            return literal_compatible
+        proposed_type = self._literal_type(value)
+        if proposed_type is None:
+            return False
+        numeric_compatible = self._numeric_assignment_is_compatible(
+            proposed_type,
+            target_type,
+        )
+        if numeric_compatible is not None:
+            return numeric_compatible
+        return proposed_type == target_type
 
     def _common_type(
         self,

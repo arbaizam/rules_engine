@@ -710,6 +710,87 @@ def test_mapping_literal_schema_order_is_stable_after_persistence():
     assert reloaded_type == direct_type
 
 
+def test_mapping_literal_matches_existing_nested_struct_by_field_name():
+    """Mapping assignment compatibility ignores struct order but preserves target order."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _payload(
+            {
+                "details": {
+                    "literal": {
+                        "material": True,
+                        "audit": {
+                            "reviewed": False,
+                            "score": 1,
+                        },
+                    }
+                }
+            }
+        )
+    )
+    audit_type = T.StructType(
+        [
+            T.StructField("score", T.IntegerType(), False),
+            T.StructField("reviewed", T.BooleanType(), True),
+        ]
+    )
+    details_type = T.StructType(
+        [
+            T.StructField("material", T.BooleanType(), True),
+            T.StructField("audit", audit_type, True),
+        ]
+    )
+    schema = T.StructType(
+        [
+            T.StructField("status", T.StringType(), True),
+            T.StructField("details", details_type, True),
+        ]
+    )
+    validator = SparkRulesetCompatibilityValidator()
+
+    result = validator.validate(ruleset, schema)
+    assignment_type = validator.assignment_schema(ruleset, schema)["details"].dataType
+
+    assert result.passed
+    assert assignment_type == details_type
+
+
+def test_mapping_literal_rejects_struct_shape_and_nested_type_conflicts():
+    """Name-based struct matching remains strict about fields, types, and nullability."""
+    audit_type = T.StructType(
+        [
+            T.StructField("score", T.IntegerType(), False),
+            T.StructField("reviewed", T.BooleanType(), True),
+        ]
+    )
+    details_type = T.StructType(
+        [
+            T.StructField("material", T.BooleanType(), True),
+            T.StructField("audit", audit_type, True),
+        ]
+    )
+    schema = T.StructType(
+        [
+            T.StructField("status", T.StringType(), True),
+            T.StructField("details", details_type, True),
+        ]
+    )
+    invalid_literals = (
+        {"material": True},
+        {"material": True, "audit": {"score": 1, "reviewed": False}, "extra": 1},
+        {"material": True, "audit": {"score": "one", "reviewed": False}},
+        {"material": True, "audit": {"score": 1}},
+        {"material": True, "audit": {"score": None, "reviewed": False}},
+    )
+
+    for literal in invalid_literals:
+        ruleset = YamlRulesetCompiler().compile_payload(
+            _payload({"details": {"literal": literal}})
+        )
+        result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
+
+        assert "SPARK_ASSIGNMENT_TARGET_TYPE_INCOMPATIBLE" in _checks(result)
+
+
 def test_spark_validator_reports_unsupported_typed_null_precisely():
     ruleset = YamlRulesetCompiler().compile_payload(
         _payload({"new_target": {"literal": None, "value_type": "uuid"}})

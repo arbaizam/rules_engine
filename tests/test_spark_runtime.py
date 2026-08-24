@@ -328,8 +328,8 @@ def test_dataframe_evaluation_separates_results_and_applies_atomic_values(spark)
     )
     details_type = T.StructType(
         [
-            T.StructField("book_value", T.BooleanType(), True),
             T.StructField("market_value", T.BooleanType(), True),
+            T.StructField("book_value", T.BooleanType(), True),
         ]
     )
     input_schema = T.StructType(
