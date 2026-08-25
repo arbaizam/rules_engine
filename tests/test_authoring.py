@@ -13,6 +13,9 @@ from rules_engine.authoring import (
 )
 from rules_engine.enums import ComparisonOperator, LogicalOperator, OperandKind
 from rules_engine.registry import (
+    DYNAMIC_RETURN_TYPE_HINT_TEMPLATES,
+    SUPPORTED_ARGUMENT_TYPE_HINTS,
+    SUPPORTED_RETURN_TYPE_HINTS,
     CustomFunctionArgSpec,
     CustomFunctionSpec,
     FunctionRegistry,
@@ -81,6 +84,17 @@ def test_manifest_exposes_enums_literal_hints_and_build_identity():
     """Static authoring choices must come from the installed engine contract."""
     manifest = build_authoring_manifest(FunctionRegistry())
 
+    assert {
+        "manifest_version",
+        "engine_version",
+        "comparison_operators",
+        "logical_operators",
+        "operand_kinds",
+        "literal_type_hints",
+        "function_argument_type_hints",
+        "function_return_type_hints",
+        "functions",
+    } <= set(manifest)
     assert manifest["manifest_version"] == AUTHORING_MANIFEST_VERSION
     assert manifest["engine_version"] == __version__
     assert manifest["logical_operators"] == [item.value for item in LogicalOperator]
@@ -95,6 +109,13 @@ def test_manifest_exposes_enums_literal_hints_and_build_identity():
         {"name": "timestamp", "aliases": []},
         {"name": "timestamp_ntz", "aliases": []},
     ]
+    assert manifest["function_argument_type_hints"] == sorted(
+        SUPPORTED_ARGUMENT_TYPE_HINTS
+    )
+    assert manifest["function_return_type_hints"] == {
+        "fixed": sorted(SUPPORTED_RETURN_TYPE_HINTS),
+        "dynamic_templates": list(DYNAMIC_RETURN_TYPE_HINT_TEMPLATES),
+    }
 
     expected_spark_hints = set(literal_type_hint_names())
     if TIMESTAMP_NTZ_TYPE is None:
@@ -155,6 +176,23 @@ def test_manifest_serializes_the_complete_standard_function_registry():
     assert len(manifest["functions"]) == 58
     assert [item["function_name"] for item in manifest["functions"]] == sorted(
         item["function_name"] for item in manifest["functions"]
+    )
+    argument_hints = set(manifest["function_argument_type_hints"])
+    return_hints = set(manifest["function_return_type_hints"]["fixed"])
+    dynamic_prefixes = {
+        template.partition(":")[0]
+        for template in manifest["function_return_type_hints"]["dynamic_templates"]
+    }
+    assert all(
+        argument["type_hint"] in argument_hints
+        for function in manifest["functions"]
+        for argument in function["arguments"]
+    )
+    assert all(
+        return_type_hint in return_hints
+        or return_type_hint.partition(":")[0] in dynamic_prefixes
+        for function in manifest["functions"]
+        if (return_type_hint := function["return_type_hint"]) is not None
     )
     json.dumps(manifest, sort_keys=True)
 

@@ -1576,31 +1576,64 @@ def test_full_audit_builds_explanations_only_for_matched_rules(monkeypatch):
     assert calls == 1
 
 
-@pytest.mark.parametrize(
-    ("value", "value_type", "error_text"),
-    [
-        (3.7, "integer", "fractional component"),
-        (Decimal("0.1234567890123456789"), "decimal", "without rounding"),
-    ],
-)
-def test_spark_row_evaluator_rejects_lossy_assignment_coercion(
-    value,
-    value_type,
-    error_text,
-):
-    """Typed assignment values fail instead of being silently truncated."""
+def test_spark_row_evaluator_rejects_lossy_decimal_assignment_coercion():
+    """Typed decimal assignments fail instead of being silently rounded."""
     ruleset = _compile(
         {
             "left": {"literal": True},
             "operator": "eq",
             "right": {"literal": True},
         },
-        assign={"target": {"literal": value, "value_type": value_type}},
+        assign={
+            "target": {
+                "literal": Decimal("0.1234567890123456789"),
+                "value_type": "decimal",
+            }
+        },
     )
 
     result = _evaluate_worker(ruleset, {})
 
-    assert error_text in result["error"]
+    assert "without rounding" in result["error"]
+
+
+def test_spark_row_evaluator_rejects_fractional_integer_function_return():
+    """Runtime normalization still guards incorrectly declared function results."""
+    registry = FunctionRegistry()
+
+    def fractional_result():
+        return 3.7
+
+    registry.register(
+        CustomFunctionSpec(
+            function_name="fractional_result",
+            implementation_reference="tests.fractional_result",
+            arguments=(),
+            allowed_in_condition_flag=False,
+            allowed_in_assignment_flag=True,
+            return_type_hint="integer",
+        ),
+        fractional_result,
+    )
+    ruleset = _compile(
+        {
+            "left": {"literal": True},
+            "operator": "eq",
+            "right": {"literal": True},
+        },
+        assign={
+            "target": {
+                "custom_function": {
+                    "name": "fractional_result",
+                    "args": {},
+                }
+            }
+        },
+    )
+
+    result = _evaluate_worker(ruleset, {}, registry)
+
+    assert "fractional component" in result["error"]
 
 
 def test_spark_row_evaluator_stop_on_match_excludes_later_traces_and_assignments():

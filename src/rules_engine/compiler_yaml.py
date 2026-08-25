@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 from yaml.constructor import ConstructorError
 
+from rules_engine.authoring import LITERAL_TYPE_HINTS
 from rules_engine.enums import ComparisonOperator, LogicalOperator
 from rules_engine.exceptions import CompilationError
 from rules_engine.models import (
@@ -33,6 +34,14 @@ from rules_engine.models import (
     Ruleset,
 )
 from rules_engine.standard_functions import to_timestamp, to_timestamp_ntz
+
+_LITERAL_TYPE_HINT_CANONICAL_NAMES = {
+    hint: canonical_name
+    for canonical_name, aliases in LITERAL_TYPE_HINTS
+    for hint in (canonical_name, *aliases)
+}
+_LONG_MIN = -(2**63)
+_LONG_MAX = 2**63 - 1
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -554,7 +563,17 @@ class YamlRulesetCompiler:
         """Normalize one non-collection literal according to its declared type."""
         if value is None:
             return None
-        if normalized_type == "date":
+        canonical_type = _LITERAL_TYPE_HINT_CANONICAL_NAMES.get(
+            normalized_type,
+            normalized_type,
+        )
+        if canonical_type == "string":
+            return self._normalize_string_literal(value)
+        if canonical_type == "integer":
+            return self._normalize_integer_literal(value)
+        if canonical_type == "double":
+            return self._normalize_double_literal(value)
+        if canonical_type == "date":
             if isinstance(value, datetime):
                 return value.date()
             if isinstance(value, date):
@@ -572,27 +591,27 @@ class YamlRulesetCompiler:
             raise CompilationError(
                 f"Date literal must be a date or ISO YYYY-MM-DD string, found {value!r}."
             )
-        if normalized_type in {"timestamp", "timestamp_ntz"}:
-            converter = to_timestamp if normalized_type == "timestamp" else to_timestamp_ntz
+        if canonical_type in {"timestamp", "timestamp_ntz"}:
+            converter = to_timestamp if canonical_type == "timestamp" else to_timestamp_ntz
             try:
                 return converter(value)
             except (TypeError, ValueError) as exc:
                 representation = (
                     "an ISO timestamp with a UTC offset"
-                    if normalized_type == "timestamp"
+                    if canonical_type == "timestamp"
                     else "an ISO timestamp without a UTC offset"
                 )
                 raise CompilationError(
-                    f"{normalized_type} literal must be a datetime or {representation}, "
+                    f"{canonical_type} literal must be a datetime or {representation}, "
                     f"found {value!r}."
                 ) from exc
-        if normalized_type in {"boolean", "bool"}:
+        if canonical_type == "boolean":
             if not isinstance(value, bool):
                 raise CompilationError(
                     f"Boolean literal must be an actual boolean, found {value!r}."
                 )
             return value
-        if normalized_type == "decimal":
+        if canonical_type == "decimal":
             try:
                 decimal_value = Decimal(str(value))
             except (InvalidOperation, ValueError) as exc:
@@ -602,9 +621,43 @@ class YamlRulesetCompiler:
             if not decimal_value.is_finite():
                 raise CompilationError("Decimal literals must be finite.")
             return decimal_value
-        if normalized_type in {"number", "float", "double"} and isinstance(value, Decimal):
-            return float(value)
         return value
+
+    def _normalize_string_literal(self, value: Any) -> str:
+        """Require one explicitly string-typed literal value."""
+        if not isinstance(value, str):
+            raise CompilationError(
+                f"String literal must be a string, found {value!r}."
+            )
+        return value
+
+    def _normalize_integer_literal(self, value: Any) -> int:
+        """Return one lossless signed 64-bit integer literal value."""
+        if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+            raise CompilationError(
+                f"Integer literal must be numeric, found {value!r}."
+            )
+        converted = int(value)
+        if value != converted:
+            raise CompilationError(
+                f"Integer literal must not have a fractional component, found {value!r}."
+            )
+        if not _LONG_MIN <= converted <= _LONG_MAX:
+            raise CompilationError(
+                f"Integer literal must fit a signed 64-bit value, found {value!r}."
+            )
+        return converted
+
+    def _normalize_double_literal(self, value: Any) -> float:
+        """Return one finite explicitly floating-point literal value."""
+        if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+            raise CompilationError(
+                f"Floating-point literal must be numeric, found {value!r}."
+            )
+        converted = float(value)
+        if not math.isfinite(converted):
+            raise CompilationError("Floating-point literals must be finite.")
+        return converted
 
     def _enum(self, enum_type: type, value: str, label: str) -> Any:
         """

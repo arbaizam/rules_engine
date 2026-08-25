@@ -51,6 +51,13 @@ SUPPORTED_RETURN_TYPE_HINTS = frozenset(
         "timestamp_ntz",
     }
 )
+DYNAMIC_RETURN_TYPE_HINT_TEMPLATES = (
+    "same_as:<argument_name>",
+    "common_type:<argument_name>",
+)
+_DYNAMIC_RETURN_TYPE_HINT_PREFIXES = frozenset(
+    template.partition(":")[0] for template in DYNAMIC_RETURN_TYPE_HINT_TEMPLATES
+)
 
 
 class CustomFunction(Protocol):
@@ -190,7 +197,7 @@ class CustomFunctionSpec:
                 prefix, separator, argument_name = normalized_return_hint.partition(":")
                 if (
                     separator != ":"
-                    or prefix not in {"same_as", "common_type"}
+                    or prefix not in _DYNAMIC_RETURN_TYPE_HINT_PREFIXES
                     or argument_name not in names
                 ):
                     raise RegistryError(

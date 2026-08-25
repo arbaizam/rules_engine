@@ -232,7 +232,9 @@ notably for null literals and custom-function results assigned to a new field.
 
 The compiler retains an unrecognized non-empty `value_type` as metadata, but
 Spark compatibility validation rejects it when it is needed for an
-assignment. We recommend using only the values in this table.
+assignment. Known scalar hints validate and normalize their authored values
+during compilation; for example, an `integer` hint rejects text and fractional
+values. We recommend using only the values in this table.
 
 ### Null behavior
 
@@ -372,7 +374,8 @@ manifest = build_authoring_manifest(registry)
 The returned payload is deterministic and JSON-compatible. It includes the
 manifest format and engine versions, comparison operators and operand shape,
 tolerance support, logical operators, operand kinds, canonical literal type
-hints and aliases, and registered function argument contracts. Function
+hints and aliases, supported function argument and return type hints, dynamic
+return templates, and registered function argument contracts. Function
 implementation references are intentionally excluded.
 
 `right_operand_shape` has four possible values:

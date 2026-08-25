@@ -491,6 +491,94 @@ def test_boolean_literal_hint_requires_an_actual_boolean(value_type):
         YamlRulesetCompiler().compile_payload(payload)
 
 
+@pytest.mark.parametrize(
+    ("value_type", "authored", "expected"),
+    [
+        ("string", "A", "A"),
+        ("str", "A", "A"),
+        ("integer", 1, 1),
+        ("int", 1.0, 1),
+        ("long", Decimal(1), 1),
+        ("number", 1, 1.0),
+        ("float", Decimal("1.25"), 1.25),
+        ("double", 1.25, 1.25),
+    ],
+)
+def test_known_scalar_literal_hints_normalize_to_their_runtime_type(
+    value_type,
+    authored,
+    expected,
+):
+    """Known scalar hints must produce values compatible with their declared type."""
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["right"] = {
+        "literal": authored,
+        "value_type": value_type,
+    }
+
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+
+    literal = ruleset.rules[0].root_group.conditions[0].right
+    assert literal.value == expected
+    assert type(literal.value) is type(expected)
+
+
+@pytest.mark.parametrize(
+    ("value_type", "authored", "error_text"),
+    [
+        ("string", 1, "must be a string"),
+        ("str", True, "must be a string"),
+        ("integer", "1", "must be numeric"),
+        ("int", True, "must be numeric"),
+        ("long", 1.5, "fractional component"),
+        ("integer", 2**63, "signed 64-bit"),
+        ("double", "1.5", "must be numeric"),
+        ("float", True, "must be numeric"),
+    ],
+)
+def test_known_scalar_literal_hints_reject_incompatible_values(
+    value_type,
+    authored,
+    error_text,
+):
+    """Known hints must not let incompatible Python values reach schema validation."""
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["right"] = {
+        "literal": authored,
+        "value_type": value_type,
+    }
+
+    with pytest.raises(CompilationError, match=error_text):
+        YamlRulesetCompiler().compile_payload(payload)
+
+
+def test_known_scalar_literal_hints_validate_collection_items_recursively():
+    """One invalid typed collection item must fail compilation at the source."""
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["right"] = {
+        "literal": [1, "2"],
+        "value_type": "integer",
+    }
+
+    with pytest.raises(CompilationError, match="must be numeric"):
+        YamlRulesetCompiler().compile_payload(payload)
+
+
+def test_unknown_literal_hint_retains_existing_extension_behavior():
+    """Unknown hints remain metadata until schema compatibility needs them."""
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["right"] = {
+        "literal": "550e8400-e29b-41d4-a716-446655440000",
+        "value_type": "uuid",
+    }
+
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+
+    literal = ruleset.rules[0].root_group.conditions[0].right
+    assert literal.value == "550e8400-e29b-41d4-a716-446655440000"
+    assert literal.value_type == "uuid"
+
+
 @pytest.mark.parametrize("authored", ["20240229", "2024-W09-4"])
 def test_explicit_date_literal_rejects_noncanonical_iso_forms(authored):
     """Date hints accept only the documented YYYY-MM-DD spelling."""

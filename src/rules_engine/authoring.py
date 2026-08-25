@@ -11,7 +11,12 @@ from rules_engine.enums import (
     LogicalOperator,
     OperandKind,
 )
-from rules_engine.registry import FunctionRegistry
+from rules_engine.registry import (
+    DYNAMIC_RETURN_TYPE_HINT_TEMPLATES,
+    SUPPORTED_ARGUMENT_TYPE_HINTS,
+    SUPPORTED_RETURN_TYPE_HINTS,
+    FunctionRegistry,
+)
 from rules_engine.version import __version__
 
 AUTHORING_MANIFEST_VERSION = 1
@@ -85,6 +90,11 @@ def build_authoring_manifest(registry: FunctionRegistry) -> dict[str, Any]:
             }
             for canonical_name, aliases in LITERAL_TYPE_HINTS
         ],
+        "function_argument_type_hints": sorted(SUPPORTED_ARGUMENT_TYPE_HINTS),
+        "function_return_type_hints": {
+            "fixed": sorted(SUPPORTED_RETURN_TYPE_HINTS),
+            "dynamic_templates": list(DYNAMIC_RETURN_TYPE_HINT_TEMPLATES),
+        },
         "functions": [specification.to_authoring_payload() for specification in registry.specs()],
     }
 
