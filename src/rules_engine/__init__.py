@@ -7,6 +7,7 @@ Delta tables. Production runtime evaluation is exposed through
 ``SparkRulesEngineRuntime``.
 """
 
+from rules_engine.authoring import build_authoring_manifest
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exporter_yaml import YamlRulesetExporter
 from rules_engine.models import Ruleset
@@ -76,6 +77,7 @@ __all__ = [
     "SparkRulesetCompatibilityValidator",
     "YamlRulesetCompiler",
     "YamlRulesetExporter",
+    "build_authoring_manifest",
     "register_standard_functions",
     "required_source_columns",
     "standard_function_rows",

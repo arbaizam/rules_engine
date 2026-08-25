@@ -353,6 +353,42 @@ checks when we pass a DataFrame or `StructType`.
 The exporter emits canonical YAML that compiles back into the same dataclass
 model.
 
+## Authoring manifest
+
+Authoring applications should obtain validation-relevant choices from the
+installed engine instead of copying its enums and function contracts.
+
+```python
+from rules_engine import (
+    FunctionRegistry,
+    build_authoring_manifest,
+    register_standard_functions,
+)
+
+registry = register_standard_functions(FunctionRegistry())
+manifest = build_authoring_manifest(registry)
+```
+
+The returned payload is deterministic and JSON-compatible. It includes the
+manifest format and engine versions, comparison operators and operand shape,
+tolerance support, logical operators, operand kinds, canonical literal type
+hints and aliases, and registered function argument contracts. Function
+implementation references are intentionally excluded.
+
+`right_operand_shape` has four possible values:
+
+| Value | Authoring requirement |
+|---|---|
+| `none` | Unary operator with no right operand. |
+| `any` | Scalar or expression-valued right operand. |
+| `collection` | Collection-valued right operand for membership. |
+| `pair` | Exactly two bounds for `between` or `not_between`. |
+
+Applications continue to own labels, help text, layout, mutable draft state,
+and other presentation concerns. The caller supplies a `FunctionRegistry` so
+the manifest reflects the functions available in that environment, including
+registered custom functions.
+
 ## Spark evaluation contract
 
 ```python
@@ -1123,6 +1159,7 @@ imports and behavior out of compile-only paths where practical.
 |---|---|---|
 | `rules_engine.__init__` | Defines the supported top-level package surface. It imports compile-only objects directly and lazily imports Spark-backed objects so YAML tooling can load without paying the full Spark import cost. | Top-level exports such as `RulesEngineService`, `YamlRulesetCompiler`, `RulesetValidator`, `SparkRulesEngineRuntime`, and `__version__`. |
 | `rules_engine.analytics` | Runs the production Spark evaluator and aggregates rule match behavior. It calculates total, no-match, error, match, first-match, dead-rule, and broad-rule measures and retains a lazy DataFrame of clean no-match rows. | `RuleCoverage`, `CoverageReport`, `RulesetCoverageAnalyzer`. |
+| `rules_engine.authoring` | Builds the deterministic, JSON-compatible contract consumed by authoring applications. It exposes engine-owned operator behavior, enums, literal type hints, function contracts, and build identity without presentation metadata. | `build_authoring_manifest`, `AUTHORING_MANIFEST_VERSION`. |
 | `rules_engine.compiler_yaml` | Parses strict YAML with duplicate-key protection and converts canonical mappings into immutable dataclasses. It applies only structural defaults, preserves fractional values exactly, parses supported typed dates and decimals, and rejects unknown keys and ambiguous operand shapes. | `YamlRulesetCompiler`. |
 | `rules_engine.dataframe_evaluation` | Owns the one lazy source-plus-results Spark plan created by DataFrame evaluation. It exposes the key-only result projection, applies explicit assignment outcomes to business columns without a join, preserves column order, handles atomic struct values, and manages optional shared persistence. | `DataFrameEvaluation`. |
 | `rules_engine.enums` | Holds the only accepted lifecycle, logical, operand, comparison, and diagnostic object values. Centralizing these strings prevents aliases from drifting between compilation, validation, runtime behavior, and persistence. | `RulesetStatus`, `LogicalOperator`, `OperandKind`, `ComparisonOperator`, `ObjectType`. |

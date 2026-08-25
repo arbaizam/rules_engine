@@ -10,6 +10,7 @@ from typing import Any
 
 from pyspark.sql import types as T
 
+from rules_engine.authoring import LITERAL_TYPE_HINTS
 from rules_engine.enums import ComparisonOperator, ObjectType
 from rules_engine.exceptions import RegistryError
 from rules_engine.models import (
@@ -39,23 +40,23 @@ from rules_engine.spark_types import (
 )
 from rules_engine.validator import RulesetValidator
 
-SPARK_TYPE_HINTS: dict[str, T.DataType] = {
+_CANONICAL_SPARK_TYPES: dict[str, T.DataType] = {
     "string": T.StringType(),
-    "str": T.StringType(),
     "integer": T.LongType(),
-    "int": T.LongType(),
-    "long": T.LongType(),
-    "number": T.DoubleType(),
-    "float": T.DoubleType(),
-    "double": T.DoubleType(),
     "decimal": T.DecimalType(38, 18),
+    "double": T.DoubleType(),
     "boolean": T.BooleanType(),
-    "bool": T.BooleanType(),
     "date": T.DateType(),
     "timestamp": T.TimestampType(),
 }
 if TIMESTAMP_NTZ_TYPE is not None:
-    SPARK_TYPE_HINTS["timestamp_ntz"] = TIMESTAMP_NTZ_TYPE()
+    _CANONICAL_SPARK_TYPES["timestamp_ntz"] = TIMESTAMP_NTZ_TYPE()
+SPARK_TYPE_HINTS: dict[str, T.DataType] = {
+    hint: _CANONICAL_SPARK_TYPES[canonical_name]
+    for canonical_name, aliases in LITERAL_TYPE_HINTS
+    if canonical_name in _CANONICAL_SPARK_TYPES
+    for hint in (canonical_name, *aliases)
+}
 _TEMPORAL_COMPARISON_OPERATORS = {
     ComparisonOperator.EQ,
     ComparisonOperator.NE,

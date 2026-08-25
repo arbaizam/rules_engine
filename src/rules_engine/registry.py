@@ -262,6 +262,19 @@ class CustomFunctionSpec:
             for argument in self.arguments
         }
 
+    def to_authoring_payload(self) -> dict[str, Any]:
+        """Return the JSON-compatible function contract used by authoring tools."""
+        return {
+            "function_name": self.function_name,
+            "arguments": [argument.to_payload() for argument in self.arguments],
+            "return_type_hint": self.return_type_hint,
+            "allowed_in_condition_flag": self.allowed_in_condition_flag,
+            "allowed_in_assignment_flag": self.allowed_in_assignment_flag,
+            "active_flag": self.active_flag,
+            "description": self.description,
+            "version": self.version,
+        }
+
     def to_row(self) -> FunctionRegistryRow:
         """
         Convert the function spec to a persisted metadata row.
@@ -334,3 +347,7 @@ class FunctionRegistry:
         Return whether function metadata is registered.
         """
         return function_name in self._specs
+
+    def specs(self) -> tuple[CustomFunctionSpec, ...]:
+        """Return registered specifications in canonical function-name order."""
+        return tuple(self._specs[name] for name in sorted(self._specs))
