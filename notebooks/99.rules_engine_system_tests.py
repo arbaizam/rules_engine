@@ -68,14 +68,21 @@ def _expect_raises(exception_type, operation, *, contains=None):
     raise AssertionError(f"Expected {exception_type.__name__} to be raised.")
 
 
+def _spark_error_condition(exc):
+    """Read Spark's structured error condition across PySpark versions."""
+    for accessor_name in ("getCondition", "getErrorClass"):
+        accessor = getattr(exc, accessor_name, None)
+        if callable(accessor):
+            try:
+                return accessor() or ""
+            except Exception:  # noqa: BLE001 - exception metadata varies by Spark client.
+                return ""
+    return ""
+
+
 def _is_serverless_cache_unsupported(exc):
     """Return whether Databricks rejected a cache API specifically on serverless."""
-    get_error_class = getattr(exc, "getErrorClass", None)
-    try:
-        error_class = get_error_class() if callable(get_error_class) else ""
-    except Exception:  # noqa: BLE001 - exception metadata varies by Spark client.
-        error_class = ""
-    message = f"{error_class or ''} {exc}".casefold()
+    message = f"{_spark_error_condition(exc)} {exc}".casefold()
     return (
         "serverless" in message
         and ("not supported" in message or "unsupported" in message)

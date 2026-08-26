@@ -384,6 +384,8 @@ class SparkRulesEngineRuntime:
         result_udf = F.udf(
             row_evaluator,
             _result_struct(assign_schema, full_audit=full_audit),
+            # This is a row-oriented, nested-struct UDF rather than a vectorized UDF.
+            useArrow=False,
         )
         available_columns = set(df.columns)
         assignment_target_columns = (

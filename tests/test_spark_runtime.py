@@ -61,19 +61,32 @@ def spark():
         session.stop()
 
 
+def _spark_error_condition(exc):
+    """Read Spark's structured error condition across PySpark versions."""
+    for accessor_name in ("getCondition", "getErrorClass"):
+        accessor = getattr(exc, accessor_name, None)
+        if callable(accessor):
+            try:
+                return accessor() or ""
+            except Exception:  # noqa: BLE001 - exception metadata varies by Spark client.
+                return ""
+    return ""
+
+
 def _is_serverless_cache_unsupported(exc):
     """Return whether Databricks rejected a cache API specifically on serverless."""
-    get_error_class = getattr(exc, "getErrorClass", None)
-    try:
-        error_class = get_error_class() if callable(get_error_class) else ""
-    except Exception:
-        error_class = ""
-    message = f"{error_class or ''} {exc}".casefold()
+    message = f"{_spark_error_condition(exc)} {exc}".casefold()
     return (
         "serverless" in message
         and ("not supported" in message or "unsupported" in message)
         and any(name in message for name in ("cache", "persist", "unpersist"))
     )
+
+
+def _is_jvm_spark_context_unsupported(exc):
+    """Return whether Spark Connect rejected access to the driver SparkContext."""
+    message = f"{_spark_error_condition(exc)} {exc}".casefold()
+    return "jvm_attribute_not_supported" in message and "sparkcontext" in message
 
 
 @pytest.fixture(scope="module")
@@ -86,6 +99,17 @@ def dataframe_cache_available(spark):
     except Exception as exc:
         if _is_serverless_cache_unsupported(exc):
             pytest.skip("DataFrame persistence is unavailable on serverless compute.")
+        raise
+
+
+@pytest.fixture(scope="module")
+def driver_spark_context(spark):
+    """Provide the JVM SparkContext or skip tests that cannot run through Spark Connect."""
+    try:
+        return spark.sparkContext
+    except Exception as exc:
+        if _is_jvm_spark_context_unsupported(exc):
+            pytest.skip("JVM SparkContext is unavailable on Spark Connect/serverless compute.")
         raise
 
 
@@ -490,9 +514,10 @@ def test_dataframe_evaluation_defaults_keys_to_every_input_column(spark):
 def test_persisted_projections_evaluate_custom_assignment_once_per_row(
     spark,
     dataframe_cache_available,
+    driver_spark_context,
 ):
     """Both public projections reuse one cached worker evaluation."""
-    invocation_count = spark.sparkContext.accumulator(0)
+    invocation_count = driver_spark_context.accumulator(0)
 
     def count_assignment(*, value):
         invocation_count.add(1)
@@ -661,6 +686,7 @@ def test_spark_runtime_builds_one_python_udf(spark, monkeypatch):
     )
 
     assert len(udf_factory_calls) == 1
+    assert udf_factory_calls[0][1]["useArrow"] is False
     assert evaluation.results_df.collect()[0]["rules_engine_matched"] is True
 
 
@@ -1199,7 +1225,7 @@ def test_spark_runtime_quarantines_errors_without_failing_job(spark):
         fail_fast_output.collect()
 
 
-def test_fail_on_error_remains_lazy_until_callers_action(spark):
+def test_fail_on_error_remains_lazy_until_callers_action(spark, driver_spark_context):
     """Building output does not hide a separate full-data validation action."""
     ruleset = _compile(
         {
@@ -1211,8 +1237,8 @@ def test_fail_on_error_remains_lazy_until_callers_action(spark):
     df = spark.createDataFrame([{"account": "A"}])
 
     group_id = "rules-engine-lazy-plan-test"
-    tracker = spark.sparkContext.statusTracker()
-    spark.sparkContext.setJobGroup(group_id, "rules engine lazy plan test")
+    tracker = driver_spark_context.statusTracker()
+    driver_spark_context.setJobGroup(group_id, "rules engine lazy plan test")
     try:
         evaluation = _evaluation(df, ruleset)
         output = evaluation.results_df
@@ -1222,7 +1248,7 @@ def test_fail_on_error_remains_lazy_until_callers_action(spark):
         assert output.collect()[0]["rules_engine_matched"] is True
         assert tracker.getJobIdsForGroup(group_id)
     finally:
-        spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
+        driver_spark_context.setLocalProperty("spark.jobGroup.id", None)
 
 
 def test_spark_runtime_preserves_timestamp_assignment_type(spark):
