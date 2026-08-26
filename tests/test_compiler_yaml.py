@@ -564,7 +564,7 @@ def test_known_scalar_literal_hints_validate_collection_items_recursively():
         YamlRulesetCompiler().compile_payload(payload)
 
 
-def test_unknown_literal_hint_retains_existing_extension_behavior():
+def test_unknown_literal_hint_is_preserved_as_extension_metadata():
     """Unknown hints remain metadata until schema compatibility needs them."""
     payload = _minimal_payload()
     payload["rules"][0]["when"]["all"][0]["right"] = {

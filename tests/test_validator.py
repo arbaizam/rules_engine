@@ -297,7 +297,7 @@ def test_valid_string_operators_validate():
 def test_between_with_nonzero_tolerance_fails_validation():
     """
     What: Validates that between/not_between cannot use non-zero tolerance.
-    Why: v1 defines tolerance for scalar comparisons but not range expansion.
+    Why: The current contract defines tolerance for scalar comparisons, not ranges.
     Fails when: Metadata can persist a tolerance that runtime would ignore.
     """
     result = _validate_condition(

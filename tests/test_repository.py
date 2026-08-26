@@ -161,7 +161,7 @@ def test_save_published_allows_distinct_versions_for_same_ruleset_name():
     """
     What: Allows two published versions with the same ruleset_name when their versions differ.
     Why: Candidate rulesets need to be published side by side for testing.
-    Fails when: The repository still enforces a single published sibling per ruleset_name.
+    Fails when: The repository enforces a single published sibling per ruleset_name.
     """
     repo = _repository()
     saved_versions = []

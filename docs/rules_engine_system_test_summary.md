@@ -27,7 +27,7 @@ does not run pytest itself.
 | ST-014 | Custom-function worker | A registered custom function works in both a condition and an assignment inside a real Spark worker. |
 | ST-015 | Output-name isolation | An ordinary `rules_engine_result` input is preserved, custom prefixes work, and full-audit names remain reserved in compact mode. |
 | ST-016 | Coverage aggregation | Coverage returns total, no-match, error, per-rule first-match, dead-rule, broad-rule, and clean no-match results. |
-| ST-017 | Assignment application | Keyed result rows remain separate from business rows; explicit nulls clear values, non-null values replace or append columns, structs replace atomically, keys stay immutable, and both projections share explicit persistence. |
+| ST-017 | Assignment application | Keyed result rows remain separate from business rows; explicit nulls clear values, non-null values replace or append columns, structs replace atomically, and keys stay immutable. On compute supporting DataFrame cache APIs, both projections also share explicit persistence; serverless logs that cache-only check as skipped. |
 | ST-018 | Standard-function worker contract | Optional defaults, operands nested in argument arrays, array predicates and joins, nested conversion plus decimal arithmetic, business-month boundaries, and `on_error: "null"` retain their types and values across a real Python worker. |
 
 ## Execution Contract

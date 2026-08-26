@@ -266,7 +266,7 @@ class SparkRulesEngineRuntime:
         df: DataFrame,
         ruleset: Ruleset,
         *,
-        key_columns: Sequence[str],
+        key_columns: Sequence[str] | None = None,
         column_prefix: str = "rules_engine",
         fail_on_error: bool = True,
         include_error_traceback: bool = False,
@@ -282,8 +282,9 @@ class SparkRulesEngineRuntime:
         ruleset : Ruleset
             Ruleset metadata to evaluate. This method performs semantic and
             incoming-schema validation before building the UDF.
-        key_columns : sequence of str
+        key_columns : sequence of str, optional
             Existing, immutable columns that identify rows in ``results_df``.
+            When omitted, all input columns are used in their existing order.
             The caller guarantees their values are non-null and unique; this
             method does not start a hidden Spark action to prove that contract.
         column_prefix : str, default "rules_engine"
@@ -429,9 +430,11 @@ class SparkRulesEngineRuntime:
     def _validate_key_columns(
         df: DataFrame,
         ruleset: Ruleset,
-        key_columns: Sequence[str],
+        key_columns: Sequence[str] | None,
     ) -> tuple[str, ...]:
         """Validate lazy row-identity metadata without scanning key values."""
+        if key_columns is None:
+            key_columns = df.columns
         if isinstance(key_columns, (str, bytes)):
             raise TypeError("key_columns must be a sequence of column names, not a string.")
         try:

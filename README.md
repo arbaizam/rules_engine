@@ -410,11 +410,13 @@ applied_df = evaluation.apply_assignments()
 ```
 
 `evaluate_dataframe()` returns a lazy `DataFrameEvaluation`, not a DataFrame.
-We require at least one `key_columns` entry so every result row carries an
-explicit business identity. The named columns must exist and be unambiguous,
-and rules cannot assign to them. The caller owns the data guarantee that the
+When `key_columns` is omitted, every input column is used in source order so
+each result row retains the complete original record. Pass an explicit,
+non-empty sequence when rules overwrite existing input columns or when a
+compact result is preferred. Key columns must exist and be unambiguous, and
+rules cannot assign to them. The caller owns the data guarantee that the
 combined key is non-null and unique; we intentionally do not start a hidden
-Spark job to verify values.
+Spark job to verify values. An explicit empty sequence remains invalid.
 
 The object exposes two projections of one shared evaluated Spark plan:
 
@@ -437,7 +439,7 @@ prefix is used.
 
 | Order | Column | Type | Allowed returned values | Definition |
 |---:|---|---|---|---|
-| 1 | Declared key columns | Existing types | Original key values | Keys appear in the exact order supplied to `key_columns`. Other business columns are not copied into `results_df`. |
+| 1 | Effective key columns | Existing types | Original key values | Explicit keys appear in caller-supplied order. When `key_columns` is omitted, every input column appears in source order. Other business columns are not copied into `results_df`. |
 | 2 | `rules_engine_error` | Nullable string | `null` or error text | Row error captured when `fail_on_error=false`. It remains null for a clean match or no-match. |
 | 3 | `rules_engine_matched` | Boolean | `true` or `false` | True when at least one active rule matched and the row completed successfully. |
 | 4 | `rules_engine_matched_rule_ids` | `array<string>` | Ordered IDs or `[]` | Every matching rule ID in evaluation order. |
@@ -584,7 +586,7 @@ Each operand trace (`left` or `right`) contains:
 
 | Setting | Allowed values and default | Returned behavior |
 |---|---|---|
-| `key_columns` | Required non-empty sequence of distinct, non-empty input column names | Places those columns first in `results_df` and protects them from assignment. The caller guarantees their combined values are non-null and unique. |
+| `key_columns` | Optional non-empty sequence of distinct, non-empty input column names; default all input columns | Places the effective keys first in `results_df` and protects them from assignment. Omit it to retain the complete source record when rules do not overwrite input columns; pass explicit keys otherwise. The caller guarantees their combined values are non-null and unique. An explicit empty sequence is invalid. |
 | `column_prefix` | Non-empty string; default `rules_engine` | Renames every result column. For example, `decision` produces `decision_error` and `decision_matched`. |
 | `fail_on_error` | `true` or `false`; default `true` | `true` raises from the worker during the caller's first Spark action. `false` returns an error row with `matched=false`, an empty ID array, and `applied=false` for every assignment target. |
 | `include_error_traceback` | `true` or `false`; default `false` | Adds a Python traceback to captured row errors. We use it only for debugging because it makes rows much larger. |
@@ -1057,7 +1059,7 @@ evaluation = service.evaluate_dataframe(
     ruleset=None,
     ruleset_name=None,
     version=None,
-    key_columns=["row_id"],
+    key_columns=None,
     column_prefix="rules_engine",
     fail_on_error=True,
     include_error_traceback=False,
@@ -1067,8 +1069,8 @@ evaluation = service.evaluate_dataframe(
 
 Evaluates a supplied ruleset or loads one by name. A supplied `ruleset` takes
 precedence. Supplying neither a ruleset nor a name raises `ValueError`.
-`key_columns` is required and follows the identity contract in the Spark
-evaluation section.
+Omitted `key_columns` defaults to every input column. Explicit keys follow the
+identity contract in the Spark evaluation section.
 
 Before building the shared lazy plan, we validate semantics, source fields,
 assignment types, null fallbacks, temporal compatibility, custom-function

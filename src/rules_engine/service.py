@@ -214,7 +214,7 @@ class RulesEngineService:
         ruleset: Ruleset | None = None,
         ruleset_name: str | None = None,
         version: str | None = None,
-        key_columns: Sequence[str],
+        key_columns: Sequence[str] | None = None,
         column_prefix: str = "rules_engine",
         fail_on_error: bool = True,
         include_error_traceback: bool = False,
@@ -222,6 +222,11 @@ class RulesEngineService:
     ) -> DataFrameEvaluation:
         """
         Evaluate keyed Spark rows using a supplied or loaded ruleset.
+
+        When ``key_columns`` is omitted, every input column is used so the
+        result projection retains the complete source record. Pass explicit
+        keys when rules overwrite existing columns or a compact result is
+        preferred.
         """
         if ruleset is None:
             if ruleset_name is None:

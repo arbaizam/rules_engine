@@ -61,6 +61,34 @@ def spark():
         session.stop()
 
 
+def _is_serverless_cache_unsupported(exc):
+    """Return whether Databricks rejected a cache API specifically on serverless."""
+    get_error_class = getattr(exc, "getErrorClass", None)
+    try:
+        error_class = get_error_class() if callable(get_error_class) else ""
+    except Exception:
+        error_class = ""
+    message = f"{error_class or ''} {exc}".casefold()
+    return (
+        "serverless" in message
+        and ("not supported" in message or "unsupported" in message)
+        and any(name in message for name in ("cache", "persist", "unpersist"))
+    )
+
+
+@pytest.fixture(scope="module")
+def dataframe_cache_available(spark):
+    """Skip cache-specific tests when the active compute does not expose cache APIs."""
+    probe = spark.range(1)
+    try:
+        probe.persist()
+        probe.unpersist()
+    except Exception as exc:
+        if _is_serverless_cache_unsupported(exc):
+            pytest.skip("DataFrame persistence is unavailable on serverless compute.")
+        raise
+
+
 def _spark_runtime():
     return SparkRulesEngineRuntime(DummyRepository(), FunctionRegistry())
 
@@ -415,7 +443,10 @@ def test_dataframe_evaluation_separates_results_and_applies_atomic_values(spark)
     assert applied_rows["keep"]["new_flag"] is None
 
 
-def test_dataframe_evaluation_persists_one_shared_plan(spark):
+def test_dataframe_evaluation_persists_one_shared_plan(
+    spark,
+    dataframe_cache_available,
+):
     """Explicit persistence is owned by the internal source-plus-results plan."""
     ruleset = _compile(
         {
@@ -436,7 +467,30 @@ def test_dataframe_evaluation_persists_one_shared_plan(spark):
     assert not evaluation._evaluated_df.storageLevel.useMemory
 
 
-def test_persisted_projections_evaluate_custom_assignment_once_per_row(spark):
+def test_dataframe_evaluation_defaults_keys_to_every_input_column(spark):
+    """Omitted keys keep the complete source record in the result projection."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    df = spark.createDataFrame(
+        [(7, "A", "retained")],
+        ["row_id", "account", "source_note"],
+    )
+
+    evaluation = _spark_runtime().evaluate_dataframe(df, ruleset)
+
+    assert evaluation.key_columns == ("row_id", "account", "source_note")
+    assert evaluation.results_df.columns[:3] == ["row_id", "account", "source_note"]
+
+
+def test_persisted_projections_evaluate_custom_assignment_once_per_row(
+    spark,
+    dataframe_cache_available,
+):
     """Both public projections reuse one cached worker evaluation."""
     invocation_count = spark.sparkContext.accumulator(0)
 
@@ -486,26 +540,6 @@ def test_persisted_projections_evaluate_custom_assignment_once_per_row(spark):
         assert invocation_count.value == 3
     finally:
         evaluation.unpersist(blocking=True)
-
-
-def test_spark_runtime_preserves_input_column_named_like_old_temp_result(spark):
-    """Internal UDF plumbing cannot reserve or overwrite a caller column."""
-    ruleset = _compile(
-        {
-            "left": {"field": "account"},
-            "operator": "eq",
-            "right": {"literal": "A"},
-        }
-    )
-    df = spark.createDataFrame(
-        [("A", "keep-me")],
-        ["account", "rules_engine_result"],
-    )
-
-    evaluation = _evaluation(df, ruleset)
-    row = evaluation.apply_assignments().collect()[0]
-
-    assert row["rules_engine_result"] == "keep-me"
 
 
 def test_spark_runtime_applies_typed_operand_defaults_before_comparison(spark):

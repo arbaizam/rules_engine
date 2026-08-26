@@ -68,6 +68,33 @@ def _expect_raises(exception_type, operation, *, contains=None):
     raise AssertionError(f"Expected {exception_type.__name__} to be raised.")
 
 
+def _is_serverless_cache_unsupported(exc):
+    """Return whether Databricks rejected a cache API specifically on serverless."""
+    get_error_class = getattr(exc, "getErrorClass", None)
+    try:
+        error_class = get_error_class() if callable(get_error_class) else ""
+    except Exception:  # noqa: BLE001 - exception metadata varies by Spark client.
+        error_class = ""
+    message = f"{error_class or ''} {exc}".casefold()
+    return (
+        "serverless" in message
+        and ("not supported" in message or "unsupported" in message)
+        and any(name in message for name in ("cache", "persist", "unpersist"))
+    )
+
+
+def _persist_if_supported(evaluation):
+    """Persist an evaluation, or continue when serverless explicitly disallows caching."""
+    try:
+        evaluation.persist()
+    except Exception as exc:  # noqa: BLE001 - recognize one environment limitation.
+        if not _is_serverless_cache_unsupported(exc):
+            raise
+        print("SKIP: Explicit DataFrame persistence is unavailable on serverless compute.")
+        return False
+    return True
+
+
 def _start(test_id, name):
     print()
     print(f"{test_id}: {name}")
@@ -1126,7 +1153,8 @@ apply_evaluation = service.evaluate_dataframe(
     ruleset=apply_ruleset,
     key_columns=["row_id"],
     full_audit=True,
-).persist()
+)
+apply_evaluation_persisted = _persist_if_supported(apply_evaluation)
 
 assert apply_evaluation.results_df.columns == [
     "row_id",
@@ -1172,7 +1200,8 @@ assert applied_rows["keep"]["details"] == {
     "manual": True,
 }
 assert applied_rows["keep"]["new_note"] is None
-apply_evaluation.unpersist()
+if apply_evaluation_persisted:
+    apply_evaluation.unpersist()
 
 key_assignment_ruleset = service.compile_yaml_text(
     """

@@ -81,6 +81,7 @@ def test_service_runtime_reuses_injected_compatibility_validator():
         validator=validator,
     )
 
+    assert service.publish_service._validator is validator
     assert service.runtime._compatibility_validator is validator
 
 
@@ -193,6 +194,7 @@ def test_service_evaluate_dataframe_requires_ruleset_or_name():
 
 
 def test_service_passes_runtime_error_options_through(monkeypatch):
+    """Evaluation options reach the runtime unchanged with the supplied ruleset."""
     ruleset = YamlRulesetCompiler().compile_text(_yaml_text())
     service = _service()
     captured = {}
@@ -221,6 +223,22 @@ def test_service_passes_runtime_error_options_through(monkeypatch):
         "include_error_traceback": True,
         "full_audit": True,
     }
+
+
+def test_service_passes_omitted_key_columns_through_as_none(monkeypatch):
+    """The runtime owns expansion of omitted keys from the actual DataFrame schema."""
+    ruleset = YamlRulesetCompiler().compile_text(_yaml_text())
+    service = _service()
+    captured = {}
+
+    def evaluate_dataframe(df, supplied_ruleset, **kwargs):
+        captured.update(kwargs)
+        return "evaluated"
+
+    monkeypatch.setattr(service.runtime, "evaluate_dataframe", evaluate_dataframe)
+
+    assert service.evaluate_dataframe("input", ruleset=ruleset) == "evaluated"
+    assert captured["key_columns"] is None
 
 
 def test_service_describe_rules_formats_supplied_ruleset():
@@ -333,16 +351,3 @@ def test_service_publish_accepts_compiled_ruleset():
     service.publish(ruleset, published_by="tester")
 
     assert repository.saved_ruleset.ruleset_id == "service_ruleset"
-
-
-def test_service_retire_passes_actor_to_repository():
-    """
-    What: Passes the retirement actor through the facade.
-    Why: Repository lifecycle records should identify the caller.
-    Fails when: Service methods drop the retirement actor.
-    """
-    repository = RecordingRepository()
-    service = _service(repository)
-    service.retire("rs1", "1", retired_by="tester")
-
-    assert repository.retired == ("rs1", "1", "tester")

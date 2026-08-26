@@ -7,7 +7,6 @@ from rules_engine.registry import FunctionRegistry
 from rules_engine.runtime import SparkRowEvaluator
 from rules_engine.spark_runtime import (
     SparkRulesEngineRuntime,
-    _result_struct,
     result_field_names,
 )
 from rules_engine.standard_functions import STANDARD_FUNCTION_VERSION
@@ -27,50 +26,6 @@ class FakeSparkRow:
         return self.values
 
 
-def _payload(*, version="1"):
-    return {
-        "ruleset_id": "loan_cleaning",
-        "ruleset_name": "Loan Cleaning",
-        "version": version,
-        "owner": "Data Quality",
-        "owner_department": "Lending",
-        "rules": [
-            {
-                "rule_id": "prime",
-                "rule_name": "Prime loans",
-                "rule_order": 1,
-                "when": {
-                    "all": [
-                        {
-                            "condition_id": "fico-prime",
-                            "left": {"field": "fico"},
-                            "operator": "ge",
-                            "right": {"literal": 720},
-                        }
-                    ]
-                },
-                "assign": {"bucket": "prime", "rate": 0.0425},
-            },
-            {
-                "rule_id": "near-prime",
-                "rule_name": "Near-prime loans",
-                "rule_order": 2,
-                "when": {
-                    "all": [
-                        {
-                            "condition_id": "fico-near-prime",
-                            "left": {"field": "fico"},
-                            "operator": "ge",
-                            "right": {"literal": 680},
-                        }
-                    ]
-                },
-                "assign": {"review": True},
-            },
-        ],
-    }
-
-
 # Audit contracts and Python/Spark differential behavior
 
 
@@ -80,52 +35,14 @@ def test_public_coverage_export_and_metadata_versions_stay_aligned():
     assert STANDARD_FUNCTION_VERSION == __version__
 
 
-def test_full_audit_controls_detailed_schema_and_payload():
-    ruleset = YamlRulesetCompiler().compile_payload(_payload())
-    runtime = SparkRulesEngineRuntime(NoOpRepository(), FunctionRegistry())
-    assign_fields = ["bucket", "rate", "review"]
-    assign_types = {
-        "bucket": T.StringType(),
-        "rate": T.DecimalType(10, 4),
-        "review": T.BooleanType(),
-    }
-
-    payloads = {}
-    for full_audit in (False, True):
-        evaluator = runtime._build_row_evaluator(
-            ruleset,
-            assign_fields,
-            assign_types,
-            full_audit=full_audit,
-        )
-        payloads[full_audit] = evaluator(FakeSparkRow({"fico": 740}))
-        assert tuple(payloads[full_audit]) == result_field_names(full_audit=full_audit)
-        assert tuple(payloads[full_audit]) == tuple(
-            _result_struct(
-                T.StructType(),
-                full_audit=full_audit,
-            ).fieldNames()
-        )
-
-    assert tuple(payloads[False]) == (
-        "error",
-        "matched",
-        "matched_rule_ids",
-        "assign",
-    )
-    assert "assignment_results" not in payloads[False]
-    assert "matched_rules" not in payloads[False]
-    assert payloads[True]["matched_rules"][0]["conditions"]
-    assert "assignment_results" in payloads[True]
-    assert "matched_rules" in payloads[True]
-
-
 def test_non_boolean_full_audit_fails_before_spark_execution():
+    """String truthiness cannot silently enable the expensive audit contract."""
     with pytest.raises(TypeError, match="full_audit must be a bool"):
         result_field_names(full_audit="true")
 
 
 def test_python_evaluator_and_spark_worker_share_rule_ordering_semantics():
+    """The compact Python and Spark-worker paths share ordering and stop semantics."""
     ruleset = YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "differential",

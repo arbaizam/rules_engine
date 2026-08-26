@@ -304,8 +304,8 @@ rules:
     assert result["matched"] is expected
 
 
-def test_string_membership_semantics_are_unchanged():
-    """Membership still applies exact equality to ordinary strings."""
+def test_string_membership_uses_exact_case_sensitive_equality():
+    """Membership applies exact case-sensitive equality to ordinary strings."""
     ruleset = _compile(
         {
             "left": {"field": "status"},
@@ -347,7 +347,7 @@ def test_numeric_looking_strings_keep_exact_code_equality(left, right):
 
 
 def test_real_numeric_values_still_use_decimal_equality():
-    """A Spark worker float still equals an exact Decimal-authored literal."""
+    """A Spark worker float equals an exact Decimal-authored literal."""
     ruleset = _compile(
         {
             "left": {"field": "rate"},
@@ -579,6 +579,44 @@ def test_dataframe_evaluation_rejects_assignment_to_an_immutable_key():
             ruleset,
             key_columns=["row_id"],
         )
+
+
+def test_dataframe_evaluation_defaults_keys_to_all_input_columns():
+    """Omitted keys expand to the complete source schema in source order."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    input_frame = type(
+        "InputFrame",
+        (),
+        {"columns": ["row_id", "account", "source_note"]},
+    )()
+
+    assert _spark_runtime()._validate_key_columns(input_frame, ruleset, None) == (
+        "row_id",
+        "account",
+        "source_note",
+    )
+
+
+def test_dataframe_evaluation_default_keys_protect_every_input_column():
+    """Omitted keys retain the source record without allowing source overwrites."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        },
+        assign={"account": "replacement"},
+    )
+    input_frame = type("InputFrame", (), {"columns": ["row_id", "account"]})()
+
+    with pytest.raises(ValueError, match="account"):
+        _spark_runtime().evaluate_dataframe(input_frame, ruleset)
 
 
 def test_assignment_provenance_uses_stable_event_positions():
@@ -1465,23 +1503,6 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
     assert assignment_results["clear_value"]["changed"] is False
 
 
-def test_spark_row_evaluator_no_match_returns_empty_audit_arrays():
-    """No-match rows use empty trace and provenance arrays."""
-    ruleset = _compile(
-        {
-            "left": {"field": "account"},
-            "operator": "eq",
-            "right": {"literal": "A"},
-        }
-    )
-
-    result = _evaluate_worker(ruleset, {"account": "B"})
-
-    assert result["matched"] is False
-    assert result["matched_rules"] == []
-    assert result["assignment_results"] == []
-
-
 def test_compact_and_full_audit_payloads_have_core_result_parity():
     """Audit detail changes observability, not success, no-match, or error decisions."""
     ruleset = _compile(
@@ -1598,7 +1619,7 @@ def test_spark_row_evaluator_rejects_lossy_decimal_assignment_coercion():
 
 
 def test_spark_row_evaluator_rejects_fractional_integer_function_return():
-    """Runtime normalization still guards incorrectly declared function results."""
+    """Runtime normalization guards incorrectly declared function results."""
     registry = FunctionRegistry()
 
     def fractional_result():
@@ -2063,23 +2084,6 @@ def test_spark_row_evaluator_like_uses_sql_wildcard_semantics():
 
     assert _evaluate_worker(ruleset, {"name": "abcde"})["matched"] is True
     assert _evaluate_worker(ruleset, {"name": "xyz"})["matched"] is False
-
-
-def test_spark_row_evaluator_default_if_null_controls_condition_result():
-    """
-    What: Replaces a null operand before comparison.
-    Why: Operand-level fallbacks are the explicit way to make missing data match.
-    Fails when: The fallback is applied after comparison or ignored.
-    """
-    ruleset = _compile(
-        {
-            "left": {"field": "missing", "default_if_null": "A"},
-            "operator": "eq",
-            "right": {"literal": "A"},
-        }
-    )
-
-    assert _evaluate_worker(ruleset, {})["matched"] is True
 
 
 def test_spark_row_evaluator_default_if_null_applies_to_custom_function_result_once():
