@@ -22,7 +22,7 @@ does not run pytest itself.
 | ST-009 | Rule control flow | A matching `stop_on_match: true` rule commits its assignments and skips later rules. |
 | ST-010 | Prior assignments | Later rules read committed values through `assigned`, while assignments within one rule share a pre-rule snapshot. |
 | ST-011 | Null substitution | Numeric and text `default_if_null` values are applied before comparison. |
-| ST-012 | Assignment history | Full audit records the original value, each proposed value, overrides, and the final effective assignment. |
+| ST-012 | Assignment history | Full audit records the original value, each proposed value, the immediate next override, and the final winning assignment. |
 | ST-013 | Typed worker values | Decimal, date, and nested struct assignments retain their Spark types and values across the Python-worker boundary. |
 | ST-014 | Custom-function worker | A registered custom function works in both a condition and an assignment inside a real Spark worker. |
 | ST-015 | Output-name isolation | An ordinary `rules_engine_result` input is preserved, custom prefixes work, and full-audit names remain reserved in compact mode. |

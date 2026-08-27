@@ -779,7 +779,7 @@ print("PASS: Numeric and text fallbacks run before comparison.")
 
 # COMMAND ----------
 
-_start("ST-012", "Record assignment override history against the effective prior value")
+_start("ST-012", "Record immediate assignment overrides and the final winner")
 
 history_ruleset = service.compile_yaml_text(
     """
@@ -807,6 +807,15 @@ rules:
           operator: is_not_null
     assign:
       target: second
+  - rule_id: history_third
+    rule_name: History third
+    rule_order: 3
+    when:
+      all:
+        - left: {field: row_id}
+          operator: is_not_null
+    assign:
+      target: third
 """
 )
 
@@ -822,25 +831,37 @@ history_row = (
 )
 
 events = history_row["rules_engine_assignment_results"]
-assert len(events) == 2
-first_event, second_event = events
+assert len(events) == 3
+first_event, second_event, third_event = events
 assert first_event["old_value"] == "original"
 assert first_event["proposed_value"] == "first"
 assert first_event["changed"] is True
 assert first_event["effective"] is False
 assert first_event["overridden_by_rule_id"] == "history_second"
 assert first_event["overridden_by_assignment_id"] == "assignment:history_second:target"
+assert first_event["final_winning_rule_id"] == "history_third"
+assert first_event["final_winning_assignment_id"] == "assignment:history_third:target"
 assert second_event["old_value"] == "first"
 assert second_event["proposed_value"] == "second"
 assert second_event["changed"] is True
-assert second_event["effective"] is True
-assert second_event["overridden_by_rule_id"] is None
+assert second_event["effective"] is False
+assert second_event["overridden_by_rule_id"] == "history_third"
+assert second_event["overridden_by_assignment_id"] == "assignment:history_third:target"
+assert second_event["final_winning_rule_id"] == "history_third"
+assert third_event["old_value"] == "second"
+assert third_event["proposed_value"] == "third"
+assert third_event["changed"] is True
+assert third_event["effective"] is True
+assert third_event["overridden_by_rule_id"] is None
+assert third_event["overridden_by_assignment_id"] is None
+assert third_event["final_winning_rule_id"] == "history_third"
+assert third_event["final_winning_assignment_id"] == "assignment:history_third:target"
 assert history_row["rules_engine_assign"]["target"] == {
     "applied": True,
-    "value": "second",
+    "value": "third",
 }
 
-print("PASS: Assignment history follows original value, prior commit, and final winner.")
+print("PASS: Assignment history distinguishes immediate overrides from the final winner.")
 
 # COMMAND ----------
 

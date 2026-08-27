@@ -619,8 +619,8 @@ def test_dataframe_evaluation_default_keys_protect_every_input_column():
         _spark_runtime().evaluate_dataframe(input_frame, ruleset)
 
 
-def test_assignment_provenance_uses_stable_event_positions():
-    """Last-assignment precedence does not depend on dictionary identity."""
+def test_assignment_provenance_tracks_immediate_override_and_final_winner():
+    """Assignment history distinguishes the next overwrite from the final winner."""
     evaluator = object.__new__(_SparkRowUdfEvaluator)
     events = [
         {
@@ -634,22 +634,56 @@ def test_assignment_provenance_uses_stable_event_positions():
             "proposed_value": "first",
         },
         {
+            "assignment_id": "risk_a1",
+            "rule_id": "r1",
+            "rule_name": "Rule 1",
+            "rule_order": 1,
+            "target_field": "risk",
+            "authored_expression": "risk = 'high'",
+            "old_value": "low",
+            "proposed_value": "high",
+        },
+        {
             "assignment_id": "a2",
             "rule_id": "r2",
             "rule_name": "Rule 2",
             "rule_order": 2,
             "target_field": "bucket",
+            "authored_expression": "bucket = 'second'",
+            "old_value": "first",
+            "proposed_value": "second",
+        },
+        {
+            "assignment_id": "a3",
+            "rule_id": "r3",
+            "rule_name": "Rule 3",
+            "rule_order": 3,
+            "target_field": "bucket",
             "authored_expression": "bucket = 'last'",
-            "old_value": "old",
+            "old_value": "second",
             "proposed_value": "last",
         },
     ]
 
     results = evaluator._assignment_results([dict(event) for event in events])
+    by_assignment_id = {result["assignment_id"]: result for result in results}
 
-    assert results[0]["effective"] is False
-    assert results[0]["overridden_by_assignment_id"] == "a2"
-    assert results[1]["effective"] is True
+    assert by_assignment_id["a1"]["effective"] is False
+    assert by_assignment_id["a1"]["overridden_by_assignment_id"] == "a2"
+    assert by_assignment_id["a1"]["overridden_by_rule_id"] == "r2"
+    assert by_assignment_id["a1"]["final_winning_assignment_id"] == "a3"
+    assert by_assignment_id["a1"]["final_winning_rule_id"] == "r3"
+    assert by_assignment_id["a2"]["effective"] is False
+    assert by_assignment_id["a2"]["overridden_by_assignment_id"] == "a3"
+    assert by_assignment_id["a2"]["final_winning_assignment_id"] == "a3"
+    assert by_assignment_id["a3"]["effective"] is True
+    assert by_assignment_id["a3"]["overridden_by_assignment_id"] is None
+    assert by_assignment_id["a3"]["overridden_by_rule_id"] is None
+    assert by_assignment_id["a3"]["final_winning_assignment_id"] == "a3"
+    assert by_assignment_id["a3"]["final_winning_rule_id"] == "r3"
+    assert by_assignment_id["risk_a1"]["effective"] is True
+    assert by_assignment_id["risk_a1"]["overridden_by_assignment_id"] is None
+    assert by_assignment_id["risk_a1"]["final_winning_assignment_id"] == "risk_a1"
 
 
 def test_set_trace_text_is_deterministic():
@@ -1493,7 +1527,11 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
     assert assignment_results["first_bucket"]["old_value"] == "original"
     assert assignment_results["first_bucket"]["overridden_by_rule_id"] == "second_match"
     assert assignment_results["first_bucket"]["overridden_by_assignment_id"] == "second_bucket"
+    assert assignment_results["first_bucket"]["final_winning_rule_id"] == "second_match"
+    assert assignment_results["first_bucket"]["final_winning_assignment_id"] == "second_bucket"
     assert assignment_results["second_bucket"]["effective"] is True
+    assert assignment_results["second_bucket"]["final_winning_rule_id"] == "second_match"
+    assert assignment_results["second_bucket"]["final_winning_assignment_id"] == "second_bucket"
     assert assignment_results["second_bucket"]["old_value"] == "first"
     assert assignment_results["second_bucket"]["changed"] is True
     assert assignment_results["second_bucket"]["authored_expression"] == ("bucket = 'second'")

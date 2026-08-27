@@ -189,6 +189,13 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert assignment_results_type.elementType["authored_expression"].nullable is False
     assert assignment_results_type.elementType["changed"].nullable is False
     assert assignment_results_type.elementType["effective"].nullable is False
+    assert assignment_results_type.elementType["final_winning_rule_id"].nullable is False
+    assert assignment_results_type.elementType["final_winning_assignment_id"].nullable is False
+    assert assignment_results_type.elementType.fieldNames()[-3:] == [
+        "effective",
+        "final_winning_rule_id",
+        "final_winning_assignment_id",
+    ]
 
     rows = output.orderBy("account").collect()
 
@@ -206,6 +213,11 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert rows[0]["rules_engine_assignment_results"][0]["old_value"] == "existing"
     assert rows[0]["rules_engine_assignment_results"][0]["proposed_value"] == "matched"
     assert rows[0]["rules_engine_assignment_results"][0]["changed"] is True
+    assert rows[0]["rules_engine_assignment_results"][0]["final_winning_rule_id"] == "r1"
+    assert (
+        rows[0]["rules_engine_assignment_results"][0]["final_winning_assignment_id"]
+        == "assignment:r1:bucket"
+    )
     assert match_trace["rule_id"] == "r1"
     assert match_trace["rule_name"] == "Rule 1"
     assert match_trace["rule_order"] == 1
@@ -318,8 +330,12 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert multi_events["first_bucket"]["effective"] is False
     assert multi_events["first_bucket"]["overridden_by_rule_id"] == "second"
     assert multi_events["first_bucket"]["overridden_by_assignment_id"] == ("second_bucket")
+    assert multi_events["first_bucket"]["final_winning_rule_id"] == "second"
+    assert multi_events["first_bucket"]["final_winning_assignment_id"] == "second_bucket"
     assert multi_events["second_bucket"]["old_value"] == "first"
     assert multi_events["second_bucket"]["changed"] is True
+    assert multi_events["second_bucket"]["final_winning_rule_id"] == "second"
+    assert multi_events["second_bucket"]["final_winning_assignment_id"] == "second_bucket"
 
 
 def test_dataframe_evaluation_separates_results_and_applies_atomic_values(spark):

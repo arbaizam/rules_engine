@@ -456,8 +456,8 @@ display(applied_df.orderBy("row_id"))
 # MAGIC - `rules_engine_matched_rules`: every matched rule in order, including its
 # MAGIC   explanation and condition-level source columns, values, and pass/fail state.
 # MAGIC - `rules_engine_assignment_results`: every proposed assignment plus its
-# MAGIC   authored expression, original value, changed/effective flags, and override
-# MAGIC   provenance.
+# MAGIC   authored expression, original value, changed/effective flags, immediate
+# MAGIC   override, and final-winner provenance.
 # MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
 # MAGIC - `rules_engine_ruleset`: immutable ruleset ID, version, and content hash.
 # MAGIC - `rules_engine_engine_version`: installed evaluator version.

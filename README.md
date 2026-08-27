@@ -455,7 +455,7 @@ before `rules_engine_ruleset`:
 | Order after assign | Column | Type | Allowed returned values | Definition |
 |---:|---|---|---|---|
 | 1 | `rules_engine_matched_rules` | `array<struct>` | One element per match or `[]` | Complete trace for every matching rule. Losing rules do not emit match traces. |
-| 2 | `rules_engine_assignment_results` | `array<struct>` | One element per applied assignment or `[]` | Assignment history, including replaced values and final-winner provenance. |
+| 2 | `rules_engine_assignment_results` | `array<struct>` | One element per applied assignment or `[]` | Assignment history, including immediate overrides and final-winner provenance. |
 
 Full audit resolves and serializes substantially more data. We elected to make
 it optional for targeted explainability instead of paying that cost on every
@@ -578,9 +578,11 @@ Each operand trace (`left` or `right`) contains:
 | `old_value` | Nullable string | Rendered value or `null` | Latest earlier committed assignment for this target, otherwise the original input value. |
 | `proposed_value` | Nullable string | Rendered value or `null` | Value proposed by this assignment. |
 | `changed` | Boolean | `true` or `false` | Whether proposed value differs from `old_value`. |
+| `overridden_by_rule_id` | Nullable string | Next rule ID or `null` | Rule that immediately replaced this assignment for the same target. Null when this event is final. |
+| `overridden_by_assignment_id` | Nullable string | Next assignment ID or `null` | Assignment that immediately replaced this event for the same target. Null when this event is final. |
 | `effective` | Boolean | `true` or `false` | True only when this event supplies the final target value. |
-| `overridden_by_rule_id` | Nullable string | Later rule ID or `null` | Rule that later replaced this value. |
-| `overridden_by_assignment_id` | Nullable string | Later assignment ID or `null` | Assignment that later replaced this value. |
+| `final_winning_rule_id` | String | Final rule ID | Rule whose assignment supplies the final value for this target. |
+| `final_winning_assignment_id` | String | Final assignment ID | Assignment that supplies the final value for this target. |
 
 ### Evaluation parameters and returned behavior
 

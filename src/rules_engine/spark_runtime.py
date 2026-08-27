@@ -152,9 +152,11 @@ ASSIGNMENT_RESULT_STRUCT = T.StructType(
         T.StructField("old_value", T.StringType(), True),
         T.StructField("proposed_value", T.StringType(), True),
         T.StructField("changed", T.BooleanType(), False),
-        T.StructField("effective", T.BooleanType(), False),
         T.StructField("overridden_by_rule_id", T.StringType(), True),
         T.StructField("overridden_by_assignment_id", T.StringType(), True),
+        T.StructField("effective", T.BooleanType(), False),
+        T.StructField("final_winning_rule_id", T.StringType(), False),
+        T.StructField("final_winning_assignment_id", T.StringType(), False),
     ]
 )
 
@@ -723,14 +725,24 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         self,
         events: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Build ordered provenance and override metadata for assignments."""
+        """Build ordered immediate-override and final-winner assignment provenance."""
         effective_event_indexes = {
             event["target_field"]: index for index, event in enumerate(events)
         }
+        next_event_indexes: dict[int, int] = {}
+        next_index_by_target: dict[str, int] = {}
+        for index in range(len(events) - 1, -1, -1):
+            target_field = events[index]["target_field"]
+            if target_field in next_index_by_target:
+                next_event_indexes[index] = next_index_by_target[target_field]
+            next_index_by_target[target_field] = index
+
         results: list[dict[str, Any]] = []
         for index, event in enumerate(events):
             effective_index = effective_event_indexes[event["target_field"]]
             effective_event = events[effective_index]
+            next_event_index = next_event_indexes.get(index)
+            next_event = events[next_event_index] if next_event_index is not None else None
             effective = index == effective_index
             results.append(
                 {
@@ -746,11 +758,15 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
                         event["old_value"],
                         event["proposed_value"],
                     ),
-                    "effective": effective,
-                    "overridden_by_rule_id": (None if effective else effective_event["rule_id"]),
-                    "overridden_by_assignment_id": (
-                        None if effective else effective_event["assignment_id"]
+                    "overridden_by_rule_id": (
+                        next_event["rule_id"] if next_event is not None else None
                     ),
+                    "overridden_by_assignment_id": (
+                        next_event["assignment_id"] if next_event is not None else None
+                    ),
+                    "effective": effective,
+                    "final_winning_rule_id": effective_event["rule_id"],
+                    "final_winning_assignment_id": effective_event["assignment_id"],
                 }
             )
         return results
