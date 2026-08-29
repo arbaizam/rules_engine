@@ -50,7 +50,7 @@ from rules_engine.spark_types import (
     decimal_value_fits,
 )
 from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
-from rules_engine.version import __version__
+from rules_engine.version import AUDIT_SCHEMA_VERSION, __version__
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +192,7 @@ _FULL_AUDIT_ONLY_RESULT_FIELDS = (
         False,
     ),
 )
+_WORKER_ENGINE_VERSION_FIELD = "__worker_engine_version"
 
 
 def _result_struct(
@@ -205,8 +206,14 @@ def _result_struct(
         *_COMPACT_RESULT_FIELDS_BEFORE_ASSIGN,
         T.StructField("assign", _assignment_outcome_schema(assign_schema), False),
     ]
+    public_fields = compact_fields + (
+        list(_FULL_AUDIT_ONLY_RESULT_FIELDS) if full_audit else []
+    )
     return T.StructType(
-        compact_fields + (list(_FULL_AUDIT_ONLY_RESULT_FIELDS) if full_audit else [])
+        [
+            *public_fields,
+            T.StructField(_WORKER_ENGINE_VERSION_FIELD, T.StringType(), False),
+        ]
     )
 
 
@@ -229,8 +236,14 @@ def _assignment_outcome_schema(assign_schema: T.StructType) -> T.StructType:
     )
 
 
-COMPACT_RESULT_FIELD_NAMES = tuple(_result_struct(T.StructType()).fieldNames())
-FULL_AUDIT_RESULT_FIELD_NAMES = tuple(_result_struct(T.StructType(), full_audit=True).fieldNames())
+COMPACT_RESULT_FIELD_NAMES = (
+    *(field.name for field in _COMPACT_RESULT_FIELDS_BEFORE_ASSIGN),
+    "assign",
+)
+FULL_AUDIT_RESULT_FIELD_NAMES = (
+    *COMPACT_RESULT_FIELD_NAMES,
+    *(field.name for field in _FULL_AUDIT_ONLY_RESULT_FIELDS),
+)
 FULL_AUDIT_ONLY_RESULT_FIELD_NAMES = tuple(field.name for field in _FULL_AUDIT_ONLY_RESULT_FIELDS)
 
 
@@ -347,6 +360,7 @@ class SparkRulesEngineRuntime:
             *{f"{column_prefix}_{field_name}" for field_name in FULL_AUDIT_RESULT_FIELD_NAMES},
             f"{column_prefix}_ruleset",
             f"{column_prefix}_engine_version",
+            f"{column_prefix}_audit_schema_version",
         }
         conflicts = sorted(output_names & set(df.columns))
         if conflicts:
@@ -487,7 +501,7 @@ class SparkRulesEngineRuntime:
         full_audit: bool,
     ) -> tuple[str, ...]:
         """Return the public result columns in contract order."""
-        return (
+        output_names = (
             *(
                 f"{column_prefix}_{field_name}"
                 for field_name in result_field_names(full_audit=full_audit)
@@ -495,6 +509,9 @@ class SparkRulesEngineRuntime:
             f"{column_prefix}_ruleset",
             f"{column_prefix}_engine_version",
         )
+        if full_audit:
+            return (*output_names, f"{column_prefix}_audit_schema_version")
+        return output_names
 
     @staticmethod
     def _append_output_columns(
@@ -516,7 +533,13 @@ class SparkRulesEngineRuntime:
             F.lit(ruleset.version).alias("version"),
             F.lit(DeltaRowSerializer().content_hash(ruleset)).alias("content_hash"),
         )
-        output_columns[f"{column_prefix}_engine_version"] = F.lit(__version__)
+        output_columns[f"{column_prefix}_engine_version"] = result.getField(
+            _WORKER_ENGINE_VERSION_FIELD
+        )
+        if full_audit:
+            output_columns[f"{column_prefix}_audit_schema_version"] = F.lit(
+                AUDIT_SCHEMA_VERSION
+            )
         return evaluated.withColumns(output_columns).drop(result_col)
 
     def validate_worker_serializable(self, evaluator: Any) -> None:
@@ -575,9 +598,33 @@ class SparkRulesEngineRuntime:
             assign_field_names,
             full_audit=full_audit,
         )
+        driver_engine_version = __version__
+        driver_audit_schema_version = AUDIT_SCHEMA_VERSION
 
         def evaluate(row: Any) -> dict[str, Any]:
             """Evaluate one Spark row struct and return the declared result struct."""
+            # Resolve these imports on the worker. The expected values above are
+            # captured from the driver, so a partially upgraded cluster fails
+            # before it can emit plausible-looking rows with mixed semantics.
+            import rules_engine.version as worker_version_module
+
+            worker_engine_version = worker_version_module.__version__
+            worker_audit_schema_version = getattr(
+                worker_version_module,
+                "AUDIT_SCHEMA_VERSION",
+                None,
+            )
+            if (
+                worker_engine_version != driver_engine_version
+                or worker_audit_schema_version != driver_audit_schema_version
+            ):
+                raise RuntimeError(
+                    "Rules engine driver/worker version mismatch: "
+                    f"driver={driver_engine_version!r}/audit={driver_audit_schema_version!r}, "
+                    f"worker={worker_engine_version!r}/audit={worker_audit_schema_version!r}. "
+                    "Restart the cluster after installing one package version on the driver "
+                    "and every executor."
+                )
             try:
                 row_dict = row.asDict(recursive=True)
                 matched_rule_ids: list[str] = []
@@ -669,6 +716,7 @@ class SparkRulesEngineRuntime:
                     assignment_results=assignment_results,
                     full_audit=full_audit,
                     base_payload_template=base_payload_template,
+                    worker_engine_version=worker_engine_version,
                 )
             except Exception as exc:
                 if raise_on_error:
@@ -680,6 +728,7 @@ class SparkRulesEngineRuntime:
                     include_traceback=include_error_traceback,
                     full_audit=full_audit,
                     base_payload_template=base_payload_template,
+                    worker_engine_version=worker_engine_version,
                 )
 
         return evaluate
@@ -779,6 +828,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         assign_payload: dict[str, Any],
         assignment_results: list[dict[str, Any]],
         base_payload_template: Mapping[str, Any],
+        worker_engine_version: str,
         full_audit: bool = False,
     ) -> dict[str, Any]:
         """Build the stable Spark result payload."""
@@ -788,6 +838,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
             matched_rule_ids=matched_rule_ids,
             assign=assign_payload,
         )
+        payload[_WORKER_ENGINE_VERSION_FIELD] = worker_engine_version
         if full_audit:
             payload.update(
                 matched_rules=matched_rules,
@@ -801,6 +852,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         *,
         include_traceback: bool,
         base_payload_template: Mapping[str, Any],
+        worker_engine_version: str,
         full_audit: bool = False,
     ) -> dict[str, Any]:
         """Build a compact production error, optionally with a debug traceback."""
@@ -809,6 +861,7 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
             error = f"{error}\n{traceback.format_exc()}"
         payload = dict(base_payload_template)
         payload.update(error=error, matched_rule_ids=[])
+        payload[_WORKER_ENGINE_VERSION_FIELD] = worker_engine_version
         if full_audit:
             payload.update(matched_rules=[], assignment_results=[])
         return payload
@@ -820,7 +873,9 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         full_audit: bool = False,
     ) -> dict[str, Any]:
         """Return an immutable-by-convention template for result payloads."""
-        payload = dict.fromkeys(result_field_names(full_audit=full_audit))
+        payload = dict.fromkeys(
+            (*result_field_names(full_audit=full_audit), _WORKER_ENGINE_VERSION_FIELD)
+        )
         payload.update(
             matched=False,
             matched_rule_ids=[],

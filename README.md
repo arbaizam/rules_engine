@@ -6,6 +6,16 @@ in strict YAML, compiled into immutable Python dataclasses, and validated.
 The rules engine supports one authoring language: canonical YAML. The
 dataclasses are the compiled in-memory model.
 
+## Version 2.2 audit contract
+
+Version 2.2 defines `overridden_by_*` as the immediate next assignment to the
+same target and `final_winning_*` as the eventual winner. Full-audit output
+also includes `rules_engine_audit_schema_version="2"` so persisted audit data
+identifies its contract directly.
+
+See [CHANGELOG.md](CHANGELOG.md) and the
+[2.2 production checklist](docs/rules_engine_2_2_production_checklist.md).
+
 ## Why we designed it this way
 
 We elected to keep the core contract narrow and explicit to:
@@ -445,17 +455,19 @@ prefix is used.
 | 4 | `rules_engine_matched_rule_ids` | `array<string>` | Ordered IDs or `[]` | Every matching rule ID in evaluation order. |
 | 5 | `rules_engine_assign` | Non-null struct | One outcome per active assignment target | Final assignment state from all matching rules. Every target contains `applied` and typed `value` fields. |
 | 6 | `rules_engine_ruleset` | Struct | Non-null identity struct | Immutable identity of the evaluated ruleset. |
-| 7 | `rules_engine_engine_version` | String | Non-empty package version | Installed package version used for evaluation. |
+| 7 | `rules_engine_engine_version` | String | Non-empty package version | Worker package version used for evaluation. The worker fails when it differs from the driver version. |
 
 ### Full-audit additions
 
-When `full_audit=true`, we insert two columns after `rules_engine_assign` and
-before `rules_engine_ruleset`:
+When `full_audit=true`, we insert two trace columns after
+`rules_engine_assign` and add an audit-contract identity column after
+`rules_engine_engine_version`:
 
 | Order after assign | Column | Type | Allowed returned values | Definition |
 |---:|---|---|---|---|
 | 1 | `rules_engine_matched_rules` | `array<struct>` | One element per match or `[]` | Complete trace for every matching rule. Losing rules do not emit match traces. |
 | 2 | `rules_engine_assignment_results` | `array<struct>` | One element per applied assignment or `[]` | Assignment history, including immediate overrides and final-winner provenance. |
+| 3 | `rules_engine_audit_schema_version` | String | `"2"` | Version of the full-audit data contract. Persist this field so audit rows identify the contract that produced them. |
 
 Full audit resolves and serializes substantially more data. We elected to make
 it optional for targeted explainability instead of paying that cost on every
@@ -583,6 +595,9 @@ Each operand trace (`left` or `right`) contains:
 | `effective` | Boolean | `true` or `false` | True only when this event supplies the final target value. |
 | `final_winning_rule_id` | String | Final rule ID | Rule whose assignment supplies the final value for this target. |
 | `final_winning_assignment_id` | String | Final assignment ID | Assignment that supplies the final value for this target. |
+
+Elements remain in deterministic evaluation order. For each target, the last
+element is its effective assignment.
 
 ### Evaluation parameters and returned behavior
 
@@ -1185,7 +1200,7 @@ imports and behavior out of compile-only paths where practical.
 | `rules_engine.spark_validator` | Extends semantic validation with actual Spark schema checks. It verifies field existence, default compatibility, function return hints, collection and temporal comparisons, assignment target consistency, and lossless type coercion, then builds the assignment `StructType`. | `SparkRulesetCompatibilityValidator`. |
 | `rules_engine.standard_functions` | Implements and declares 58 deterministic text, regex, conversion, exact-decimal, null-composition, calendar, business-day, and array functions. It keeps optional defaults, argument types, allowed configuration values, permissions, return hints, and implementation versions beside each callable. | Standard callables, `register_standard_functions`, `standard_function_rows`. |
 | `rules_engine.validator` | Applies semantic rules that are independent of a DataFrame schema. It checks ownership, non-empty content, unique IDs/orders, operand arity, null options, assignment dependencies, and custom-function permissions and argument contracts. | `RulesetValidator`. |
-| `rules_engine.version` | Stores the installed package version used by the top-level package and the `rules_engine_engine_version` output column. | `__version__`. |
+| `rules_engine.version` | Stores the installed package version and the independent full-audit contract version used by runtime output. | `__version__`, `AUDIT_SCHEMA_VERSION`. |
 
 ## Repository layout
 
@@ -1215,6 +1230,12 @@ python -m pytest tests
 ```
 
 Spark tests are skipped unless `RULES_ENGINE_RUN_SPARK_TESTS=1` is set.
+The lint gate excludes `notebooks/rules_engine_2_1_enhancements_demo.ipynb`
+because its Databricks cell layout intentionally uses injected globals such as
+`spark`. Repository-wide `ruff format --check` is not a release gate; it also
+would reformat unrelated pre-existing Python files and notebook cells. Changed
+Python source and tests must still pass `ruff check .`, `git diff --check`, and
+the applicable tests.
 
 ## Known boundaries
 

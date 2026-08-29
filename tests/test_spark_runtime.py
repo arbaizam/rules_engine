@@ -17,6 +17,7 @@ from rules_engine.registry import (
 from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.spark_runtime import SparkRulesEngineRuntime, required_source_columns
 from rules_engine.standard_functions import register_standard_functions
+from rules_engine.version import AUDIT_SCHEMA_VERSION, __version__
 
 pytest.importorskip("pyspark")
 
@@ -191,7 +192,10 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert assignment_results_type.elementType["effective"].nullable is False
     assert assignment_results_type.elementType["final_winning_rule_id"].nullable is False
     assert assignment_results_type.elementType["final_winning_assignment_id"].nullable is False
-    assert assignment_results_type.elementType.fieldNames()[-3:] == [
+    assert assignment_results_type.elementType.fieldNames()[8:] == [
+        "changed",
+        "overridden_by_rule_id",
+        "overridden_by_assignment_id",
         "effective",
         "final_winning_rule_id",
         "final_winning_assignment_id",
@@ -437,6 +441,7 @@ def test_dataframe_evaluation_separates_results_and_applies_atomic_values(spark)
         "rules_engine_assignment_results",
         "rules_engine_ruleset",
         "rules_engine_engine_version",
+        "rules_engine_audit_schema_version",
     ]
     result_rows = {
         row["row_id"]: row.asDict(recursive=True) for row in evaluation.results_df.collect()
@@ -1010,6 +1015,7 @@ def test_spark_runtime_applies_column_prefix_to_all_new_outputs(spark):
         "audit_assignment_results",
         "audit_ruleset",
         "audit_engine_version",
+        "audit_audit_schema_version",
     ]
 
 
@@ -1376,6 +1382,7 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
         "rules_engine_assignment_results",
         "rules_engine_ruleset",
         "rules_engine_engine_version",
+        "rules_engine_audit_schema_version",
     ]
     assert "rules_engine_matched_rules" not in compact.columns
     assert "rules_engine_assignment_results" not in compact.columns
@@ -1384,7 +1391,10 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
         "version": ruleset.version,
         "content_hash": DeltaRowSerializer().content_hash(ruleset),
     }
-    assert compact_row["rules_engine_engine_version"]
+    assert compact_row["rules_engine_engine_version"] == __version__
+    full_row = full.collect()[0]
+    assert full_row["rules_engine_engine_version"] == __version__
+    assert full_row["rules_engine_audit_schema_version"] == AUDIT_SCHEMA_VERSION
     assert compact_evaluation.apply_assignments().columns == [
         "row_id",
         "account",

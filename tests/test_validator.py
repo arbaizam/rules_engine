@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
@@ -73,6 +75,46 @@ def test_ruleset_requires_at_least_one_active_rule():
     result = RulesetValidator().validate(YamlRulesetCompiler().compile_payload(payload))
 
     assert "RULESET_ACTIVE_RULE_REQUIRED" in {issue.check_name for issue in result.issues}
+
+
+@pytest.mark.parametrize("invalid_id", [None, "", "   ", 42])
+def test_code_authored_rule_ids_must_be_non_empty_strings(invalid_id):
+    """Programmatic models cannot bypass the provenance identity contract."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "account"},
+                "operator": "eq",
+                "right": {"literal": "A"},
+            }
+        )
+    )
+    invalid_rule = replace(ruleset.rules[0], rule_id=invalid_id)
+
+    result = RulesetValidator().validate(replace(ruleset, rules=(invalid_rule,)))
+
+    assert "RULE_ID_INVALID" in {issue.check_name for issue in result.issues}
+
+
+@pytest.mark.parametrize("invalid_id", [None, "", "   ", 42])
+def test_code_authored_assignment_ids_must_be_non_empty_strings(invalid_id):
+    """Final-winner fields cannot receive null or non-string assignment IDs."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "account"},
+                "operator": "eq",
+                "right": {"literal": "A"},
+            }
+        )
+    )
+    rule = ruleset.rules[0]
+    invalid_assignment = replace(rule.assignments[0], assignment_id=invalid_id)
+    invalid_rule = replace(rule, assignments=(invalid_assignment,))
+
+    result = RulesetValidator().validate(replace(ruleset, rules=(invalid_rule,)))
+
+    assert "ASSIGNMENT_ID_INVALID" in {issue.check_name for issue in result.issues}
 
 
 def test_custom_function_args_mismatch_fails_validation():

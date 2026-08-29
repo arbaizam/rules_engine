@@ -112,7 +112,16 @@ class RulesetValidator:
         seen_condition_group_ids: set[str] = set()
         seen_assignment_ids: dict[str, str] = {}
         for rule in ruleset.rules:
-            if rule.rule_id in seen_rule_ids:
+            valid_rule_id = isinstance(rule.rule_id, str) and bool(rule.rule_id.strip())
+            if not valid_rule_id:
+                self._add(
+                    result,
+                    "RULE_ID_INVALID",
+                    "rule_id must be a non-empty string.",
+                    ObjectType.RULE,
+                    str(rule.rule_id),
+                )
+            elif rule.rule_id in seen_rule_ids:
                 self._add(
                     result,
                     "RULE_ID_DUPLICATE",
@@ -120,7 +129,8 @@ class RulesetValidator:
                     ObjectType.RULE,
                     rule.rule_id,
                 )
-            seen_rule_ids.add(rule.rule_id)
+            if valid_rule_id:
+                seen_rule_ids.add(rule.rule_id)
             if rule.rule_order in seen_rule_orders:
                 self._add(
                     result,
@@ -262,7 +272,18 @@ class RulesetValidator:
             )
         assignments_by_target: dict[str, list[str]] = {}
         for assignment in rule.assignments:
-            if assignment.assignment_id in seen_assignment_ids:
+            valid_assignment_id = isinstance(assignment.assignment_id, str) and bool(
+                assignment.assignment_id.strip()
+            )
+            if not valid_assignment_id:
+                self._add(
+                    result,
+                    "ASSIGNMENT_ID_INVALID",
+                    "assignment_id must be a non-empty string.",
+                    ObjectType.ASSIGNMENT,
+                    str(assignment.assignment_id),
+                )
+            elif assignment.assignment_id in seen_assignment_ids:
                 first_rule_id = seen_assignment_ids[assignment.assignment_id]
                 duplicate_location = (
                     f"more than once in rule {rule.rule_id}"
@@ -287,7 +308,7 @@ class RulesetValidator:
                         ),
                     },
                 )
-            else:
+            elif valid_assignment_id:
                 seen_assignment_ids[assignment.assignment_id] = rule.rule_id
 
             conflicting_ids = assignments_by_target.get(assignment.target_field)

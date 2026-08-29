@@ -2,7 +2,7 @@
 
 Source: the current behavioral pytest suite under `tests/`.
 
-The suite contains **249 explicit test functions** and collects **316 pytest cases** after parameter expansion. **24 cases** exercise the live Spark worker boundary and require `RULES_ENGINE_RUN_SPARK_TESTS=1` plus a compatible Spark and Java runtime.
+The suite contains **252 explicit test functions** and collects **326 pytest cases** after parameter expansion. **24 cases** exercise the live Spark worker boundary and require `RULES_ENGINE_RUN_SPARK_TESTS=1` plus a compatible Spark and Java runtime.
 
 README, notebook execution, and workspace layout checks are outside the unit suite. The Databricks system-test notebook is separate from these counts and is documented in `rules_engine_system_test_summary.md`.
 
@@ -17,14 +17,14 @@ README, notebook execution, and workspace layout checks are outside the unit sui
 | Publish workflow | 3 | Semantic validation before persistence and publication provenance. |
 | Repository persistence | 9 | Dual immutable identity checks, duplicate-safe lifecycle operations, and registry behavior. |
 | Repository schema | 6 | Metadata DDL, safe quoted table naming, identifier rejection, and nullability. |
-| In-memory runtime | 63 | Exact string-code equality, typed numeric equality, ordered evaluation, actionable bound/conversion errors, explicit assignment outcomes, assignment chaining, atomic same-rule assignments, null defaults, condition identity, audit provenance, worker safety, explicit/default-all key metadata, ambiguous-key rejection, and immutable assignment keys. |
+| In-memory runtime | 64 | Exact string-code equality, typed numeric equality, ordered evaluation, actionable bound/conversion errors, explicit assignment outcomes, assignment chaining, atomic same-rule assignments, null defaults, condition identity, audit provenance, driver/worker version enforcement, worker safety, explicit/default-all key metadata, ambiguous-key rejection, and immutable assignment keys. |
 | Version serialization | 11 | Deterministic payloads and hashes, exact values, lifecycle separation, and deserialization. |
 | Service orchestration | 14 | Public facade behavior across compile, publish, load, describe, evaluate, and retire operations. |
 | Spark runtime | 24 | Explicit and default-all keyed result separation, scalar and name-aligned atomic-struct assignment application, explicit null clearing, retained values on captured errors, evaluate-once shared persistence, native typed results, column ordering and prefixes, assignment chaining, active-rule preflight, audit output, nested array arguments, optional function defaults, and proven lazy fail-fast execution through a real worker. |
 | Spark validation | 40 | Source-field validation, compiled-literal/type-hint agreement, recursive name-based struct compatibility, trailing-zero decimal representability, typed custom-function arguments, derived function return types, common-type conflict rejection, and lossless type compatibility for conditions and assignments. |
 | Standard functions | 21 | Text and regex behavior, strict conversion failure policies, exact-decimal arithmetic, null composition, completed calendar periods, business-day month boundaries, arrays, rich registry metadata, and runtime integration. |
-| Ruleset validation | 16 | YAML contract invariants, including the active-rule requirement, assignment-producer ordering, enforceable registry metadata, and required/optional typed function arguments with literal constraints. |
-| **Total** | **249** | |
+| Ruleset validation | 18 | YAML contract invariants, including non-empty string rule/assignment identities, the active-rule requirement, assignment-producer ordering, enforceable registry metadata, and required/optional typed function arguments with literal constraints. |
+| **Total** | **252** | |
 
 ## Current-Version Audit
 
