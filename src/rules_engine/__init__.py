@@ -22,7 +22,7 @@ from rules_engine.standard_functions import (
     standard_function_rows,
 )
 from rules_engine.validator import RulesetValidator
-from rules_engine.version import AUDIT_SCHEMA_VERSION, __version__
+from rules_engine.version import __version__
 
 _LAZY_EXPORTS = {
     "DataFrameEvaluation": (
@@ -61,7 +61,6 @@ def __getattr__(name: str):
 
 
 __all__ = [
-    "AUDIT_SCHEMA_VERSION",
     "CustomFunctionSpec",
     "CustomFunctionArgSpec",
     "CoverageReport",

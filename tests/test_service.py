@@ -170,7 +170,7 @@ def test_service_saves_supplied_function_registry_rows():
 def test_service_can_preserve_standard_function_registry_when_requested():
     """
     What: Allows callers to preserve existing standard registry rows explicitly.
-    Why: Package upgrades upsert by default, but callers may preserve pinned metadata.
+    Why: Callers may preserve pinned metadata instead of updating existing rows.
     Fails when: The update_existing option is not passed through.
     """
     repository = RecordingRepository()

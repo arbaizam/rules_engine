@@ -368,7 +368,7 @@ def test_nonfinite_explicit_numeric_payloads_fail_compilation(value, value_type)
 
 
 def test_explicit_decimal_collection_is_normalized_recursively():
-    """A collection hint no longer bypasses exact Decimal normalization."""
+    """A collection hint applies exact Decimal normalization recursively."""
     ruleset = YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "rs1",

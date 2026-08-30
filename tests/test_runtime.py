@@ -15,7 +15,6 @@ from rules_engine.registry import (
 )
 from rules_engine.runtime import SparkRowEvaluator
 from rules_engine.spark_runtime import (
-    _WORKER_ENGINE_VERSION_FIELD,
     ASSIGNMENT_RESULT_STRUCT,
     COMPACT_RESULT_FIELD_NAMES,
     FULL_AUDIT_ONLY_RESULT_FIELD_NAMES,
@@ -26,7 +25,6 @@ from rules_engine.spark_runtime import (
     required_source_columns,
     result_field_names,
 )
-from rules_engine.version import __version__
 
 
 class DummyRepository:
@@ -405,34 +403,29 @@ def test_result_payload_keys_match_the_declared_schema(
         assign_payload={"bucket": {"applied": False, "value": None}},
         assignment_results=[],
         base_payload_template=base_payload_template,
-        worker_engine_version=__version__,
         full_audit=full_audit,
     )
     error = evaluator._error_payload(
         ValueError("bad"),
         include_traceback=False,
         base_payload_template=base_payload_template,
-        worker_engine_version=__version__,
         full_audit=full_audit,
     )
     another_error = evaluator._error_payload(
         ValueError("also bad"),
         include_traceback=False,
         base_payload_template=base_payload_template,
-        worker_engine_version=__version__,
         full_audit=full_audit,
     )
 
-    assert (*expected_field_names, _WORKER_ENGINE_VERSION_FIELD) == tuple(
+    assert expected_field_names == tuple(
         _result_struct(
             T.StructType(),
             full_audit=full_audit,
         ).fieldNames()
     )
-    assert tuple(success) == (*expected_field_names, _WORKER_ENGINE_VERSION_FIELD)
-    assert tuple(error) == (*expected_field_names, _WORKER_ENGINE_VERSION_FIELD)
-    assert success[_WORKER_ENGINE_VERSION_FIELD] == __version__
-    assert error[_WORKER_ENGINE_VERSION_FIELD] == __version__
+    assert tuple(success) == expected_field_names
+    assert tuple(error) == expected_field_names
     assert error["assign"] == {"bucket": {"applied": False, "value": None}}
     assert error["matched_rule_ids"] is not another_error["matched_rule_ids"]
     if full_audit:
@@ -449,7 +442,6 @@ def test_result_payload_keys_match_the_declared_schema(
         "assign",
         "ruleset",
         "engine_version",
-        "audit_schema_version",
     ),
 )
 def test_dataframe_evaluation_reserves_every_output_name_in_compact_mode(
@@ -697,30 +689,6 @@ def test_assignment_provenance_tracks_immediate_override_and_final_winner():
     assert by_assignment_id["risk_a1"]["effective"] is True
     assert by_assignment_id["risk_a1"]["overridden_by_assignment_id"] is None
     assert by_assignment_id["risk_a1"]["final_winning_assignment_id"] == "risk_a1"
-
-
-def test_worker_version_mismatch_fails_even_when_row_errors_are_captured(monkeypatch):
-    """A partially upgraded cluster cannot emit mixed-version result rows."""
-    ruleset = _compile(
-        {
-            "left": {"field": "account"},
-            "operator": "eq",
-            "right": {"literal": "A"},
-        }
-    )
-    runtime = _spark_runtime()
-    assign_schema = runtime._assignment_schema(ruleset, T.StructType())
-    evaluator = runtime._build_row_evaluator(
-        ruleset,
-        [field.name for field in assign_schema.fields],
-        {field.name: field.dataType for field in assign_schema.fields},
-        raise_on_error=False,
-        full_audit=True,
-    )
-    monkeypatch.setattr("rules_engine.version.__version__", "stale-worker")
-
-    with pytest.raises(RuntimeError, match="driver/worker version mismatch"):
-        evaluator(FakeSparkRow({"account": "A"}))
 
 
 def test_set_trace_text_is_deterministic():

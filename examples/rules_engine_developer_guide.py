@@ -434,10 +434,9 @@ display(applied_df.orderBy("row_id"))
 # MAGIC - `rules_engine_assignment_results`
 # MAGIC - `rules_engine_ruleset`
 # MAGIC - `rules_engine_engine_version`
-# MAGIC - `rules_engine_audit_schema_version`
 # MAGIC
-# MAGIC The detailed trace columns and audit-schema marker are present only because
-# MAGIC this example sets `full_audit=True`. Assignment output, trace detail, matched rules, and
+# MAGIC The two detailed audit columns are present only because this example sets
+# MAGIC `full_audit=True`. Assignment output, trace detail, matched rules, and
 # MAGIC per-assignment provenance are Spark-native structs and arrays.
 # MAGIC
 # MAGIC What this cell does:
@@ -461,8 +460,7 @@ display(applied_df.orderBy("row_id"))
 # MAGIC   override, and final-winner provenance.
 # MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
 # MAGIC - `rules_engine_ruleset`: immutable ruleset ID, version, and content hash.
-# MAGIC - `rules_engine_engine_version`: worker evaluator version, verified against the driver.
-# MAGIC - `rules_engine_audit_schema_version`: version of the persisted full-audit contract.
+# MAGIC - `rules_engine_engine_version`: installed evaluator version.
 # MAGIC
 # MAGIC `apply_assignments()` returns only business columns. Existing targets are
 # MAGIC replaced in place, new targets are appended, and unmatched targets keep
@@ -497,7 +495,6 @@ assert all(
     and row["rules_engine_ruleset"]["version"] == ruleset.version
     and row["rules_engine_ruleset"]["content_hash"]
     and row["rules_engine_engine_version"] == rules_engine.__version__
-    and row["rules_engine_audit_schema_version"] == rules_engine.AUDIT_SCHEMA_VERSION
     for row in rows
 )
 evaluation.unpersist()
@@ -564,7 +561,7 @@ display(spark.table(table_names.function_registry))
 # MAGIC %md
 # MAGIC ## 13. Retire Published Metadata
 # MAGIC
-# MAGIC Retired metadata should no longer load through `load_published`.
+# MAGIC Retired metadata is excluded from `load_published`.
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
@@ -575,7 +572,7 @@ display(spark.table(table_names.function_registry))
 # MAGIC 5. Displays the `ruleset_versions` table so the lifecycle transition is visible.
 # MAGIC
 # MAGIC Retire does not delete metadata. It changes lifecycle status so prior
-# MAGIC metadata remains auditable but is no longer returned by runtime
+# MAGIC metadata remains auditable but is excluded from runtime
 # MAGIC `load_published()`.
 
 # COMMAND ----------

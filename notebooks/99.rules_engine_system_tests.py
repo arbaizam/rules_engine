@@ -32,7 +32,6 @@ from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
 from rules_engine import (
-    AUDIT_SCHEMA_VERSION,
     CustomFunctionArgSpec,
     CustomFunctionSpec,
     DeltaRowSerializer,
@@ -507,7 +506,6 @@ assert full.columns == [
     "rules_engine_assignment_results",
     "rules_engine_ruleset",
     "rules_engine_engine_version",
-    "rules_engine_audit_schema_version",
 ]
 
 compact_rows = {
@@ -541,7 +539,6 @@ assert compact_rows["error"]["rules_engine_matched_rule_ids"] == []
 assert "error_on_null=true" in compact_rows["error"]["rules_engine_error"]
 assert full_rows["no_match"]["rules_engine_matched_rules"] == []
 assert full_rows["error"]["rules_engine_assignment_results"] == []
-assert full_rows["success"]["rules_engine_audit_schema_version"] == AUDIT_SCHEMA_VERSION
 
 print("PASS: Success, no-match, and error outcomes are identical across audit modes.")
 
@@ -1197,7 +1194,6 @@ assert apply_evaluation.results_df.columns == [
     "rules_engine_assignment_results",
     "rules_engine_ruleset",
     "rules_engine_engine_version",
-    "rules_engine_audit_schema_version",
 ]
 result_rows = {
     row["row_id"]: row.asDict(recursive=True) for row in apply_evaluation.results_df.collect()
