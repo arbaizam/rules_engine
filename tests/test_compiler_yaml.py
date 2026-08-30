@@ -670,6 +670,65 @@ def test_unknown_mapping_keys_are_rejected_at_every_contract_level(location):
         YamlRulesetCompiler().compile_payload(payload)
 
 
+def test_mixed_type_unsupported_keys_raise_compilation_error():
+    """Malformed YAML keys must not escape as a Python sorting error."""
+    payload = _minimal_payload()
+    payload[1] = "unsupported"
+
+    with pytest.raises(CompilationError, match=r"unsupported keys: \[1\]"):
+        YamlRulesetCompiler().compile_payload(payload)
+
+
+def test_required_authoring_text_rejects_whitespace_only_values():
+    """Whitespace is not a usable persisted identifier, name, or field."""
+    paths = (
+        ("ruleset_id",),
+        ("ruleset_name",),
+        ("rules", 0, "rule_id"),
+        ("rules", 0, "rule_name"),
+        ("rules", 0, "when", "condition_group_id"),
+        ("rules", 0, "when", "all", 0, "condition_id"),
+        ("rules", 0, "when", "all", 0, "left", "field"),
+    )
+    for path in paths:
+        payload = _minimal_payload()
+        target = payload
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = "   "
+
+        with pytest.raises(CompilationError, match="non-empty string"):
+            YamlRulesetCompiler().compile_payload(payload)
+
+    payload = _minimal_payload()
+    payload["rules"][0]["assign"] = {"   ": "A"}
+    with pytest.raises(CompilationError, match="non-empty strings"):
+        YamlRulesetCompiler().compile_payload(payload)
+
+
+def test_literal_mapping_keys_cannot_collide_after_string_normalization():
+    """Persistence must not silently merge distinct authored mapping keys."""
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["right"] = {"literal": {1: "integer", "1": "string"}}
+
+    with pytest.raises(CompilationError, match="both normalize to '1'"):
+        YamlRulesetCompiler().compile_payload(payload)
+
+
+def test_nested_function_argument_mapping_keys_cannot_collapse():
+    """Nested custom-function configuration uses the same canonical key rule."""
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["left"] = {
+        "custom_function": {
+            "name": "identity",
+            "args": {"config": {"nested": {1: "integer", "1": "string"}}},
+        }
+    }
+
+    with pytest.raises(CompilationError, match="both normalize to '1'"):
+        YamlRulesetCompiler().compile_payload(payload)
+
+
 def test_root_wrapper_is_not_part_of_the_ruleset_contract():
     """The compiler accepts one document shape: the ruleset mapping itself."""
     with pytest.raises(CompilationError, match="unsupported keys"):

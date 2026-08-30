@@ -256,7 +256,8 @@ class SparkDeltaRulesetRepository:
 
         Published and retired versions are immutable by both
         ruleset_id/version and ruleset_name/version. Multiple versions may be
-        published side by side.
+        published side by side. Callers must serialize concurrent publishers;
+        the two identity checks and append are not one cross-writer transaction.
         """
         existing_by_id = self._ruleset_row_dict(
             ruleset.ruleset_id,
@@ -312,6 +313,7 @@ class SparkDeltaRulesetRepository:
         """
         Mark a persisted ruleset version as retired.
         """
+        self._require_table(self.table_names.ruleset_versions)
         logger.info("Retiring ruleset version: ruleset_id=%s version=%s", ruleset_id, version)
         retired_at = self._utc_now()
         row = self._ruleset_row_dict(ruleset_id, version)
@@ -329,15 +331,31 @@ class SparkDeltaRulesetRepository:
         self.spark.sql(
             f"""
             UPDATE {ruleset_versions_table}
-            SET status = {self._sql(RulesetStatus.RETIRED.value)},
-                retired_by = {self._sql_nullable(retired_by)},
-                retired_at = {self._sql_nullable(retired_at)}
-            WHERE ruleset_id = {self._sql(ruleset_id)}
-              AND version = {self._sql(version)}
-            """
+            SET status = :status,
+                retired_by = :retired_by,
+                retired_at = :retired_at
+            WHERE ruleset_id = :ruleset_id
+              AND version = :version
+              AND status = :published_status
+            """,
+            args={
+                "status": RulesetStatus.RETIRED.value,
+                "retired_by": retired_by,
+                "retired_at": retired_at,
+                "ruleset_id": ruleset_id,
+                "version": version,
+                "published_status": RulesetStatus.PUBLISHED.value,
+            },
         )
         updated = self._ruleset_row_dict(ruleset_id, version)
-        if updated is None or updated["status"] != RulesetStatus.RETIRED.value:
+        expected_lifecycle = {
+            "status": RulesetStatus.RETIRED.value,
+            "retired_by": retired_by,
+            "retired_at": retired_at,
+        }
+        if updated is None or any(
+            updated.get(field) != expected for field, expected in expected_lifecycle.items()
+        ):
             logger.error(
                 "Ruleset retirement verification failed: ruleset_id=%s version=%s",
                 ruleset_id,
@@ -354,6 +372,7 @@ class SparkDeltaRulesetRepository:
         """
         Load a published ruleset by name and optional version.
         """
+        self._require_table(self.table_names.ruleset_versions)
         ruleset_filter = (F.col("ruleset_name") == ruleset_name) & (
             F.col("status") == RulesetStatus.PUBLISHED.value
         )
@@ -421,13 +440,7 @@ class SparkDeltaRulesetRepository:
         prepared_rows = [self._function_to_spark_dict(row) for row in rows]
         if not prepared_rows:
             return
-        if not self._table_exists(self.table_names.function_registry):
-            self._write_rows(
-                self.table_names.function_registry,
-                prepared_rows,
-                self.function_registry_schema,
-            )
-            return
+        self._require_table(self.table_names.function_registry)
         staging_view = f"_rules_engine_function_registry_{uuid4().hex}"
         self.spark.createDataFrame(
             prepared_rows, schema=self.function_registry_schema
@@ -459,13 +472,14 @@ class SparkDeltaRulesetRepository:
 
     def _write_rows(self, table_name: str, rows: list[dict], schema: StructType) -> None:
         """
-        Append row dictionaries to a Delta table using the supplied schema.
+        Append row dictionaries to an existing Delta table using the supplied schema.
 
         Empty row lists are treated as no-ops so callers can pass filtered
         write sets without guarding every call.
         """
         if not rows:
             return
+        self._require_table(table_name)
         logger.debug("Appending rows to Delta table: table=%s row_count=%s", table_name, len(rows))
         self.spark.createDataFrame(rows, schema=schema).write.format("delta").mode(
             "append"
@@ -523,17 +537,13 @@ class SparkDeltaRulesetRepository:
         """
         return bool(self.spark.catalog.tableExists(table_name))
 
-    def _sql(self, value: str) -> str:
-        """
-        Return a single-quoted SQL string literal with quotes escaped.
-        """
-        return "'" + value.replace("'", "''") + "'"
-
-    def _sql_nullable(self, value: str | None) -> str:
-        """
-        Return a SQL literal for optional string metadata values.
-        """
-        return "NULL" if value is None else self._sql(value)
+    def _require_table(self, table_name: str) -> None:
+        """Require explicit metadata-table creation before repository operations."""
+        if not self._table_exists(table_name):
+            raise RepositoryError(
+                f"Rules engine metadata table does not exist: {table_name}. "
+                "Create metadata tables explicitly before saving or loading metadata."
+            )
 
     def _utc_now(self) -> str:
         """

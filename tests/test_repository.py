@@ -10,11 +10,12 @@ from rules_engine.standard_functions import standard_function_rows
 
 
 class FakeCatalog:
-    def __init__(self):
+    def __init__(self, *, tables_exist=True):
         self.dropped_views = []
+        self.tables_exist = tables_exist
 
     def tableExists(self, table_name):
-        return True
+        return self.tables_exist
 
     def dropTempView(self, view_name):
         self.dropped_views.append(view_name)
@@ -24,16 +25,36 @@ class FakeDataFrame:
     def __init__(self, rows):
         self.rows = rows
         self.view_name = None
+        self.write = FakeDataFrameWriter()
 
     def createOrReplaceTempView(self, view_name):
         self.view_name = view_name
 
 
-class FakeSpark:
+class FakeDataFrameWriter:
     def __init__(self):
-        self.catalog = FakeCatalog()
+        self.format_name = None
+        self.mode_name = None
+        self.saved_table = None
+
+    def format(self, format_name):
+        self.format_name = format_name
+        return self
+
+    def mode(self, mode_name):
+        self.mode_name = mode_name
+        return self
+
+    def saveAsTable(self, table_name):
+        self.saved_table = table_name
+
+
+class FakeSpark:
+    def __init__(self, *, tables_exist=True):
+        self.catalog = FakeCatalog(tables_exist=tables_exist)
         self.created_frames = []
         self.queries = []
+        self.sql_calls = []
 
     def createDataFrame(self, data, schema=None):
         frame = FakeDataFrame(data)
@@ -41,8 +62,9 @@ class FakeSpark:
         self.created_frames.append(frame)
         return frame
 
-    def sql(self, query):
+    def sql(self, query, args=None):
         self.queries.append(query)
+        self.sql_calls.append((query, args))
 
 
 class FakePredicate:
@@ -176,6 +198,40 @@ def test_save_published_allows_distinct_versions_for_same_ruleset_name():
     assert saved_versions == ["2"]
 
 
+def test_save_published_requires_explicit_table_creation():
+    """Publication cannot create the ruleset metadata table as a write side effect."""
+    spark = FakeSpark(tables_exist=False)
+    repo = SparkDeltaRulesetRepository(
+        spark,
+        RulesEngineTableNames(
+            ruleset_versions="ruleset_versions",
+            function_registry="function_registry",
+        ),
+    )
+
+    with pytest.raises(RepositoryError, match="metadata table does not exist"):
+        repo.save_published(_ruleset())
+
+    assert spark.created_frames == []
+
+
+def test_load_published_requires_explicit_table_creation():
+    """Loading a missing metadata table fails through the repository contract."""
+    spark = FakeSpark(tables_exist=False)
+    repo = SparkDeltaRulesetRepository(
+        spark,
+        RulesEngineTableNames(
+            ruleset_versions="ruleset_versions",
+            function_registry="function_registry",
+        ),
+    )
+
+    with pytest.raises(RepositoryError, match="metadata table does not exist"):
+        repo.load_published("Ruleset", version="1")
+
+    assert spark.created_frames == []
+
+
 def test_load_published_rejects_duplicate_rows_for_explicit_version(monkeypatch):
     """Pinned loads fail loudly when the immutable version key is not unique."""
     monkeypatch.setattr(
@@ -236,17 +292,103 @@ def test_retire_records_lifecycle_state_and_actor():
             function_registry="function_registry",
         ),
     )
-    rows = iter([{"status": "published"}, {"status": "retired"}])
+    rows = iter(
+        [
+            {"status": "published"},
+            {
+                "status": "retired",
+                "retired_by": "engineer",
+                "retired_at": "2026-04-30T23:59:59+00:00",
+            },
+        ]
+    )
     repo._ruleset_row_dict = lambda ruleset_id, version: next(rows)
     repo._utc_now = lambda: "2026-04-30T23:59:59+00:00"
 
     repo.retire("rs1", "1", retired_by="engineer")
 
-    update_sql = "\n".join(spark.queries)
+    update_sql, args = spark.sql_calls[0]
     assert "UPDATE `ruleset_versions`" in update_sql
-    assert "status = 'retired'" in update_sql
-    assert "retired_by = 'engineer'" in update_sql
-    assert "retired_at = '2026-04-30T23:59:59+00:00'" in update_sql
+    assert "status = :status" in update_sql
+    assert "retired_by = :retired_by" in update_sql
+    assert "retired_at = :retired_at" in update_sql
+    assert "AND status = :published_status" in update_sql
+    assert args == {
+        "status": "retired",
+        "retired_by": "engineer",
+        "retired_at": "2026-04-30T23:59:59+00:00",
+        "ruleset_id": "rs1",
+        "version": "1",
+        "published_status": "published",
+    }
+
+
+def test_retire_binds_backslashes_and_quotes_as_sql_parameters():
+    """Authored values remain data even when Spark string-literal escaping would be unsafe."""
+    spark = FakeSpark()
+    repo = SparkDeltaRulesetRepository(
+        spark,
+        RulesEngineTableNames(
+            ruleset_versions="ruleset_versions",
+            function_registry="function_registry",
+        ),
+    )
+    ruleset_id = "rs\\' OR true --"
+    version = "1\\"
+    retired_by = "O'Brien\\"
+    rows = iter(
+        [
+            {"status": "published"},
+            {
+                "status": "retired",
+                "retired_by": retired_by,
+                "retired_at": "2026-04-30T23:59:59+00:00",
+            },
+        ]
+    )
+    repo._ruleset_row_dict = lambda actual_id, actual_version: next(rows)
+    repo._utc_now = lambda: "2026-04-30T23:59:59+00:00"
+
+    repo.retire(ruleset_id, version, retired_by=retired_by)
+
+    update_sql, args = spark.sql_calls[0]
+    assert ruleset_id not in update_sql
+    assert version not in update_sql
+    assert retired_by not in update_sql
+    assert args["ruleset_id"] == ruleset_id
+    assert args["version"] == version
+    assert args["retired_by"] == retired_by
+
+
+def test_retire_does_not_overwrite_a_concurrent_retirement():
+    """A caller that loses the published-to-retired race fails without replacing audit data."""
+    spark = FakeSpark()
+    repo = SparkDeltaRulesetRepository(
+        spark,
+        RulesEngineTableNames(
+            ruleset_versions="ruleset_versions",
+            function_registry="function_registry",
+        ),
+    )
+    rows = iter(
+        [
+            {"status": "published"},
+            {
+                "status": "retired",
+                "retired_by": "first-engineer",
+                "retired_at": "2026-04-30T23:59:58+00:00",
+            },
+        ]
+    )
+    repo._ruleset_row_dict = lambda ruleset_id, version: next(rows)
+    repo._utc_now = lambda: "2026-04-30T23:59:59+00:00"
+
+    with pytest.raises(RepositoryError, match="Retirement failed"):
+        repo.retire("rs1", "1", retired_by="second-engineer")
+
+    update_sql, args = spark.sql_calls[0]
+    assert "AND status = :published_status" in update_sql
+    assert args["published_status"] == "published"
 
 
 def test_retire_rejects_already_retired_version():
@@ -318,3 +460,39 @@ def test_save_function_registry_rows_upserts_by_default():
     merge_sql = "\n".join(spark.queries)
     assert "WHEN MATCHED THEN UPDATE" in merge_sql
     assert "WHEN NOT MATCHED THEN INSERT" in merge_sql
+
+
+def test_save_function_registry_rows_requires_explicit_table_creation():
+    """Registry persistence cannot create its Delta table as a write side effect."""
+    spark = FakeSpark(tables_exist=False)
+    repo = SparkDeltaRulesetRepository(
+        spark,
+        RulesEngineTableNames(
+            ruleset_versions="ruleset_versions",
+            function_registry="function_registry",
+        ),
+    )
+
+    with pytest.raises(RepositoryError, match="metadata table does not exist"):
+        repo.save_function_registry_rows(standard_function_rows()[:1])
+
+    assert spark.created_frames == []
+
+
+def test_write_rows_appends_by_name_only_after_table_existence_check():
+    """Existing metadata writes align columns by name and cannot create on a failed check."""
+    spark = FakeSpark()
+    repo = SparkDeltaRulesetRepository(
+        spark,
+        RulesEngineTableNames(
+            ruleset_versions="ruleset_versions",
+            function_registry="function_registry",
+        ),
+    )
+
+    repo._write_rows("ruleset_versions", [{"ruleset_id": "rs1"}], repo.ruleset_version_schema)
+
+    writer = spark.created_frames[0].write
+    assert writer.format_name == "delta"
+    assert writer.mode_name == "append"
+    assert writer.saved_table == "ruleset_versions"

@@ -9,6 +9,7 @@ Actual callables are registered by the runtime environment.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -117,9 +118,7 @@ class CustomFunctionArgSpec:
 
     def _payload_value(self, value: Any) -> Any:
         """Normalize tuples and sets for deterministic JSON persistence."""
-        if isinstance(value, tuple):
-            return [self._payload_value(item) for item in value]
-        if isinstance(value, list):
+        if isinstance(value, (tuple, list)):
             return [self._payload_value(item) for item in value]
         if isinstance(value, set):
             return [self._payload_value(item) for item in sorted(value, key=repr)]
@@ -248,7 +247,7 @@ class CustomFunctionSpec:
         """Return argument names in their declared order."""
         return tuple(argument.name for argument in self.arguments)
 
-    def bind_args(self, authored_args: dict[str, Any] | Any) -> dict[str, Any]:
+    def bind_args(self, authored_args: Mapping[str, Any]) -> dict[str, Any]:
         """Validate names and add declared optional defaults."""
         actual = set(authored_args)
         allowed = set(self.argument_names)

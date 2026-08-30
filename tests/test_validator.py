@@ -1,9 +1,11 @@
 from dataclasses import replace
+from decimal import Decimal
 
 import pytest
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exceptions import RegistryError
+from rules_engine.models import AssignedOperand, FieldOperand, LiteralOperand
 from rules_engine.registry import (
     CustomFunctionArgSpec,
     CustomFunctionSpec,
@@ -60,6 +62,10 @@ def test_missing_owner_metadata_fails_validation():
         "RULESET_OWNER_DEPARTMENT_REQUIRED",
     } <= {issue.check_name for issue in result.issues}
 
+    summary = result.to_text()
+    assert summary.startswith("Validation failed with 2 issue(s):")
+    assert "Validation passed: False" not in summary
+
 
 def test_ruleset_requires_at_least_one_active_rule():
     """A valid ruleset must have a writable active assignment contract."""
@@ -77,7 +83,7 @@ def test_ruleset_requires_at_least_one_active_rule():
     assert "RULESET_ACTIVE_RULE_REQUIRED" in {issue.check_name for issue in result.issues}
 
 
-@pytest.mark.parametrize("invalid_id", [None, "", "   ", 42])
+@pytest.mark.parametrize("invalid_id", [None, "", "   ", 42, []])
 def test_code_authored_rule_ids_must_be_non_empty_strings(invalid_id):
     """Programmatic models cannot bypass the provenance identity contract."""
     ruleset = YamlRulesetCompiler().compile_payload(
@@ -96,7 +102,7 @@ def test_code_authored_rule_ids_must_be_non_empty_strings(invalid_id):
     assert "RULE_ID_INVALID" in {issue.check_name for issue in result.issues}
 
 
-@pytest.mark.parametrize("invalid_id", [None, "", "   ", 42])
+@pytest.mark.parametrize("invalid_id", [None, "", "   ", 42, []])
 def test_code_authored_assignment_ids_must_be_non_empty_strings(invalid_id):
     """Final-winner fields cannot receive null or non-string assignment IDs."""
     ruleset = YamlRulesetCompiler().compile_payload(
@@ -115,6 +121,197 @@ def test_code_authored_assignment_ids_must_be_non_empty_strings(invalid_id):
     result = RulesetValidator().validate(replace(ruleset, rules=(invalid_rule,)))
 
     assert "ASSIGNMENT_ID_INVALID" in {issue.check_name for issue in result.issues}
+
+
+def test_code_authored_required_text_returns_issues_instead_of_crashing():
+    """Malformed direct dataclasses cannot bypass or crash the publish gate."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "account"},
+                "operator": "eq",
+                "right": {"literal": "A"},
+            }
+        )
+    )
+    rule = ruleset.rules[0]
+    group = rule.root_group
+    condition = group.conditions[0]
+    assignment = rule.assignments[0]
+    cases = (
+        (replace(ruleset, ruleset_id=[]), "RULESET_ID_INVALID"),
+        (replace(ruleset, ruleset_name="   "), "RULESET_NAME_INVALID"),
+        (replace(ruleset, owner="   "), "RULESET_OWNER_REQUIRED"),
+        (
+            replace(ruleset, rules=(replace(rule, rule_name="   "),)),
+            "RULE_NAME_INVALID",
+        ),
+        (
+            replace(
+                ruleset,
+                rules=(replace(rule, root_group=replace(group, condition_group_id=[])),),
+            ),
+            "CONDITION_GROUP_ID_INVALID",
+        ),
+        (
+            replace(
+                ruleset,
+                rules=(
+                    replace(
+                        rule,
+                        root_group=replace(
+                            group,
+                            conditions=(replace(condition, condition_id=[]),),
+                        ),
+                    ),
+                ),
+            ),
+            "CONDITION_ID_INVALID",
+        ),
+        (
+            replace(
+                ruleset,
+                rules=(replace(rule, assignments=(replace(assignment, target_field=[]),)),),
+            ),
+            "ASSIGNMENT_TARGET_FIELD_INVALID",
+        ),
+        (
+            replace(
+                ruleset,
+                rules=(
+                    replace(
+                        rule,
+                        root_group=replace(
+                            group,
+                            conditions=(replace(condition, left=FieldOperand([])),),
+                        ),
+                    ),
+                ),
+            ),
+            "FIELD_NAME_INVALID",
+        ),
+        (
+            replace(
+                ruleset,
+                rules=(
+                    replace(
+                        rule,
+                        root_group=replace(
+                            group,
+                            conditions=(replace(condition, left=AssignedOperand([])),),
+                        ),
+                    ),
+                ),
+            ),
+            "ASSIGNED_TARGET_FIELD_INVALID",
+        ),
+    )
+
+    for invalid_ruleset, expected_check in cases:
+        result = RulesetValidator().validate(invalid_ruleset)
+        assert expected_check in {issue.check_name for issue in result.issues}
+
+
+@pytest.mark.parametrize("invalid_order", [None, "1", True, []])
+def test_code_authored_rule_order_returns_a_structured_issue(invalid_order):
+    """Ordering checks guard malformed values before hashing or sorting them."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "account"},
+                "operator": "eq",
+                "right": {"literal": "A"},
+            }
+        )
+    )
+
+    result = RulesetValidator().validate(
+        replace(ruleset, rules=(replace(ruleset.rules[0], rule_order=invalid_order),))
+    )
+
+    assert "RULE_ORDER_INVALID" in {issue.check_name for issue in result.issues}
+
+
+@pytest.mark.parametrize(
+    "invalid_tolerance",
+    [None, "0", 0, float("nan"), Decimal("NaN"), Decimal("Infinity")],
+)
+def test_code_authored_tolerance_must_be_a_finite_decimal(invalid_tolerance):
+    """Tolerance validation never compares malformed or non-finite values."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "account"},
+                "operator": "eq",
+                "right": {"literal": "A"},
+            }
+        )
+    )
+    rule = ruleset.rules[0]
+    group = rule.root_group
+    condition = replace(group.conditions[0], tolerance_abs=invalid_tolerance)
+    invalid_ruleset = replace(
+        ruleset,
+        rules=(replace(rule, root_group=replace(group, conditions=(condition,))),),
+    )
+
+    result = RulesetValidator().validate(invalid_ruleset)
+
+    assert "TOLERANCE_INVALID" in {issue.check_name for issue in result.issues}
+
+
+def test_direct_mapping_key_collision_fails_validation():
+    """Programmatic literals receive the same lossless-key protection as YAML."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "account"},
+                "operator": "eq",
+                "right": {"literal": "A"},
+            }
+        )
+    )
+    rule = ruleset.rules[0]
+    group = rule.root_group
+    condition = replace(
+        group.conditions[0],
+        right=LiteralOperand({1: "integer", "1": "string"}),
+    )
+    invalid_ruleset = replace(
+        ruleset,
+        rules=(replace(rule, root_group=replace(group, conditions=(condition,))),),
+    )
+
+    result = RulesetValidator().validate(invalid_ruleset)
+
+    assert "MAPPING_KEY_NORMALIZATION_COLLISION" in {issue.check_name for issue in result.issues}
+
+
+@pytest.mark.parametrize("invalid_value_type", [42, ["integer"], "", "   "])
+def test_code_authored_literal_value_type_returns_a_structured_issue(invalid_value_type):
+    """Direct models cannot use a malformed type-hint metadata shape."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        _base_payload(
+            {
+                "left": {"field": "account"},
+                "operator": "eq",
+                "right": {"literal": "A"},
+            }
+        )
+    )
+    rule = ruleset.rules[0]
+    assignment = replace(
+        rule.assignments[0],
+        value=LiteralOperand(1, value_type=invalid_value_type),
+    )
+    invalid_ruleset = replace(
+        ruleset,
+        rules=(replace(rule, assignments=(assignment,)),),
+    )
+
+    result = RulesetValidator().validate(invalid_ruleset)
+
+    assert "LITERAL_VALUE_TYPE_INVALID" in {issue.check_name for issue in result.issues}
 
 
 def test_custom_function_args_mismatch_fails_validation():
@@ -214,12 +411,62 @@ def test_custom_function_optional_defaults_and_argument_constraints_are_validate
         },
         registry=registry,
     )
+    explicit_literal_mode = _validate_condition(
+        {
+            "left": {
+                "custom_function": {
+                    "name": "score",
+                    "args": {"value": 1, "mode": {"literal": "strict"}},
+                }
+            },
+            "operator": "gt",
+            "right": {"literal": 0},
+        },
+        registry=registry,
+    )
+    bad_explicit_literal_mode = _validate_condition(
+        {
+            "left": {
+                "custom_function": {
+                    "name": "score",
+                    "args": {"value": 1, "mode": {"literal": "unknown"}},
+                }
+            },
+            "operator": "gt",
+            "right": {"literal": 0},
+        },
+        registry=registry,
+    )
+    fallback_literal_mode = _validate_condition(
+        {
+            "left": {
+                "custom_function": {
+                    "name": "score",
+                    "args": {
+                        "value": 1,
+                        "mode": {
+                            "literal": None,
+                            "default_if_null": "strict",
+                        },
+                    },
+                }
+            },
+            "operator": "gt",
+            "right": {"literal": 0},
+        },
+        registry=registry,
+    )
 
     assert valid.passed
     assert "CUSTOM_FUNCTION_ARG_TYPE_MISMATCH" in {issue.check_name for issue in bad_type.issues}
     assert "CUSTOM_FUNCTION_ARG_VALUE_INVALID" in {issue.check_name for issue in bad_value.issues}
     assert "CUSTOM_FUNCTION_ARG_LITERAL_REQUIRED" in {
         issue.check_name for issue in dynamic_mode.issues
+    }
+    assert explicit_literal_mode.passed
+    assert fallback_literal_mode.passed
+    assert "CUSTOM_FUNCTION_ARG_VALUE_INVALID" in {
+        issue.check_name for issue in bad_explicit_literal_mode.issues
     }
 
 
@@ -352,6 +599,22 @@ def test_between_with_nonzero_tolerance_fails_validation():
     )
 
     assert any(issue.check_name == "BETWEEN_TOLERANCE_FORBIDDEN" for issue in result.issues)
+
+
+@pytest.mark.parametrize("operator", ["like", "contains", "starts_with", "is_null"])
+def test_nonzero_tolerance_is_rejected_when_runtime_would_ignore_it(operator):
+    """Persisted tolerance is allowed only for operators that implement it."""
+    condition = {
+        "left": {"field": "account"},
+        "operator": operator,
+        "tolerance_abs": "0.01",
+    }
+    if operator != "is_null":
+        condition["right"] = {"literal": "A"}
+
+    result = _validate_condition(condition)
+
+    assert "TOLERANCE_OPERATOR_FORBIDDEN" in {issue.check_name for issue in result.issues}
 
 
 def test_duplicate_condition_ids_fail_validation():

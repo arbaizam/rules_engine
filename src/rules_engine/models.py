@@ -136,7 +136,7 @@ class ValidationResult:
         """
         if not self.issues:
             return "Validation passed with no issues."
-        lines = [f"Validation passed: {self.passed}"]
+        lines = [f"Validation failed with {len(self.issues)} issue(s):"]
         for issue in self.issues:
             details_text = f" | details={issue.details}" if issue.details else ""
             lines.append(f"[ERROR] {issue.check_name}: {issue.message}{details_text}")

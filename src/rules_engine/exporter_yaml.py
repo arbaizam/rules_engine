@@ -7,6 +7,7 @@ The exporter writes the same authoring vocabulary accepted by
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import is_dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -180,17 +181,17 @@ class YamlRulesetExporter:
             payload = {
                 "custom_function": {
                     "name": operand.function_name,
-                    "args": {
-                        str(key): self._export_arg_value(value)
-                        for key, value in operand.args.items()
-                    },
+                    "args": self._export_mapping(
+                        operand.args,
+                        self._export_arg_value,
+                    ),
                 }
             }
         else:
             raise TypeError(f"Unsupported operand type: {type(operand).__name__}")
         if operand.default_if_null is not None:
             default = operand.default_if_null
-            if default.value_type is not None or isinstance(default.value, dict):
+            if default.value_type is not None or isinstance(default.value, Mapping):
                 payload["default_if_null"] = self._export_operand(default)
             else:
                 payload["default_if_null"] = self._export_value(default.value)
@@ -214,8 +215,8 @@ class YamlRulesetExporter:
             return [self._export_value(item) for item in value]
         if isinstance(value, set):
             return {self._export_value(item) for item in value}
-        if isinstance(value, dict):
-            return {str(key): self._export_value(item) for key, item in value.items()}
+        if isinstance(value, Mapping):
+            return self._export_mapping(value, self._export_value)
         if is_dataclass(value):
             raise TypeError(
                 f"Dataclass values are not YAML-authoring literals: {type(value).__name__}"
@@ -237,6 +238,25 @@ class YamlRulesetExporter:
             return [self._export_arg_value(item) for item in value]
         if isinstance(value, set):
             return {self._export_arg_value(item) for item in value}
-        if isinstance(value, dict):
-            return {str(key): self._export_arg_value(item) for key, item in value.items()}
+        if isinstance(value, Mapping):
+            return self._export_mapping(value, self._export_arg_value)
         return self._export_value(value)
+
+    def _export_mapping(
+        self,
+        value: Mapping[Any, Any],
+        export_value: Callable[[Any], Any],
+    ) -> dict[str, Any]:
+        """String-normalize mapping keys without silently merging values."""
+        exported: dict[str, Any] = {}
+        original_keys: dict[str, Any] = {}
+        for original_key, item in value.items():
+            key = str(original_key)
+            if key in exported:
+                first_key = original_keys[key]
+                raise ValueError(
+                    f"Mapping keys {first_key!r} and {original_key!r} both normalize to {key!r}."
+                )
+            exported[key] = export_value(item)
+            original_keys[key] = original_key
+        return exported

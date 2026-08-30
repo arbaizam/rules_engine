@@ -608,8 +608,8 @@ element is its effective assignment.
 | Rule `stop_on_match` | `true` or `false`; default `false` | `false` lets later rules run. `true` applies the matching rule and then stops. |
 
 All compact and full-audit output names for the selected prefix are reserved.
-We reject an input DataFrame containing any reserved name before evaluation,
-even when `full_audit=false`.
+We reject an input DataFrame containing any reserved name or case-only variant
+before evaluation, even when `full_audit=false`.
 
 ## Coverage reports
 
@@ -634,6 +634,10 @@ one Spark aggregation action. It returns:
 | `dead_rule_ids` | Tuple of rule IDs | Active rules with zero matches. |
 | `suspiciously_broad_rule_ids` | Tuple of rule IDs | Rules whose match rate is at or above `broad_match_threshold`. |
 | `no_match_rows` | Spark DataFrame | Lazy diagnostic view retaining every original input column plus the coverage-prefixed result columns, filtered to clean no-match rows. |
+
+Materializing `no_match_rows` starts a separate Spark action and reevaluates the
+rules. The analyzer does not persist its internal plan or take ownership of the
+caller's cache lifecycle.
 
 `broad_match_threshold` must be between `0` and `1`, inclusive. Coverage is a
 diagnostic summary; it does not change or publish the ruleset.

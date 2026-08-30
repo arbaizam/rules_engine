@@ -355,6 +355,12 @@ def test_canonical_json_rejects_nonfinite_float():
         _canonical_json_dumps(float("inf"))
 
 
+def test_canonical_json_rejects_keys_that_normalize_to_the_same_string():
+    """Canonical JSON cannot emit duplicate object keys and alter semantics."""
+    with pytest.raises(ValueError, match="both normalize to '1'"):
+        _canonical_json_dumps({1: "integer", "1": "string"})
+
+
 def test_serializer_round_trips_temporal_and_python_collection_literals():
     """Extended JSON preserves supported values that plain JSON cannot encode."""
     event_at = datetime(2026, 5, 1, 14, 30, tzinfo=timezone.utc)

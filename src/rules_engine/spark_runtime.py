@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import math
 import traceback
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -21,7 +22,7 @@ from typing import Any
 from uuid import uuid4
 
 from pyspark.serializers import CloudPickleSerializer
-from pyspark.sql import DataFrame
+from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
@@ -90,7 +91,7 @@ def required_source_columns(ruleset: Ruleset) -> tuple[str, ...]:
     return tuple(dict.fromkeys(columns))
 
 
-def _source_column(column_name: str):
+def _source_column(column_name: str) -> Column:
     """Return a top-level Spark column with its literal source name preserved."""
     escaped_name = column_name.replace("`", "``")
     return F.col(f"`{escaped_name}`").alias(column_name)
@@ -309,7 +310,7 @@ class SparkRulesEngineRuntime:
             Shared lazy plan exposing keyed results and applied business rows.
         """
         normalized_keys = self._validate_key_columns(df, ruleset, key_columns)
-        evaluated, assign_schema = self._evaluate_attached_dataframe(
+        evaluated, assign_schema = self.evaluate_attached_dataframe(
             df,
             ruleset,
             column_prefix=column_prefix,
@@ -329,7 +330,7 @@ class SparkRulesEngineRuntime:
             assign_column=f"{column_prefix}_assign",
         )
 
-    def _evaluate_attached_dataframe(
+    def evaluate_attached_dataframe(
         self,
         df: DataFrame,
         ruleset: Ruleset,
@@ -339,7 +340,7 @@ class SparkRulesEngineRuntime:
         include_error_traceback: bool = False,
         full_audit: bool = False,
     ) -> tuple[DataFrame, T.StructType]:
-        """Build the internal source-plus-results plan without starting a job."""
+        """Build a source-plus-results plan for package integrations."""
         _require_bool("full_audit", full_audit)
         if not column_prefix:
             raise ValueError("column_prefix must be non-empty.")
@@ -348,14 +349,22 @@ class SparkRulesEngineRuntime:
             f"{column_prefix}_ruleset",
             f"{column_prefix}_engine_version",
         }
-        conflicts = sorted(output_names & set(df.columns))
+        output_names_by_case = {name.casefold() for name in output_names}
+        conflicts = sorted(
+            {
+                column_name
+                for column_name in df.columns
+                if column_name.casefold() in output_names_by_case
+            }
+        )
         if conflicts:
             raise ValueError(
                 f"Input contains rules-engine output columns for prefix "
                 f"{column_prefix!r}: {conflicts}"
             )
         logger.info(
-            "Evaluating ruleset in Spark runtime: ruleset_id=%s ruleset_name=%s version=%s rule_count=%s fail_on_error=%s",
+            "Evaluating ruleset in Spark runtime: ruleset_id=%s ruleset_name=%s "
+            "version=%s rule_count=%s fail_on_error=%s",
             ruleset.ruleset_id,
             ruleset.ruleset_name,
             ruleset.version,
@@ -390,20 +399,13 @@ class SparkRulesEngineRuntime:
             useArrow=False,
         )
         available_columns = set(df.columns)
-        assignment_target_columns = (
-            [
-                assignment.target_field
-                for rule in sorted(ruleset.rules, key=lambda item: item.rule_order)
-                if rule.active_flag
-                for assignment in rule.assignments
-            ]
-            if full_audit
-            else []
-        )
         serialized_columns = [
             column_name
             for column_name in dict.fromkeys(
-                (*required_source_columns(ruleset), *assignment_target_columns)
+                (
+                    *required_source_columns(ruleset),
+                    *(assign_field_names if full_audit else ()),
+                )
             )
             if column_name in available_columns
         ]
@@ -454,26 +456,39 @@ class SparkRulesEngineRuntime:
         ]
         if invalid:
             raise ValueError("key_columns must contain only non-empty strings.")
+        normalized_counts = Counter(column_name.casefold() for column_name in normalized)
         duplicates = sorted(
-            {column_name for column_name in normalized if normalized.count(column_name) > 1}
+            {
+                column_name
+                for column_name in normalized
+                if normalized_counts[column_name.casefold()] > 1
+            }
         )
         if duplicates:
             raise ValueError(f"key_columns contains duplicate names: {duplicates}")
+        input_counts = Counter(column_name.casefold() for column_name in df.columns)
+        ambiguous_source_columns = sorted(
+            {column_name for column_name in df.columns if input_counts[column_name.casefold()] > 1}
+        )
+        if ambiguous_source_columns:
+            raise ValueError(
+                "Input DataFrame contains ambiguous column names under Spark's "
+                f"case-insensitive resolver: {ambiguous_source_columns}"
+            )
         missing = sorted(set(normalized) - set(df.columns))
         if missing:
             raise ValueError(f"key_columns are missing from the input DataFrame: {missing}")
-        ambiguous = sorted(
-            column_name for column_name in normalized if df.columns.count(column_name) > 1
-        )
-        if ambiguous:
-            raise ValueError(f"key_columns are ambiguous in the input DataFrame: {ambiguous}")
-        assignment_targets = {
-            assignment.target_field
+        assignment_targets_by_case = {
+            assignment.target_field.casefold()
             for rule in ruleset.rules
             if rule.active_flag
             for assignment in rule.assignments
         }
-        assigned_keys = sorted(set(normalized) & assignment_targets)
+        assigned_keys = sorted(
+            column_name
+            for column_name in normalized
+            if column_name.casefold() in assignment_targets_by_case
+        )
         if assigned_keys:
             raise ValueError(
                 f"Assignment targets cannot modify immutable key columns: {assigned_keys}"
@@ -550,10 +565,13 @@ class SparkRulesEngineRuntime:
     ):
         """Build the serializable Python callable used by the Spark UDF."""
         _require_bool("full_audit", full_audit)
-        runtime = _SparkRowUdfEvaluator.without_repository(self._function_registry)
-        ordered_rules = sorted(ruleset.rules, key=lambda item: item.rule_order)
+        runtime = _SparkRowUdfEvaluator(self._function_registry)
+        prepared_rules = runtime._prepare_ruleset(ruleset).active_rules
+        runtime._prepared_ruleset = None
+        runtime._function_bindings_by_id = None
+        runtime._function_registry = FunctionRegistry()
         active_rules: list[_PreparedRule] = []
-        for rule in (item for item in ordered_rules if item.active_flag):
+        for rule in prepared_rules:
             assignment_specs = tuple(
                 (
                     assignment,

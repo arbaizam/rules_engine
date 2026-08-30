@@ -187,9 +187,20 @@ def _canonical_json_dumps(value: Any) -> str:
 
 def _canonical_mapping_dumps(value: dict[Any, Any]) -> str:
     """Encode mapping contents without interpreting reserved persistence keys."""
+    normalized: dict[str, Any] = {}
+    original_keys: dict[str, Any] = {}
+    for original_key, item in value.items():
+        key = str(original_key)
+        if key in normalized:
+            first_key = original_keys[key]
+            raise ValueError(
+                f"Mapping keys {first_key!r} and {original_key!r} both normalize to {key!r}."
+            )
+        normalized[key] = item
+        original_keys[key] = original_key
     encoded_items = (
         f"{json.dumps(key, separators=(',', ':'))}:{_canonical_json_dumps(item)}"
-        for key, item in sorted(value.items())
+        for key, item in sorted(normalized.items())
     )
     return "{" + ",".join(encoded_items) + "}"
 

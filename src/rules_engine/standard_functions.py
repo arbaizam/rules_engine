@@ -20,6 +20,7 @@ from decimal import (
 )
 from typing import Any
 
+from rules_engine.models import FunctionRegistryRow
 from rules_engine.registry import (
     CustomFunctionArgSpec,
     CustomFunctionSpec,
@@ -1093,6 +1094,6 @@ def register_standard_functions(registry: FunctionRegistry) -> FunctionRegistry:
     return registry
 
 
-def standard_function_rows():
+def standard_function_rows() -> list[FunctionRegistryRow]:
     """Return persisted metadata rows for all standard function specs."""
     return [spec.to_row() for spec in STANDARD_FUNCTION_SPECS]

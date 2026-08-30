@@ -76,3 +76,13 @@ COLLECTION_LITERAL_OPERATORS = {
     ComparisonOperator.BETWEEN,
     ComparisonOperator.NOT_BETWEEN,
 }
+TOLERANCE_OPERATORS = {
+    ComparisonOperator.EQ,
+    ComparisonOperator.NE,
+    ComparisonOperator.GT,
+    ComparisonOperator.GE,
+    ComparisonOperator.LT,
+    ComparisonOperator.LE,
+    ComparisonOperator.IN,
+    ComparisonOperator.NOT_IN,
+}

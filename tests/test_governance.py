@@ -114,7 +114,7 @@ def test_python_evaluator_and_spark_worker_share_rule_ordering_semantics():
             ],
         }
     )
-    row_evaluator = SparkRowEvaluator.without_repository(FunctionRegistry())
+    row_evaluator = SparkRowEvaluator(FunctionRegistry())
     runtime = SparkRulesEngineRuntime(NoOpRepository(), FunctionRegistry())
     spark_evaluator = runtime._build_row_evaluator(
         ruleset,

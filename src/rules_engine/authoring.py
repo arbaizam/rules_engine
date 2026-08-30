@@ -6,6 +6,7 @@ from typing import Any
 
 from rules_engine.enums import (
     COLLECTION_LITERAL_OPERATORS,
+    TOLERANCE_OPERATORS,
     UNARY_OPERATORS,
     ComparisonOperator,
     LogicalOperator,
@@ -38,16 +39,6 @@ _PAIR_OPERATORS = {
     ComparisonOperator.BETWEEN,
     ComparisonOperator.NOT_BETWEEN,
 }
-_TOLERANCE_OPERATORS = {
-    ComparisonOperator.EQ,
-    ComparisonOperator.NE,
-    ComparisonOperator.GT,
-    ComparisonOperator.GE,
-    ComparisonOperator.LT,
-    ComparisonOperator.LE,
-    ComparisonOperator.IN,
-    ComparisonOperator.NOT_IN,
-}
 
 
 def literal_type_hint_names() -> tuple[str, ...]:
@@ -77,7 +68,7 @@ def build_authoring_manifest(registry: FunctionRegistry) -> dict[str, Any]:
                 "name": operator.value,
                 "arity": 1 if operator in UNARY_OPERATORS else 2,
                 "right_operand_shape": _right_operand_shape(operator),
-                "supports_tolerance": operator in _TOLERANCE_OPERATORS,
+                "supports_tolerance": operator in TOLERANCE_OPERATORS,
             }
             for operator in ComparisonOperator
         ],

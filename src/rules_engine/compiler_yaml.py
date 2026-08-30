@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -285,7 +285,7 @@ class YamlRulesetCompiler:
         if not isinstance(raw_items, list):
             raise CompilationError(f"Condition group {group_id} must contain a list.")
         explicit_group_id = payload.get("condition_group_id", group_id)
-        if not isinstance(explicit_group_id, str) or not explicit_group_id:
+        if not isinstance(explicit_group_id, str) or not explicit_group_id.strip():
             raise CompilationError("condition_group_id must be a non-empty string when provided.")
         return self._compile_condition_group(logical_operator, raw_items, explicit_group_id)
 
@@ -373,10 +373,10 @@ class YamlRulesetCompiler:
         documented shorthand where keys are target fields and values are
         literal or operand payloads.
         """
+        assignments: list[Assignment] = []
         if isinstance(payload, Mapping):
-            assignments: list[Assignment] = []
             for target_field, raw_value in payload.items():
-                if not isinstance(target_field, str) or not target_field:
+                if not isinstance(target_field, str) or not target_field.strip():
                     raise CompilationError("Assignment target fields must be non-empty strings.")
                 assignments.append(
                     Assignment(
@@ -388,7 +388,6 @@ class YamlRulesetCompiler:
             return tuple(assignments)
         if not isinstance(payload, list):
             raise CompilationError("assign must be a list or mapping.")
-        assignments: list[Assignment] = []
         for index, raw_assignment in enumerate(payload, start=1):
             assignment = self._ensure_mapping(raw_assignment, "assignment")
             self._reject_unsupported_keys(
@@ -476,10 +475,11 @@ class YamlRulesetCompiler:
             )
             return CustomFunctionOperand(
                 function_name=self._require_str(fn_payload, "name"),
-                args={
-                    str(arg_name): self._compile_custom_function_arg(arg_value)
-                    for arg_name, arg_value in self._optional_mapping(fn_payload, "args").items()
-                },
+                args=self._normalize_mapping_keys(
+                    self._optional_mapping(fn_payload, "args"),
+                    self._compile_custom_function_arg,
+                    "Custom function arguments",
+                ),
                 default_if_null=default_if_null,
             )
         raise CompilationError(f"Unsupported operand kind: {key}")
@@ -515,9 +515,11 @@ class YamlRulesetCompiler:
             }
             if operand_keys:
                 return self._compile_operand(value)
-            return {
-                str(key): self._compile_custom_function_arg(item) for key, item in value.items()
-            }
+            return self._normalize_mapping_keys(
+                value,
+                self._compile_custom_function_arg,
+                "Custom function argument mapping",
+            )
         if isinstance(value, list):
             return [self._compile_custom_function_arg(item) for item in value]
         if isinstance(value, tuple):
@@ -546,9 +548,11 @@ class YamlRulesetCompiler:
         if isinstance(value, set):
             return {self._normalize_literal_value(item, value_type) for item in value}
         if isinstance(value, Mapping):
-            return {
-                key: self._normalize_literal_value(item, value_type) for key, item in value.items()
-            }
+            return self._normalize_mapping_keys(
+                value,
+                lambda item: self._normalize_literal_value(item, value_type),
+                "Literal mapping",
+            )
         if isinstance(value, float) and not math.isfinite(value):
             raise CompilationError("Numeric literals must be finite.")
         if isinstance(value, Decimal) and not value.is_finite():
@@ -707,12 +711,33 @@ class YamlRulesetCompiler:
             raise CompilationError(f"{label} must be a mapping.")
         return value
 
+    def _normalize_mapping_keys(
+        self,
+        value: Mapping[Any, Any],
+        normalize_value: Callable[[Any], Any],
+        label: str,
+    ) -> dict[str, Any]:
+        """Normalize persisted mapping keys without silently merging values."""
+        normalized: dict[str, Any] = {}
+        original_keys: dict[str, Any] = {}
+        for original_key, item in value.items():
+            key = str(original_key)
+            if key in normalized:
+                first_key = original_keys[key]
+                raise CompilationError(
+                    f"{label} contains keys {first_key!r} and {original_key!r} "
+                    f"that both normalize to {key!r}."
+                )
+            normalized[key] = normalize_value(item)
+            original_keys[key] = original_key
+        return normalized
+
     def _require_str(self, payload: Mapping[str, Any], key: str) -> str:
         """
         Read a required non-empty string field from a mapping.
         """
         value = payload.get(key)
-        if not isinstance(value, str) or not value:
+        if not isinstance(value, str) or not value.strip():
             raise CompilationError(f"{key} must be a non-empty string.")
         return value
 
@@ -762,9 +787,8 @@ class YamlRulesetCompiler:
         """Reject keys outside one explicitly declared mapping contract."""
         unsupported_keys = set(payload) - allowed_keys
         if unsupported_keys:
-            raise CompilationError(
-                f"{label} contains unsupported keys: {sorted(unsupported_keys)}."
-            )
+            rendered_keys = ", ".join(sorted(repr(key) for key in unsupported_keys))
+            raise CompilationError(f"{label} contains unsupported keys: [{rendered_keys}].")
 
     def _optional_str(self, payload: Mapping[str, Any], key: str) -> str | None:
         """

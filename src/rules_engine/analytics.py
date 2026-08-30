@@ -60,6 +60,7 @@ class RulesetCoverageAnalyzer:
         self,
         runtime: SparkRulesEngineRuntime,
     ) -> None:
+        """Create an analyzer backed by the production Spark runtime."""
         self._runtime = runtime
 
     def analyze(
@@ -77,7 +78,7 @@ class RulesetCoverageAnalyzer:
             raise ValueError("column_prefix must be non-empty.")
         if any(column.startswith(f"{column_prefix}_") for column in df.columns):
             raise ValueError(f"Input contains reserved coverage columns beginning {column_prefix}_")
-        evaluated, _ = self._runtime._evaluate_attached_dataframe(
+        evaluated, _ = self._runtime.evaluate_attached_dataframe(
             df,
             ruleset,
             column_prefix=column_prefix,

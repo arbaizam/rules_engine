@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
+from pyspark.serializers import CloudPickleSerializer
 from pyspark.sql import types as T
 
 from rules_engine import required_source_columns as public_required_source_columns
@@ -187,7 +188,7 @@ def _assigned_chain_ruleset():
 
 def test_assigned_values_are_visible_to_later_rules_and_atomic_within_a_rule():
     """Later rules see commits, while sibling assignments share one snapshot."""
-    result = SparkRowEvaluator.without_repository(FunctionRegistry()).evaluate_row(
+    result = SparkRowEvaluator(FunctionRegistry()).evaluate_row(
         _assigned_chain_ruleset(),
         {"eligible": True, "bucket": "ORIGINAL"},
     )
@@ -247,9 +248,7 @@ def test_missing_prior_commit_is_null_and_can_use_default_if_null():
     }
     ruleset = YamlRulesetCompiler().compile_payload(payload)
 
-    result = SparkRowEvaluator.without_repository(FunctionRegistry()).evaluate_row(
-        ruleset, {"eligible": False}
-    )
+    result = SparkRowEvaluator(FunctionRegistry()).evaluate_row(ruleset, {"eligible": False})
 
     assert result["matched_rule_ids"] == ["fallback"]
     assert result["assign"] == {
@@ -490,6 +489,26 @@ def test_compact_evaluation_reserves_full_audit_only_names():
             )
 
 
+def test_dataframe_evaluation_reserves_output_names_case_insensitively():
+    """Spark's default resolver cannot distinguish case-only output collisions."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    conflicting_name = "Rules_Engine_Matched"
+    input_frame = type("InputFrame", (), {"columns": ["row_id", conflicting_name]})()
+
+    with pytest.raises(ValueError, match=conflicting_name):
+        _spark_runtime().evaluate_dataframe(
+            input_frame,
+            ruleset,
+            key_columns=["row_id"],
+        )
+
+
 def test_dataframe_evaluation_rejects_an_empty_column_prefix():
     """The output namespace must be explicit and non-empty."""
     ruleset = _compile(
@@ -516,6 +535,7 @@ def test_dataframe_evaluation_rejects_an_empty_column_prefix():
         ("row_id", "not a string"),
         ([], "at least one"),
         (["row_id", "row_id"], "duplicate"),
+        (["row_id", "ROW_ID"], "duplicate"),
         (["missing"], "missing from"),
         ([1], "non-empty strings"),
     ],
@@ -562,6 +582,53 @@ def test_dataframe_evaluation_rejects_an_ambiguous_key_column():
         )
 
 
+def test_dataframe_evaluation_rejects_a_case_ambiguous_key_column():
+    """Spark's default resolver cannot identify a key among case variants."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        }
+    )
+    input_frame = type(
+        "InputFrame",
+        (),
+        {"columns": ["row_id", "ROW_ID", "account"]},
+    )()
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        _spark_runtime().evaluate_dataframe(
+            input_frame,
+            ruleset,
+            key_columns=["row_id"],
+        )
+
+
+def test_dataframe_evaluation_rejects_unselected_ambiguous_source_columns():
+    """Assignment application must be able to project every source column safely."""
+    ruleset = _compile(
+        {
+            "left": {"field": "status"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        },
+        assign={"bucket": "matched"},
+    )
+    input_frame = type(
+        "InputFrame",
+        (),
+        {"columns": ["row_id", "status", "Foo", "foo"]},
+    )()
+
+    with pytest.raises(ValueError, match="ambiguous column names"):
+        _spark_runtime().evaluate_dataframe(
+            input_frame,
+            ruleset,
+            key_columns=["row_id"],
+        )
+
+
 def test_dataframe_evaluation_rejects_assignment_to_an_immutable_key():
     """Application cannot change the columns used to correlate separate results."""
     ruleset = _compile(
@@ -579,6 +646,26 @@ def test_dataframe_evaluation_rejects_assignment_to_an_immutable_key():
             input_frame,
             ruleset,
             key_columns=["row_id"],
+        )
+
+
+def test_dataframe_evaluation_protects_keys_from_case_only_assignment_targets():
+    """Case-only target differences cannot bypass immutable-key protection."""
+    ruleset = _compile(
+        {
+            "left": {"field": "account"},
+            "operator": "eq",
+            "right": {"literal": "A"},
+        },
+        assign={"row_id": "replacement"},
+    )
+    input_frame = type("InputFrame", (), {"columns": ["ROW_ID", "account"]})()
+
+    with pytest.raises(ValueError, match="cannot modify immutable key"):
+        _spark_runtime().evaluate_dataframe(
+            input_frame,
+            ruleset,
+            key_columns=["ROW_ID"],
         )
 
 
@@ -1971,7 +2058,7 @@ def test_match_only_and_traced_paths_agree_on_inactive_condition_groups():
             "right": {"literal": "ignored"},
         },
     ]
-    evaluator = SparkRowEvaluator(DummyRepository(), FunctionRegistry())
+    evaluator = SparkRowEvaluator(FunctionRegistry())
     row = {"account": "A", "inactive_source": "ignored"}
 
     for operator, expected in (("all", False), ("any", True)):
@@ -1979,6 +2066,50 @@ def test_match_only_and_traced_paths_agree_on_inactive_condition_groups():
 
         assert evaluator._rule_matches(rule, row) is expected
         assert evaluator._evaluate_rule(rule, row)[0] is expected
+
+
+def test_inactive_custom_condition_does_not_require_a_worker_implementation():
+    """Inactive trace metadata is prepared without capturing an unused callable."""
+    registry = FunctionRegistry()
+    registry.register(
+        CustomFunctionSpec(
+            function_name="inactive_check",
+            implementation_reference="tests.inactive_check",
+            arguments=(CustomFunctionArgSpec("value"),),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=False,
+            return_type_hint="boolean",
+        )
+    )
+    ruleset = _compile_when(
+        {
+            "any": [
+                {
+                    "active_flag": False,
+                    "left": {
+                        "custom_function": {
+                            "name": "inactive_check",
+                            "args": {"value": {"field": "account"}},
+                        }
+                    },
+                    "operator": "eq",
+                    "right": {"literal": True},
+                },
+                {
+                    "left": {"literal": True},
+                    "operator": "eq",
+                    "right": {"literal": True},
+                },
+            ]
+        }
+    )
+
+    result = _evaluate_worker(ruleset, {"account": "A"}, registry=registry)
+
+    assert result["matched"] is True
+    inactive = result["matched_rules"][0]["conditions"][0]
+    assert inactive["comparison_result"] is None
+    assert inactive["left"]["function_name"] == "inactive_check"
 
 
 def test_spark_assignment_schema_rejects_incompatible_same_target_assignments():
@@ -2088,13 +2219,78 @@ def test_spark_row_evaluator_matched_rule_trace_includes_custom_function_args():
     assert calls == [{"x": 2, "y": 3}]
 
 
+def test_row_evaluator_binds_custom_function_metadata_once_per_ruleset(monkeypatch):
+    """Repeated rows reuse static bindings while mutable defaults stay row-local."""
+    registry = FunctionRegistry()
+    implementation_calls = []
+
+    def append_and_count(*, value, items):
+        items.append(value)
+        implementation_calls.append(list(items))
+        return len(items)
+
+    registry.register(
+        CustomFunctionSpec(
+            function_name="append_and_count",
+            implementation_reference="tests.append_and_count",
+            arguments=(
+                CustomFunctionArgSpec("value"),
+                CustomFunctionArgSpec("items", required=False, default=[]),
+            ),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=False,
+            return_type_hint="integer",
+        ),
+        implementation=append_and_count,
+    )
+    ruleset = _compile(
+        {
+            "left": {
+                "custom_function": {
+                    "name": "append_and_count",
+                    "args": {"value": {"field": "amount"}},
+                }
+            },
+            "operator": "eq",
+            "right": {"literal": 1},
+        }
+    )
+    bind_calls = []
+    original_bind_args = CustomFunctionSpec.bind_args
+
+    def tracked_bind_args(self, authored_args):
+        bind_calls.append(self.function_name)
+        return original_bind_args(self, authored_args)
+
+    monkeypatch.setattr(CustomFunctionSpec, "bind_args", tracked_bind_args)
+    evaluator = SparkRowEvaluator(registry)
+
+    first = evaluator.evaluate_row(ruleset, {"amount": 10})
+    second = evaluator.evaluate_row(ruleset, {"amount": 20})
+
+    assert first["matched"] is True
+    assert second["matched"] is True
+    assert bind_calls == ["append_and_count"]
+    assert implementation_calls == [[10], [20]]
+
+    worker = _spark_runtime(registry)._build_row_evaluator(
+        ruleset,
+        ["bucket"],
+        {"bucket": T.StringType()},
+    )
+    restored_worker = CloudPickleSerializer().loads(CloudPickleSerializer().dumps(worker))
+
+    assert restored_worker(FakeSparkRow({"amount": 30}))["matched"] is True
+    assert bind_calls == ["append_and_count", "append_and_count"]
+
+
 def test_trace_value_returns_common_scalars_without_json_serialization(monkeypatch):
     """
     What: Returns primitive trace values without invoking the JSON encoder.
     Why: Scalar operands dominate row evaluation and are already Spark-safe values.
     Fails when: Common trace values regain repeated JSON serialization overhead.
     """
-    evaluator = SparkRowEvaluator(DummyRepository(), FunctionRegistry())
+    evaluator = SparkRowEvaluator(FunctionRegistry())
 
     def unexpected_json_serialization(value):
         raise AssertionError(f"Unexpected JSON serialization for {value!r}")
@@ -2109,6 +2305,23 @@ def test_trace_value_returns_common_scalars_without_json_serialization(monkeypat
     assert evaluator._trace_value(10) == 10
     assert evaluator._trace_value(1.5) == 1.5
     assert evaluator._trace_value(True) is True
+
+
+def test_trace_value_handles_recursive_collections():
+    """Circular runtime values are quarantined into JSON-safe trace metadata."""
+    evaluator = SparkRowEvaluator(FunctionRegistry())
+    recursive = []
+    recursive.append(recursive)
+
+    assert evaluator._trace_value(recursive) == ["<recursive>"]
+
+
+def test_trace_value_preserves_runtime_mapping_key_collisions():
+    """Dynamic function results cannot lose keys that stringify identically."""
+    evaluator = SparkRowEvaluator(FunctionRegistry())
+    value = {1: "integer", "1": "string"}
+
+    assert evaluator._trace_value(value) == repr(value)
 
 
 def test_spark_row_evaluator_like_uses_sql_wildcard_semantics():

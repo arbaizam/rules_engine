@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -5,6 +6,7 @@ import pytest
 from pyspark.sql import types as T
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.models import LiteralOperand
 from rules_engine.registry import (
     CustomFunctionArgSpec,
     CustomFunctionSpec,
@@ -135,6 +137,133 @@ def test_spark_validator_rejects_missing_assignment_source_field():
     assert "SPARK_ASSIGNMENT_SOURCE_FIELD_MISSING" in _checks(result)
 
 
+def test_schema_diagnostics_are_retained_with_ordinary_base_issues():
+    """Missing governance metadata does not hide independent Spark incompatibilities."""
+    payload = _payload({"bucket": "A"}, condition_field="missing")
+    payload["owner"] = None
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+
+    result = SparkRulesetCompatibilityValidator().validate(ruleset, T.StructType())
+
+    assert {"RULESET_OWNER_REQUIRED", "SPARK_CONDITION_FIELD_MISSING"}.issubset(_checks(result))
+
+
+def test_spark_validator_rejects_ambiguous_referenced_source_fields():
+    """Condition and assignment field references require one resolvable input column."""
+    ruleset = YamlRulesetCompiler().compile_payload(_payload({"bucket": {"field": "source_value"}}))
+    schema = T.StructType(
+        [
+            T.StructField("status", T.StringType(), True),
+            T.StructField("status", T.StringType(), True),
+            T.StructField("source_value", T.StringType(), True),
+            T.StructField("source_value", T.StringType(), True),
+        ]
+    )
+
+    result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
+
+    assert {
+        "SPARK_CONDITION_FIELD_AMBIGUOUS",
+        "SPARK_ASSIGNMENT_SOURCE_FIELD_AMBIGUOUS",
+    }.issubset(_checks(result))
+
+
+def test_spark_validator_rejects_ambiguous_existing_assignment_target():
+    """Updating a duplicated input field cannot identify one target column."""
+    ruleset = YamlRulesetCompiler().compile_payload(_payload({"target": 10}))
+    schema = T.StructType(
+        [
+            T.StructField("status", T.StringType(), True),
+            T.StructField("target", T.IntegerType(), True),
+            T.StructField("target", T.IntegerType(), True),
+        ]
+    )
+
+    result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
+
+    assert "SPARK_ASSIGNMENT_TARGET_AMBIGUOUS" in _checks(result)
+
+
+def test_spark_validator_rejects_multiple_case_variant_assignment_targets():
+    """A target is ambiguous when several source fields match only by case."""
+    ruleset = YamlRulesetCompiler().compile_payload(_payload({"target": 10}))
+    schema = T.StructType(
+        [
+            T.StructField("status", T.StringType(), True),
+            T.StructField("Target", T.IntegerType(), True),
+            T.StructField("TARGET", T.IntegerType(), True),
+        ]
+    )
+
+    result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
+
+    assert "SPARK_ASSIGNMENT_TARGET_AMBIGUOUS" in _checks(result)
+
+
+def test_spark_validator_rejects_case_insensitive_assignment_source_collision():
+    """A new target cannot differ only by case from an input field."""
+    ruleset = YamlRulesetCompiler().compile_payload(_payload({"score": 10}))
+    schema = T.StructType(
+        [
+            T.StructField("status", T.StringType(), True),
+            T.StructField("Score", T.IntegerType(), True),
+        ]
+    )
+    validator = SparkRulesetCompatibilityValidator()
+
+    result = validator.validate(ruleset, schema)
+
+    assert "SPARK_ASSIGNMENT_TARGET_CASE_COLLISION" in _checks(result)
+    with pytest.raises(ValueError, match="SPARK_ASSIGNMENT_TARGET_CASE_COLLISION"):
+        validator.assignment_schema(ruleset, schema)
+
+
+def test_spark_validator_rejects_casefold_colliding_new_assignment_targets():
+    """New targets must have one case-stable spelling across active rules."""
+    payload = _payload({"Score": 1})
+    payload["rules"].append(
+        {
+            **payload["rules"][0],
+            "rule_id": "r2",
+            "rule_name": "Rule 2",
+            "rule_order": 2,
+            "assign": {"score": 2},
+        }
+    )
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+    schema = T.StructType([T.StructField("status", T.StringType(), True)])
+    validator = SparkRulesetCompatibilityValidator()
+
+    result = validator.validate(ruleset, schema)
+
+    assert "SPARK_ASSIGNMENT_TARGET_CASE_COLLISION" in _checks(result)
+    with pytest.raises(ValueError, match="SPARK_ASSIGNMENT_TARGET_CASE_COLLISION"):
+        validator.assignment_schema(ruleset, schema)
+
+
+def test_spark_validator_allows_same_exact_target_across_rules():
+    """Ordered rules may continue assigning one exactly named target."""
+    payload = _payload({"score": 1})
+    payload["rules"].append(
+        {
+            **payload["rules"][0],
+            "rule_id": "r2",
+            "rule_name": "Rule 2",
+            "rule_order": 2,
+            "assign": {"score": 2},
+        }
+    )
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+    schema = T.StructType([T.StructField("status", T.StringType(), True)])
+    validator = SparkRulesetCompatibilityValidator()
+
+    result = validator.validate(ruleset, schema)
+    assignment_schema = validator.assignment_schema(ruleset, schema)
+
+    assert "SPARK_ASSIGNMENT_TARGET_CASE_COLLISION" not in _checks(result)
+    assert assignment_schema.fieldNames() == ["score"]
+
+
 def test_spark_validator_rejects_incompatible_existing_target_type():
     ruleset = YamlRulesetCompiler().compile_payload(_payload({"target": 10}))
     schema = T.StructType(
@@ -190,6 +319,34 @@ def test_spark_validator_infers_new_target_type_from_prior_assignment():
     assert result.passed
     assert isinstance(assignment_schema["score"].dataType, T.LongType)
     assert isinstance(assignment_schema["copied_score"].dataType, T.LongType)
+
+
+def test_spark_validator_keeps_existing_target_type_for_assigned_references():
+    """Downstream assigned operands use the pinned input type, not a wider literal type."""
+    payload = _payload({"score": 5})
+    payload["rules"].append(
+        {
+            **payload["rules"][0],
+            "rule_id": "r2",
+            "rule_name": "Rule 2",
+            "rule_order": 2,
+            "assign": {"score": {"assigned": "score"}},
+        }
+    )
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+    schema = T.StructType(
+        [
+            T.StructField("status", T.StringType(), True),
+            T.StructField("score", T.IntegerType(), True),
+        ]
+    )
+    validator = SparkRulesetCompatibilityValidator()
+
+    result = validator.validate(ruleset, schema)
+    assignment_schema = validator.assignment_schema(ruleset, schema)
+
+    assert result.passed, result.to_text()
+    assert assignment_schema["score"].dataType == T.IntegerType()
 
 
 def test_spark_validator_existing_target_supplies_null_literal_type():
@@ -644,6 +801,53 @@ def test_spark_validator_rejects_date_compared_with_quoted_string():
     assert "SPARK_CONDITION_TEMPORAL_MISMATCH" in _checks(result)
 
 
+@pytest.mark.parametrize(
+    ("operator", "right"),
+    [
+        ("ge", {"literal": date(2025, 1, 1)}),
+        ("in", {"literal": [date(2025, 1, 1)]}),
+    ],
+)
+def test_spark_validator_rejects_temporal_tolerance(operator, right):
+    """Known scalar and collection temporal operands require zero tolerance."""
+    payload = _payload({"bucket": "A"}, condition_field="as_of_date")
+    condition = payload["rules"][0]["when"]["all"][0]
+    condition.update(
+        {
+            "operator": operator,
+            "right": right,
+            "tolerance_abs": "1",
+        }
+    )
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+    schema = T.StructType([T.StructField("as_of_date", T.DateType(), True)])
+
+    result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
+
+    assert "SPARK_CONDITION_TEMPORAL_TOLERANCE_FORBIDDEN" in _checks(result)
+
+
+def test_temporal_between_tolerance_uses_the_base_operator_diagnostic_once():
+    """Spark preflight does not duplicate a general operator-contract failure."""
+    payload = _payload({"bucket": "A"}, condition_field="as_of_date")
+    condition = payload["rules"][0]["when"]["all"][0]
+    condition.update(
+        {
+            "operator": "between",
+            "right": {"literal": [date(2025, 1, 1), date(2025, 12, 31)]},
+            "tolerance_abs": "1",
+        }
+    )
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+    schema = T.StructType([T.StructField("as_of_date", T.DateType(), True)])
+
+    result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
+    checks = [issue.check_name for issue in result.issues]
+
+    assert checks.count("BETWEEN_TOLERANCE_FORBIDDEN") == 1
+    assert "SPARK_CONDITION_TEMPORAL_TOLERANCE_FORBIDDEN" not in checks
+
+
 def test_spark_validator_rejects_scalar_string_membership_field():
     """IN/NOT_IN require collection-valued fields at schema preflight."""
     payload = _payload({"bucket": "A"}, condition_field="flag")
@@ -801,6 +1005,28 @@ def test_spark_validator_reports_unsupported_typed_null_precisely():
 
     assert "SPARK_ASSIGNMENT_VALUE_TYPE_UNSUPPORTED" in _checks(result)
     assert "SPARK_ASSIGNMENT_NULL_TYPE_REQUIRED" not in _checks(result)
+
+
+def test_spark_validator_quarantines_malformed_direct_value_type_metadata():
+    """Structural base issues stop unsafe Spark traversal with a clear diagnostic."""
+    ruleset = YamlRulesetCompiler().compile_payload(_payload({"new_target": 1}))
+    rule = ruleset.rules[0]
+    assignment = replace(
+        rule.assignments[0],
+        value=LiteralOperand(1, value_type=["integer"]),
+    )
+    invalid_ruleset = replace(
+        ruleset,
+        rules=(replace(rule, assignments=(assignment,)),),
+    )
+    validator = SparkRulesetCompatibilityValidator()
+    schema = T.StructType([T.StructField("status", T.StringType(), True)])
+
+    result = validator.validate(invalid_ruleset, schema)
+
+    assert "LITERAL_VALUE_TYPE_INVALID" in _checks(result)
+    with pytest.raises(ValueError, match="LITERAL_VALUE_TYPE_INVALID"):
+        validator.assignment_schema(invalid_ruleset, schema)
 
 
 def test_spark_validator_rejects_untyped_nulltype_assignment_source():
