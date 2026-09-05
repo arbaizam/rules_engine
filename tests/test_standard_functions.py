@@ -1,13 +1,18 @@
+import hashlib
+import json
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal, Inexact, Rounded, localcontext
 
 import pytest
 from pyspark.serializers import CloudPickleSerializer
 from pyspark.sql import types as T
 
 import rules_engine.standard_functions as sf
+from rules_engine.canonical_values import decode_json_types
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.registry import FunctionRegistry
+from rules_engine.exceptions import RegistryError
+from rules_engine.registry import CustomFunctionArgSpec, CustomFunctionSpec, FunctionRegistry
+from rules_engine.runtime import SparkRowEvaluator
 from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.spark_runtime import SparkRulesEngineRuntime, required_source_columns
 from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
@@ -568,6 +573,229 @@ def test_standard_date_functions_work_in_conditions_and_typed_assignments():
         "review_date": "review_date = date_add_years(value=funded_date, years=1)",
         "age_days": "age_days = date_diff_days(start=funded_date, end=as_of_date)",
     }
+
+
+def test_decimal_functions_preserve_full_precision_in_altered_contexts():
+    """Exact functions isolate precision, rounding, and traps from their caller."""
+    value = Decimal("12345678901234567890.123456789012345678")
+    with localcontext() as context:
+        context.prec = 3
+        context.rounding = ROUND_UP
+        context.traps[Inexact] = True
+        context.traps[Rounded] = True
+        assert sf.decimal_abs(value.copy_negate()) == value
+        assert sf.decimal_add(value, "0.000000000000000001") == Decimal(
+            "12345678901234567890.123456789012345679"
+        )
+        assert sf.decimal_subtract(value, "0.000000000000000001") == Decimal(
+            "12345678901234567890.123456789012345677"
+        )
+        assert sf.decimal_multiply(value, 2) == Decimal("24691357802469135780.246913578024691356")
+        assert sf.decimal_divide("1", "3", scale=18) == Decimal("0.333333333333333333")
+        assert sf.decimal_round(value, 18) == value
+
+
+def test_division_keeps_requested_fractional_digits_after_a_wide_integer_part():
+    """Intermediate division precision includes both integer width and output scale."""
+    expected = Decimal("3" * 100 + "." + "3" * 18)
+    with localcontext() as context:
+        context.prec = 3
+        assert sf.decimal_divide("1E100", 3, scale=18) == expected
+        assert sf.decimal_safe_divide("1E100", 3, scale=18) == expected
+
+
+def test_dependency_manifest_preserves_observable_default_collection_kinds():
+    """Different bound Python defaults must produce different execution identities."""
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "defaults",
+            "ruleset_name": "Defaults",
+            "version": "1",
+            "owner": "team",
+            "owner_department": "team",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "r1",
+                    "when": {
+                        "all": [
+                            {
+                                "left": {"literal": True},
+                                "operator": "eq",
+                                "right": {"literal": True},
+                            },
+                        ]
+                    },
+                    "assign": {"kind": {"custom_function": {"name": "kind", "args": {}}}},
+                }
+            ],
+        }
+    )
+    encoded_manifests = []
+    for default in ([1, 2], (1, 2), {1, 2}):
+        registry = FunctionRegistry()
+        registry.register(
+            CustomFunctionSpec(
+                "kind",
+                "tests.kind",
+                (CustomFunctionArgSpec("values", required=False, default=default),),
+                True,
+                True,
+                return_type_hint="string",
+            ),
+            lambda *, values: type(values).__name__,
+        )
+        manifest = registry.dependency_manifest(ruleset)
+        encoded_manifests.append(json.dumps(manifest, sort_keys=True, separators=(",", ":")))
+        restored_default = decode_json_types(manifest)[0]["arguments"][0]["default"]
+        assert type(restored_default) is type(default)
+        assert restored_default == default
+        assert (
+            SparkRowEvaluator(registry).evaluate_row(ruleset, {})["assign"]["kind"]["value"]
+            == type(default).__name__
+        )
+    assert len(set(encoded_manifests)) == 3
+    assert len({hashlib.sha256(value.encode()).hexdigest() for value in encoded_manifests}) == 3
+
+
+@pytest.mark.parametrize(
+    "argument",
+    [
+        CustomFunctionArgSpec("value", required=False, default={1: "a"}),
+        CustomFunctionArgSpec("value", required=False, default=[{"nested": {1: "a"}}]),
+        CustomFunctionArgSpec("value", allowed_values=({1: "a"},), literal_only=True),
+    ],
+)
+def test_registry_rejects_nonstring_keys_before_metadata_normalization(argument):
+    """Declared defaults and allowed values already use canonical mapping keys."""
+    with pytest.raises(RegistryError, match="mapping keys must be strings"):
+        CustomFunctionSpec("mapping", "tests.mapping", (argument,), True, True)
+
+
+def test_registry_string_key_defaults_are_consistent_in_runtime_and_persistence():
+    spec = CustomFunctionSpec(
+        "mapping",
+        "tests.mapping",
+        (CustomFunctionArgSpec("value", required=False, default={"1": ["a"]}),),
+        True,
+        True,
+    )
+    assert spec.bind_args({})["value"] == {"1": ["a"]}
+    assert spec.to_row().arg_contract_payload["arguments"][0]["default"] == {"1": ["a"]}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "0001-01-01T00:00:00+01:00",
+        "9999-12-31T23:59:59-01:00",
+    ],
+)
+def test_timestamp_utc_overflow_honors_conversion_error_policy(value):
+    assert sf.to_timestamp(value, on_error="null") is None
+    with pytest.raises(ValueError, match="Cannot convert value to timestamp"):
+        sf.to_timestamp(value)
+
+
+@pytest.mark.parametrize("function_name", ["coalesce", "concat_ws", "array_join"])
+def test_order_sensitive_functions_reject_yaml_sets_before_and_after_persistence(function_name):
+    """A published unordered literal cannot select a process-dependent result."""
+    separator = "\n            separator: ','" if function_name != "coalesce" else ""
+    ruleset = YamlRulesetCompiler().compile_text(f"""
+ruleset_id: ordered-array
+ruleset_name: Ordered array
+version: "1"
+owner: team
+owner_department: team
+rules:
+  - rule_id: r1
+    rule_name: r1
+    when:
+      all:
+        - left: {{literal: true}}
+          operator: eq
+          right: {{literal: true}}
+    assign:
+      selected:
+        custom_function:
+          name: {function_name}
+          args:
+            values: !!set {{alpha: null, beta: null, gamma: null}}{separator}
+""")
+    registry = register_standard_functions(FunctionRegistry())
+    serializer = DeltaRowSerializer()
+    restored = serializer.deserialize_ruleset_version(serializer.serialize_ruleset_version(ruleset))
+    for candidate in [ruleset, restored]:
+        result = RulesetValidator(registry).validate(candidate)
+        assert not result.passed
+        assert "ordered_sequence" in result.to_text()
+        with pytest.raises(TypeError, match="ordered array"):
+            SparkRowEvaluator(registry).evaluate_row(candidate, {})
+
+
+def test_dependency_manifest_includes_nested_references_and_is_detached():
+    """Execution identity captures referenced contracts without unrelated functions."""
+    registry = register_standard_functions(FunctionRegistry())
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "manifest",
+            "ruleset_name": "Manifest",
+            "version": "1",
+            "owner": "team",
+            "owner_department": "team",
+            "rules": [
+                {
+                    "rule_id": "r1",
+                    "rule_name": "r1",
+                    "when": {
+                        "any": [
+                            {
+                                "left": {"literal": True},
+                                "operator": "eq",
+                                "right": {"literal": True},
+                            },
+                            {
+                                "active_flag": False,
+                                "left": {
+                                    "custom_function": {
+                                        "name": "lower",
+                                        "args": {"value": "A"},
+                                    }
+                                },
+                                "operator": "eq",
+                                "right": {"literal": "a"},
+                            },
+                        ]
+                    },
+                    "assign": {
+                        "value": {
+                            "custom_function": {
+                                "name": "coalesce",
+                                "args": {
+                                    "values": [
+                                        {
+                                            "custom_function": {
+                                                "name": "upper",
+                                                "args": {"value": "a"},
+                                            }
+                                        }
+                                    ]
+                                },
+                            }
+                        }
+                    },
+                }
+            ],
+        }
+    )
+    manifest = registry.dependency_manifest(ruleset)
+    assert [item["function_name"] for item in manifest] == ["coalesce", "upper"]
+    assert all(item["version"] == sf.STANDARD_FUNCTION_VERSION for item in manifest)
+    assert manifest[0]["implementation_reference"] == "rules_engine.standard_functions.coalesce"
+    manifest[0]["arguments"][0]["type_hint"] = "mutated"
+    assert (
+        registry.dependency_manifest(ruleset)[0]["arguments"][0]["type_hint"] == "ordered_sequence"
+    )
 
 
 def test_standard_function_rows_expose_registry_metadata():

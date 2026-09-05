@@ -58,7 +58,4 @@ def decimal_value_fits(value: Decimal, data_type: T.DecimalType) -> bool:
         digits.pop()
         exponent += 1
     integral_digits = max(len(digits) + exponent, 0)
-    return (
-        exponent >= -data_type.scale
-        and integral_digits <= data_type.precision - data_type.scale
-    )
+    return exponent >= -data_type.scale and integral_digits <= data_type.precision - data_type.scale

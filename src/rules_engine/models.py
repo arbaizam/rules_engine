@@ -199,21 +199,10 @@ Operand = AssignedOperand | FieldOperand | LiteralOperand | CustomFunctionOperan
 
 
 def iter_nested_operands(value: Any) -> Iterator[Operand]:
-    """Yield operands contained directly or inside argument collections."""
-    if isinstance(
-        value,
-        (AssignedOperand, FieldOperand, LiteralOperand, CustomFunctionOperand),
-    ):
-        yield value
-        return
-    if isinstance(value, Mapping):
-        for item in value.values():
-            yield from iter_nested_operands(item)
-        return
-    if isinstance(value, (list, tuple, set)):
-        items = sorted(value, key=repr) if isinstance(value, set) else value
-        for item in items:
-            yield from iter_nested_operands(item)
+    """Yield operands inside argument collections using the shared traversal."""
+    from rules_engine.traversal import iter_nested_operands as walk
+
+    yield from walk(value)
 
 
 @dataclass(frozen=True)

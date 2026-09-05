@@ -17,11 +17,20 @@
 import os
 import re
 import sys
-from datetime import date
+import hashlib
+import json
+from dataclasses import replace
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-root = next((p for p in [Path.cwd(), *Path.cwd().parents] if (p / "databricks.yml").exists()), None)
+root = next(
+    (
+        p for p in [Path.cwd(), *Path.cwd().parents]
+        if (p / "pyproject.toml").is_file() and (p / "src" / "rules_engine").is_dir()
+    ),
+    None,
+)
 if root:
     src_path = os.path.normpath(root / "src")
     if src_path not in sys.path:
@@ -108,7 +117,7 @@ def _start(test_id, name):
     print("-" * 80)
 
 
-assert root is not None, "Could not locate the repository root containing databricks.yml."
+assert root is not None, "Could not locate the repository root containing pyproject.toml and src/rules_engine."
 REPO_ROOT = root
 SCHEMA = globals().get("SCHEMA") or _job_parameter("SCHEMA")
 assert SCHEMA, "Set SCHEMA to a disposable catalog.schema before running this notebook."
@@ -1368,5 +1377,183 @@ print("PASS: Standard functions retain optional, nested, array, decimal, and dat
 
 print()
 print("=" * 80)
-print("PASS: All 18 current-contract rules engine system tests completed.")
+_start("ST-019", "Keep full-width decimal comparisons and absolute values exact")
+
+precision_ruleset = service.compile_yaml_text(
+    """
+ruleset_id: system_decimal_precision
+ruleset_name: System Decimal Precision
+version: "1"
+owner: ALM Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: impossible_comparison
+    rule_name: A value cannot be less than itself
+    when:
+      all:
+        - left: {field: amount}
+          operator: lt
+          right: {field: amount}
+    assign:
+      incorrect_match: true
+  - rule_id: exact_comparison
+    rule_name: A value equals itself at full precision
+    when:
+      all:
+        - left: {field: amount}
+          operator: ge
+          right: {field: amount}
+    assign:
+      absolute_amount:
+        custom_function:
+          name: decimal_abs
+          args:
+            value: {field: negative_amount}
+"""
+)
+precision_value = Decimal("12345678901234567890.123456789012345678")
+precision_input = spark.createDataFrame(
+    [("precision", precision_value, precision_value.copy_negate())],
+    "row_id string, amount decimal(38,18), negative_amount decimal(38,18)",
+)
+for audit in (False, True):
+    precision_result = service.evaluate_dataframe(
+        precision_input, ruleset=precision_ruleset, key_columns=["row_id"], full_audit=audit
+    ).results_df.collect()[0].asDict(recursive=True)
+    assert precision_result["rules_engine_matched_rule_ids"] == ["exact_comparison"]
+    assert precision_result["rules_engine_assign"]["absolute_amount"]["value"] == precision_value
+print("PASS: Comparisons and decimal_abs retain all 38 significant digits in both audit modes.")
+
+# COMMAND ----------
+
+_start("ST-020", "Compare Spark timestamps and apply collection null fallbacks")
+
+timestamp_ruleset = service.compile_yaml_text(
+    """
+ruleset_id: system_timestamp_comparison
+ruleset_name: System Timestamp Comparison
+version: "1"
+owner: ALM Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: exact_instant
+    rule_name: Timestamp instant and effective collection
+    when:
+      all:
+        - left: {field: event_at}
+          operator: eq
+          right: {literal: "2026-02-01T00:00:00+00:00", value_type: timestamp}
+        - left: {literal: 1}
+          operator: in
+          right: {literal: null, default_if_null: [1, 2]}
+    assign:
+      confirmed: true
+"""
+)
+timestamp_input = spark.createDataFrame(
+    [("instant", "2026-02-01T00:00:00+00:00")], ["row_id", "raw_timestamp"]
+).withColumn("event_at", F.to_timestamp("raw_timestamp"))
+for audit in (False, True):
+    timestamp_result = service.evaluate_dataframe(
+        timestamp_input, ruleset=timestamp_ruleset, key_columns=["row_id"], full_audit=audit
+    ).results_df.collect()[0].asDict(recursive=True)
+    assert timestamp_result["rules_engine_error"] is None
+    assert timestamp_result["rules_engine_assign"]["confirmed"] == {"applied": True, "value": True}
+print("PASS: Worker timestamps compare by instant and collection validation uses the fallback.")
+
+# COMMAND ----------
+
+_start("ST-021", "Preserve audit parity and capture malformed custom returns")
+
+
+def system_timestamp_or_bad(*, row_id):
+    return 123 if row_id == "bad" else datetime(2026, 2, 1, tzinfo=timezone.utc)
+
+
+if not service.registry.has_spec("system_timestamp_or_bad"):
+    service.registry.register(
+        CustomFunctionSpec(
+            function_name="system_timestamp_or_bad",
+            implementation_reference="alm.system_tests.system_timestamp_or_bad",
+            arguments=(CustomFunctionArgSpec("row_id", type_hint="string"),),
+            allowed_in_condition_flag=False,
+            allowed_in_assignment_flag=True,
+            return_type_hint="timestamp",
+            version="1",
+        ),
+        system_timestamp_or_bad,
+    )
+boundary_ruleset = service.compile_yaml_text(
+    """
+ruleset_id: system_output_boundary
+ruleset_name: System Output Boundary
+version: "1"
+owner: ALM Rules Team
+owner_department: ALM Engineering
+rules:
+  - rule_id: replace_and_stamp
+    rule_name: Replace an existing non-finite value and stamp
+    when:
+      all:
+        - left: {literal: true}
+          operator: eq
+          right: {literal: true}
+    assign:
+      amount: 1
+      stamped:
+        custom_function:
+          name: system_timestamp_or_bad
+          args:
+            row_id: {field: row_id}
+"""
+)
+boundary_input = spark.createDataFrame(
+    [("good", float("nan")), ("bad", float("inf"))], "row_id string, amount double"
+)
+boundary_results = []
+for audit in (False, True):
+    boundary_rows = service.evaluate_dataframe(
+        boundary_input, ruleset=boundary_ruleset, key_columns=["row_id"],
+        full_audit=audit, fail_on_error=False,
+    ).results_df.collect()
+    boundary_by_id = {row["row_id"]: row.asDict(recursive=True) for row in boundary_rows}
+    assert boundary_by_id["good"]["rules_engine_error"] is None
+    assert boundary_by_id["good"]["rules_engine_assign"]["amount"] == {"applied": True, "value": 1.0}
+    assert boundary_by_id["bad"]["rules_engine_error"] is not None
+    assert all(not outcome["applied"] for outcome in boundary_by_id["bad"]["rules_engine_assign"].values())
+    boundary_results.append(boundary_by_id)
+for row_id in ("good", "bad"):
+    for field in ("rules_engine_error", "rules_engine_matched_rule_ids", "rules_engine_assign"):
+        assert boundary_results[0][row_id][field] == boundary_results[1][row_id][field]
+print("PASS: Audit preserves business outcomes and invalid temporal returns become error rows.")
+
+# COMMAND ----------
+
+_start("ST-022", "Verify function provenance and persisted payload integrity")
+
+execution_identity = boundary_results[0]["good"]["rules_engine_ruleset"]
+dependency_json = execution_identity["function_dependencies"]
+dependencies = json.loads(dependency_json)
+assert [item["function_name"] for item in dependencies] == ["system_timestamp_or_bad"]
+assert dependencies[0]["version"] == "1"
+assert dependencies[0]["implementation_reference"] == "alm.system_tests.system_timestamp_or_bad"
+assert execution_identity["function_dependencies_hash"] == hashlib.sha256(
+    dependency_json.encode("utf-8")
+).hexdigest()
+integrity_serializer = DeltaRowSerializer()
+integrity_row = integrity_serializer.serialize_ruleset_version(boundary_ruleset)
+assert integrity_serializer.deserialize_ruleset_version(integrity_row) == boundary_ruleset
+_expect_raises(
+    RepositoryError,
+    lambda: integrity_serializer.deserialize_ruleset_version(replace(integrity_row, content_hash="0" * 64)),
+)
+_expect_raises(
+    RepositoryError,
+    lambda: integrity_serializer.deserialize_ruleset_version(replace(integrity_row, ruleset_name="wrong")),
+)
+print("PASS: Results identify function contracts and corrupted persistence records fail loading.")
+
+# COMMAND ----------
+
+print("PASS: All 22 current-contract rules engine system tests completed.")
 print("=" * 80)

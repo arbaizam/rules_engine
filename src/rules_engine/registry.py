@@ -14,8 +14,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from rules_engine.canonical_values import canonical_json_value, validate_string_mapping_keys
 from rules_engine.exceptions import RegistryError
-from rules_engine.models import FunctionRegistryRow
+from rules_engine.models import CustomFunctionOperand, FunctionRegistryRow, Ruleset
+from rules_engine.traversal import iter_ruleset_operands
 
 SUPPORTED_ARGUMENT_TYPE_HINTS = frozenset(
     {
@@ -27,6 +29,7 @@ SUPPORTED_ARGUMENT_TYPE_HINTS = frozenset(
         "integer_sequence",
         "mapping",
         "number",
+        "ordered_sequence",
         "sequence",
         "string",
         "string_sequence",
@@ -207,6 +210,7 @@ class CustomFunctionSpec:
                     argument = next(item for item in self.arguments if item.name == argument_name)
                     if argument.type_hint not in {
                         "sequence",
+                        "ordered_sequence",
                         "string_sequence",
                         "integer_sequence",
                         "date_sequence",
@@ -216,6 +220,7 @@ class CustomFunctionSpec:
                             f"{self.function_name}.{argument_name}"
                         )
         for argument in self.arguments:
+            self._validate_argument_mapping_keys(argument)
             if argument.allowed_values is None:
                 continue
             if not argument.allowed_values:
@@ -240,6 +245,16 @@ class CustomFunctionSpec:
         except (TypeError, ValueError) as exc:
             raise RegistryError(
                 f"Function argument metadata must be JSON-compatible: {self.function_name}"
+            ) from exc
+
+    def _validate_argument_mapping_keys(self, argument: CustomFunctionArgSpec) -> None:
+        """Reject keys that would change when argument metadata is persisted."""
+        try:
+            validate_string_mapping_keys(argument.default)
+            validate_string_mapping_keys(argument.allowed_values)
+        except ValueError as exc:
+            raise RegistryError(
+                f"Invalid mapping keys for {self.function_name}.{argument.name}: {exc}"
             ) from exc
 
     @property
@@ -357,3 +372,37 @@ class FunctionRegistry:
     def specs(self) -> tuple[CustomFunctionSpec, ...]:
         """Return registered specifications in canonical function-name order."""
         return tuple(self._specs[name] for name in sorted(self._specs))
+
+    def dependency_manifest(self, ruleset: Ruleset) -> list[dict[str, Any]]:
+        """Describe the declared implementations used by active rule execution.
+
+        The manifest records contracts and declared versions/references, not a
+        hash of executable Python code. Unreferenced registrations and inactive
+        branches do not affect this execution identity.
+        """
+        names = {
+            operand.function_name
+            for operand in iter_ruleset_operands(ruleset, active_only=True)
+            if isinstance(operand, CustomFunctionOperand)
+        }
+        manifest = []
+        for name in sorted(names):
+            spec = self.get_spec(name)
+            arguments = []
+            for argument in spec.arguments:
+                payload = argument.to_payload()
+                if not argument.required:
+                    payload["default"] = argument.default
+                if argument.allowed_values is not None:
+                    payload["allowed_values"] = list(argument.allowed_values)
+                arguments.append(payload)
+            manifest.append(
+                {
+                    **spec.to_authoring_payload(),
+                    "implementation_reference": spec.implementation_reference,
+                    "arguments": arguments,
+                }
+            )
+        # Extended JSON preserves observable default kinds (tuple/list/set), and
+        # yields detached, ordinary JSON values for the Spark identity column.
+        return canonical_json_value(manifest)

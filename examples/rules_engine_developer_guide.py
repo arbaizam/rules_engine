@@ -10,7 +10,7 @@
 # MAGIC The notebook demonstrates the core workflows:
 # MAGIC
 # MAGIC 1. Author canonical YAML.
-# MAGIC 2. Compile YAML into immutable dataclasses.
+# MAGIC 2. Compile YAML into frozen dataclasses.
 # MAGIC 3. Validate semantic rules.
 # MAGIC 4. Export canonical YAML for round-trip review.
 # MAGIC 5. Prepare sample input data.
@@ -53,7 +53,10 @@ import sys
 from pathlib import Path
 
 root = next(
-    (p for p in [Path.cwd(), *Path.cwd().parents] if (p / "databricks.yml").exists()),
+    (
+        p for p in [Path.cwd(), *Path.cwd().parents]
+        if (p / "pyproject.toml").is_file() and (p / "src" / "rules_engine").is_dir()
+    ),
     None,
 )
 if root:
@@ -164,7 +167,7 @@ print(ruleset_yaml)
 # MAGIC
 # MAGIC What this cell does:
 # MAGIC
-# MAGIC 1. `compile_text()` parses YAML and builds immutable dataclasses.
+# MAGIC 1. `compile_text()` parses YAML and builds frozen dataclasses.
 # MAGIC 2. The compiler rejects malformed YAML shape and unsupported enum values.
 # MAGIC 3. `RulesetValidator.validate()` checks the ruleset's semantic contract.
 # MAGIC 4. `validation.to_text()` renders validation output for humans.
@@ -459,7 +462,8 @@ display(applied_df.orderBy("row_id"))
 # MAGIC   authored expression, original value, changed/effective flags, immediate
 # MAGIC   override, and final-winner provenance.
 # MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
-# MAGIC - `rules_engine_ruleset`: immutable ruleset ID, version, and content hash.
+# MAGIC - `rules_engine_ruleset`: ruleset ID, version, content hash, and a
+# MAGIC   canonical JSON manifest of referenced function contracts plus its hash.
 # MAGIC - `rules_engine_engine_version`: installed evaluator version.
 # MAGIC
 # MAGIC `apply_assignments()` returns only business columns. Existing targets are

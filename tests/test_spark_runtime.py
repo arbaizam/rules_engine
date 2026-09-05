@@ -1,8 +1,11 @@
+import hashlib
+import json
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
+from pyspark.sql import Row
 from pyspark.sql import types as T
 
 import rules_engine.spark_runtime as spark_runtime_module
@@ -1386,6 +1389,8 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
         "id": ruleset.ruleset_id,
         "version": ruleset.version,
         "content_hash": DeltaRowSerializer().content_hash(ruleset),
+        "function_dependencies": "[]",
+        "function_dependencies_hash": hashlib.sha256(b"[]").hexdigest(),
     }
     assert compact_row["rules_engine_engine_version"]
     assert compact_evaluation.apply_assignments().columns == [
@@ -1396,7 +1401,8 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
     ]
 
 
-def test_coverage_report_finds_dead_broad_and_clean_no_match_rows(spark):
+@pytest.mark.parametrize("column_prefix", ["rules_engine_coverage", "audit.v3`coverage"])
+def test_coverage_report_finds_dead_broad_and_clean_no_match_rows(spark, column_prefix):
     """Coverage aggregates matches and returns clean no-match rows."""
     ruleset = YamlRulesetCompiler().compile_payload(
         {
@@ -1469,6 +1475,7 @@ def test_coverage_report_finds_dead_broad_and_clean_no_match_rows(spark):
             ),
             ruleset,
             broad_match_threshold=0.60,
+            column_prefix=column_prefix,
         )
         no_match = report.no_match_rows.collect()[0]
     finally:
@@ -1480,3 +1487,173 @@ def test_coverage_report_finds_dead_broad_and_clean_no_match_rows(spark):
     assert report.dead_rule_ids == ("impossible",)
     assert report.suspiciously_broad_rule_ids == ("near",)
     assert no_match["loan_id"] == 3
+
+
+@pytest.mark.parametrize("session_timezone", ["UTC", "America/New_York"])
+@pytest.mark.parametrize("full_audit", [False, True])
+def test_timestamp_literal_compares_with_real_worker_timestamp(spark, session_timezone, full_audit):
+    """Offset-authored literals compare by instant under differing Spark session zones."""
+    ruleset = _compile(
+        {
+            "left": {"field": "event_at"},
+            "operator": "eq",
+            "right": {"literal": "2026-02-01T01:00:00+01:00", "value_type": "timestamp"},
+        },
+        assign={"copied": {"field": "event_at"}},
+    )
+    original_timezone = spark.conf.get("spark.sql.session.timeZone")
+    try:
+        spark.conf.set("spark.sql.session.timeZone", session_timezone)
+        df = spark.createDataFrame(
+            [(1, datetime(2026, 2, 1, tzinfo=timezone.utc))],
+            T.StructType(
+                [T.StructField("id", T.LongType()), T.StructField("event_at", T.TimestampType())]
+            ),
+        )
+        original = df.collect()[0]["event_at"]
+        evaluation = _evaluation(df, ruleset, full_audit=full_audit)
+        row = evaluation.results_df.collect()[0]
+
+        assert row["rules_engine_error"] is None
+        assert row["rules_engine_matched"] is True
+        assert row["rules_engine_assign"]["copied"]["value"] == original
+        assert evaluation.apply_assignments().collect()[0]["copied"] == original
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", original_timezone)
+
+
+def test_full_audit_overwrites_nonfinite_source_without_changing_results(spark):
+    ruleset = _compile(
+        {"left": {"literal": True}, "operator": "eq", "right": {"literal": True}},
+        assign={"target": 1},
+    )
+    df = spark.createDataFrame(
+        [(1, float("nan")), (2, float("inf")), (3, float("-inf"))],
+        T.StructType([T.StructField("id", T.LongType()), T.StructField("target", T.DoubleType())]),
+    )
+    compact = _evaluation(df, ruleset).results_df.orderBy("id").collect()
+    audited = _evaluation(df, ruleset, full_audit=True).results_df.orderBy("id").collect()
+
+    for expected, actual in zip(compact, audited, strict=True):
+        assert actual["rules_engine_error"] is None
+        assert actual["rules_engine_matched_rule_ids"] == expected["rules_engine_matched_rule_ids"]
+        assert actual["rules_engine_assign"] == expected["rules_engine_assign"]
+        assert actual["rules_engine_assign"]["target"]["value"] == 1.0
+
+
+def test_bad_timestamp_result_is_an_error_row_with_recorded_function_contract(spark):
+    registry = FunctionRegistry()
+    registry.register(
+        CustomFunctionSpec(
+            "bad_timestamp",
+            "tests.bad_timestamp",
+            (),
+            True,
+            True,
+            return_type_hint="timestamp",
+            version="test-v1",
+        ),
+        lambda: 123,
+    )
+    ruleset = _compile(
+        {"left": {"literal": True}, "operator": "eq", "right": {"literal": True}},
+        assign={"target": {"custom_function": {"name": "bad_timestamp", "args": {}}}},
+    )
+    df = spark.createDataFrame([(1,)], ["id"])
+    evaluation = _evaluation(
+        df,
+        ruleset,
+        runtime=SparkRulesEngineRuntime(DummyRepository(), registry),
+        fail_on_error=False,
+    )
+
+    row = evaluation.results_df.collect()[0]
+
+    assert "Timestamp assignment values must be datetimes" in row["rules_engine_error"]
+    assert row["rules_engine_matched"] is False
+    assert row["rules_engine_assign"]["target"].asDict() == {"applied": False, "value": None}
+    identity = row["rules_engine_ruleset"]
+    manifest_json = identity["function_dependencies"]
+    assert (
+        identity["function_dependencies_hash"]
+        == hashlib.sha256(manifest_json.encode("utf-8")).hexdigest()
+    )
+    manifest = json.loads(manifest_json)
+    assert len(manifest) == 1
+    assert manifest[0]["function_name"] == "bad_timestamp"
+    assert manifest[0]["implementation_reference"] == "tests.bad_timestamp"
+    assert manifest[0]["version"] == "test-v1"
+    assert manifest[0]["return_type_hint"] == "timestamp"
+
+
+def test_struct_map_key_field_copy_preserves_nested_timestamps(spark):
+    key_type = T.StructType(
+        [
+            T.StructField("code", T.StringType()),
+            T.StructField("at", T.TimestampType()),
+            T.StructField("nested", T.StructType([T.StructField("label", T.StringType())])),
+        ]
+    )
+    source_type = T.MapType(key_type, T.LongType())
+    df = spark.createDataFrame(
+        [
+            (
+                1,
+                {
+                    Row(
+                        code="A",
+                        at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+                        nested=Row(label="n"),
+                    ): 5
+                },
+            )
+        ],
+        T.StructType([T.StructField("id", T.LongType()), T.StructField("source", source_type)]),
+    )
+    original = df.collect()[0]["source"]
+    rules = _compile(
+        {"left": {"literal": True}, "operator": "eq", "right": {"literal": True}},
+        assign={"copied": {"field": "source"}},
+    )
+
+    result = _evaluation(df, rules).results_df.collect()[0]
+
+    assert result["rules_engine_error"] is None
+    assert result["rules_engine_assign"]["copied"]["value"] == original
+
+
+def test_function_identity_distinguishes_observable_default_collection_kinds(spark):
+    """Default kinds that change callable behavior must change the execution identity."""
+    rules = _compile(
+        {"left": {"literal": True}, "operator": "eq", "right": {"literal": True}},
+        assign={"kind": {"custom_function": {"name": "default_kind", "args": {}}}},
+    )
+    df = spark.createDataFrame([(1,)], ["id"])
+    identities = []
+    for default, expected in [([1, 2], 0), ((1, 2), 1)]:
+        registry = FunctionRegistry()
+        registry.register(
+            CustomFunctionSpec(
+                "default_kind",
+                "tests.default_kind",
+                (CustomFunctionArgSpec("value", required=False, default=default),),
+                True,
+                True,
+                return_type_hint="integer",
+                version="1",
+            ),
+            lambda value: int(isinstance(value, tuple)),
+        )
+        runtime = SparkRulesEngineRuntime(DummyRepository(), registry)
+        row = _evaluation(df, rules, runtime=runtime).results_df.collect()[0]
+        assert row["rules_engine_assign"]["kind"]["value"] == expected
+        identities.append(row["rules_engine_ruleset"])
+
+    assert identities[0]["content_hash"] == identities[1]["content_hash"]
+    assert (
+        identities[0]["function_dependencies_hash"] != identities[1]["function_dependencies_hash"]
+    )
+    list_default = json.loads(identities[0]["function_dependencies"])[0]["arguments"][0]["default"]
+    tuple_default = json.loads(identities[1]["function_dependencies"])[0]["arguments"][0]["default"]
+    assert list_default == [1, 2]
+    assert tuple_default == {"$rules_engine_type": "tuple", "value": [1, 2]}

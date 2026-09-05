@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
+from rules_engine.dataframe_evaluation import _top_level_column
 from rules_engine.models import Ruleset
 from rules_engine.spark_runtime import SparkRulesEngineRuntime
 
@@ -84,9 +85,9 @@ class RulesetCoverageAnalyzer:
             column_prefix=column_prefix,
             fail_on_error=False,
         )
-        matched_col = F.col(f"{column_prefix}_matched")
-        matched_ids_col = F.col(f"{column_prefix}_matched_rule_ids")
-        error_col = F.col(f"{column_prefix}_error")
+        matched_col = _top_level_column(f"{column_prefix}_matched")
+        matched_ids_col = _top_level_column(f"{column_prefix}_matched_rule_ids")
+        error_col = _top_level_column(f"{column_prefix}_error")
         clean_no_match = (~matched_col) & error_col.isNull()
         active_rules = tuple(
             sorted(

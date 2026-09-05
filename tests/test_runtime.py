@@ -1,5 +1,5 @@
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal, Inexact, Rounded, localcontext
 
 import pytest
 from pyspark.serializers import CloudPickleSerializer
@@ -7,8 +7,10 @@ from pyspark.sql import types as T
 
 from rules_engine import required_source_columns as public_required_source_columns
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.enums import ComparisonOperator
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.human_readable import HumanReadableRulesetFormatter
+from rules_engine.models import ValidationResult
 from rules_engine.registry import (
     CustomFunctionArgSpec,
     CustomFunctionSpec,
@@ -51,6 +53,8 @@ def _compile(condition, assign=None):
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
+            "owner": "Rules Team",
+            "owner_department": "Engineering",
             "rules": [
                 {
                     "rule_id": "r1",
@@ -70,6 +74,8 @@ def _compile_when(when, assign=None):
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
+            "owner": "Rules Team",
+            "owner_department": "Engineering",
             "rules": [
                 {
                     "rule_id": "r1",
@@ -94,9 +100,12 @@ def _evaluate_worker(
     full_audit=True,
 ):
     runtime = _spark_runtime(registry)
-    assign_schema = runtime._assignment_schema(ruleset, T.StructType())
-    inferred_types = {field.name: field.dataType for field in assign_schema.fields}
-    assign_field_names = assign_fields or [field.name for field in assign_schema.fields]
+    # These worker-only cases intentionally exercise invalid rows and metadata;
+    # public preflight is tested separately with complete source schemas.
+    inferred_types = runtime._compatibility_validator._resolve_assignment_types(
+        ruleset, T.StructType(), ValidationResult()
+    )
+    assign_field_names = assign_fields or list(inferred_types)
     assign_field_types = {
         field_name: inferred_types.get(field_name, T.StringType())
         for field_name in assign_field_names
@@ -753,7 +762,7 @@ def test_assignment_provenance_tracks_immediate_override_and_final_winner():
         },
     ]
 
-    results = evaluator._assignment_results([dict(event) for event in events])
+    results = evaluator._assignment_results([dict(event, changed=True) for event in events])
     by_assignment_id = {result["assignment_id"]: result for result in results}
 
     assert [result["assignment_id"] for result in results] == [
@@ -1401,7 +1410,9 @@ def test_spark_row_evaluator_preserves_mapping_literal_assignment_as_struct():
         },
     )
 
-    schema = _spark_runtime()._assignment_schema(ruleset, T.StructType())
+    schema = _spark_runtime()._assignment_schema(
+        ruleset, T.StructType([T.StructField("account", T.StringType())])
+    )
     field_types = {field.name: field.dataType for field in schema.fields}
     non_modeled_type = field_types["non_modeled"]
     result = _evaluate_worker(
@@ -1438,6 +1449,8 @@ def test_spark_assignment_schema_ignores_inactive_rules():
             "ruleset_id": "rs1",
             "ruleset_name": "Ruleset",
             "version": "1",
+            "owner": "Rules Team",
+            "owner_department": "Engineering",
             "rules": [
                 {
                     "rule_id": "active_struct",
@@ -1484,7 +1497,9 @@ def test_spark_assignment_schema_ignores_inactive_rules():
         }
     )
 
-    schema = _spark_runtime()._assignment_schema(ruleset, T.StructType())
+    schema = _spark_runtime()._assignment_schema(
+        ruleset, T.StructType([T.StructField("account", T.StringType())])
+    )
     field_types = {field.name: field.dataType for field in schema.fields}
     result = _evaluate_worker(ruleset, {"account": "A"})
 
@@ -1713,7 +1728,9 @@ def test_full_audit_builds_explanations_only_for_matched_rules(monkeypatch):
         record_explanation,
     )
     runtime = _spark_runtime()
-    assign_schema = runtime._assignment_schema(ruleset, T.StructType())
+    assign_schema = runtime._assignment_schema(
+        ruleset, T.StructType([T.StructField("account", T.StringType())])
+    )
     evaluator = runtime._build_row_evaluator(
         ruleset,
         [field.name for field in assign_schema.fields],
@@ -1993,7 +2010,9 @@ def test_base_payload_field_construction_is_hoisted_out_of_row_evaluation(
         tracked_result_field_names,
     )
     runtime = _spark_runtime()
-    assign_schema = runtime._assignment_schema(ruleset, T.StructType())
+    assign_schema = runtime._assignment_schema(
+        ruleset, T.StructType([T.StructField("account", T.StringType())])
+    )
     evaluator = runtime._build_row_evaluator(
         ruleset,
         [field.name for field in assign_schema.fields],
@@ -2168,7 +2187,9 @@ def test_spark_assignment_schema_rejects_incompatible_same_target_assignments():
     )
 
     with pytest.raises(ValueError, match="SPARK_ASSIGNMENT_TYPE_CONFLICT"):
-        _spark_runtime()._assignment_schema(ruleset, T.StructType())
+        _spark_runtime()._assignment_schema(
+            ruleset, T.StructType([T.StructField("account", T.StringType())])
+        )
 
 
 def test_spark_row_evaluator_matched_rule_trace_includes_custom_function_args():
@@ -2528,3 +2549,245 @@ def test_spark_runtime_accepts_serializable_worker_evaluator():
     )
 
     runtime.validate_worker_serializable(evaluator)
+
+
+@pytest.mark.parametrize(
+    "operator,expected",
+    [
+        ("eq", True),
+        ("ne", False),
+        ("lt", False),
+        ("le", True),
+        ("gt", False),
+        ("ge", True),
+    ],
+)
+def test_full_precision_decimal_comparisons_ignore_ambient_context(operator, expected):
+    """Valid 38-digit decimals keep reflexive comparisons in hostile contexts."""
+    amount = Decimal("12345678901234567890.123456789012345678")
+    ruleset = _compile(
+        {
+            "left": {"field": "amount"},
+            "operator": operator,
+            "right": {"field": "amount"},
+        }
+    )
+    with localcontext() as context:
+        context.prec = 5
+        context.rounding = ROUND_UP
+        context.traps[Inexact] = True
+        context.traps[Rounded] = True
+        assert (
+            SparkRowEvaluator(FunctionRegistry()).evaluate_row(
+                ruleset,
+                {"amount": amount},
+            )["matched"]
+            is expected
+        )
+        assert _evaluate_worker(ruleset, {"amount": amount})["matched"] is expected
+
+
+def test_decimal_tolerance_keeps_exact_boundary_digits():
+    """Tolerance checks do not round a difference down to the authored limit."""
+    evaluator = SparkRowEvaluator(FunctionRegistry())
+    amount = Decimal("12345678901234567890.123456780000000001")
+    tolerance = Decimal("12345678901234567890.123456780000000000")
+    with localcontext() as context:
+        context.prec = 3
+        assert (
+            evaluator._compare_values(
+                amount,
+                ComparisonOperator.EQ,
+                Decimal(0),
+                tolerance,
+                False,
+            )
+            is False
+        )
+        assert (
+            evaluator._compare_values(
+                amount,
+                ComparisonOperator.GT,
+                Decimal(0),
+                tolerance,
+                False,
+            )
+            is True
+        )
+        assert (
+            evaluator._compare_values(
+                amount.copy_negate(),
+                ComparisonOperator.LT,
+                Decimal(0),
+                tolerance,
+                False,
+            )
+            is True
+        )
+
+
+@pytest.mark.parametrize("full_audit", [False, True])
+@pytest.mark.parametrize("fallback", [False, True])
+def test_custom_functions_cannot_mutate_authored_literal_collections(full_audit, fallback):
+    """A callable receives a private copy of nested literals on every row."""
+    registry = FunctionRegistry()
+
+    def append_item(*, value):
+        value["items"].append("new")
+        return len(value["items"])
+
+    registry.register(
+        CustomFunctionSpec(
+            function_name="append_item",
+            implementation_reference="tests.append_item",
+            arguments=(CustomFunctionArgSpec("value"),),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=False,
+            return_type_hint="integer",
+        ),
+        append_item,
+    )
+    authored = {"items": ["original"]}
+    argument = (
+        {"field": "missing", "default_if_null": {"literal": authored}}
+        if fallback
+        else {"literal": authored}
+    )
+    ruleset = _compile(
+        {
+            "left": {"custom_function": {"name": "append_item", "args": {"value": argument}}},
+            "operator": "eq",
+            "right": {"literal": 2},
+        }
+    )
+    evaluator = _spark_runtime(registry)._build_row_evaluator(
+        ruleset,
+        ["bucket"],
+        {"bucket": T.StringType()},
+        full_audit=full_audit,
+    )
+    for _ in range(2):
+        assert evaluator(FakeSparkRow({}))["matched"] is True
+    restored = CloudPickleSerializer().loads(CloudPickleSerializer().dumps(evaluator))
+    assert restored(FakeSparkRow({}))["matched"] is True
+    assert authored == {"items": ["original"]}
+    operand = ruleset.rules[0].root_group.conditions[0].left.args["value"]
+    literal = operand.default_if_null if fallback else operand
+    assert literal.value == {"items": ["original"]}
+
+
+def test_prepared_rules_snapshot_stays_coherent_after_caller_mutation():
+    """Preparation isolates both literal collections and cached argument maps."""
+    registry = FunctionRegistry()
+    registry.register(
+        CustomFunctionSpec(
+            function_name="echo",
+            implementation_reference="tests.echo",
+            arguments=(CustomFunctionArgSpec("value"),),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=True,
+            return_type_hint="string",
+        ),
+        lambda *, value: value,
+    )
+    ruleset = _compile(
+        {"left": {"field": "code"}, "operator": "in", "right": {"literal": ["A"]}},
+        {"bucket": {"custom_function": {"name": "echo", "args": {"value": "first"}}}},
+    )
+    evaluator = SparkRowEvaluator(registry)
+    evaluator._prepare_ruleset(ruleset)
+    ruleset.rules[0].root_group.conditions[0].right.value.append("B")
+    ruleset.rules[0].assignments[0].value.args["value"] = "changed"
+    assert evaluator.evaluate_row(ruleset, {"code": "B"})["matched"] is False
+    assert evaluator.evaluate_row(ruleset, {"code": "A"})["assign"]["bucket"]["value"] == "first"
+    assert (
+        SparkRowEvaluator(registry).evaluate_row(
+            ruleset,
+            {"code": "B"},
+        )["assign"]["bucket"]["value"]
+        == "changed"
+    )
+
+
+def test_assigned_collections_and_returned_results_do_not_alias_prepared_literals():
+    """Indirect callable arguments and caller-owned results keep snapshots intact."""
+    registry = FunctionRegistry()
+
+    def consume(*, values):
+        return values.pop()
+
+    registry.register(
+        CustomFunctionSpec(
+            function_name="consume",
+            implementation_reference="tests.consume",
+            arguments=(CustomFunctionArgSpec("values"),),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=True,
+            return_type_hint="integer",
+        ),
+        consume,
+    )
+    when = {"all": [{"left": {"literal": True}, "operator": "eq", "right": {"literal": True}}]}
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "isolated",
+            "ruleset_name": "Isolated",
+            "version": "1",
+            "owner": "Rules Team",
+            "owner_department": "Engineering",
+            "rules": [
+                {
+                    "rule_id": "seed",
+                    "rule_name": "Seed",
+                    "rule_order": 1,
+                    "when": when,
+                    "assign": {"seed": {"literal": [1, 2]}},
+                },
+                {
+                    "rule_id": "consume",
+                    "rule_name": "Consume",
+                    "rule_order": 2,
+                    "when": when,
+                    "assign": {
+                        "copy": {"assigned": "seed"},
+                        "last": {
+                            "custom_function": {
+                                "name": "consume",
+                                "args": {
+                                    "values": {"assigned": "seed"},
+                                },
+                            }
+                        },
+                    },
+                },
+            ],
+        }
+    )
+    evaluator = SparkRowEvaluator(registry)
+    expected = {
+        "seed": {"applied": True, "value": [1, 2]},
+        "copy": {"applied": True, "value": [1, 2]},
+        "last": {"applied": True, "value": 2},
+    }
+    for _ in range(3):
+        result = evaluator.evaluate_row(ruleset, {})
+        assert result["assign"] == expected
+        result["assign"]["seed"]["value"].clear()
+        assert result["assign"]["copy"]["value"] == [1, 2]
+    assert ruleset.rules[0].assignments[0].value.value == [1, 2]
+    assert evaluator._prepared_ruleset.source.rules[0].assignments[0].value.value == [1, 2]
+    for full_audit in [False, True]:
+        worker = _spark_runtime(registry)._build_row_evaluator(
+            ruleset,
+            list(expected),
+            {
+                "seed": T.ArrayType(T.LongType()),
+                "copy": T.ArrayType(T.LongType()),
+                "last": T.LongType(),
+            },
+            full_audit=full_audit,
+        )
+        for _ in range(2):
+            result = worker(FakeSparkRow({}))
+            assert result["assign"] == expected
+            result["assign"]["seed"]["value"].clear()

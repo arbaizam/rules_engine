@@ -19,7 +19,10 @@ from datetime import date
 from pathlib import Path
 
 root = next(
-    (p for p in [Path.cwd(), *Path.cwd().parents] if (p / "databricks.yml").exists()),
+    (
+        p for p in [Path.cwd(), *Path.cwd().parents]
+        if (p / "pyproject.toml").is_file() and (p / "src" / "rules_engine").is_dir()
+    ),
     None,
 )
 if root:

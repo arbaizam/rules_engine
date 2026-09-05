@@ -12,6 +12,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from rules_engine.canonical_values import validate_literal, validate_string_mapping_keys
 from rules_engine.enums import (
     COLLECTION_LITERAL_OPERATORS,
     TOLERANCE_OPERATORS,
@@ -35,6 +36,7 @@ from rules_engine.models import (
     iter_nested_operands,
 )
 from rules_engine.registry import FunctionRegistry
+from rules_engine.traversal import iter_argument_leaves, iter_conditions, iter_operand_tree
 
 
 def _is_non_empty_text(value: Any) -> bool:
@@ -94,6 +96,22 @@ class RulesetValidator:
                 result,
                 "RULESET_NAME_INVALID",
                 "ruleset_name must be a non-empty string.",
+                ObjectType.RULESET,
+                ruleset_id,
+            )
+        if not _is_non_empty_text(ruleset.version):
+            self._add(
+                result,
+                "RULESET_VERSION_INVALID",
+                "version must be a non-empty string.",
+                ObjectType.RULESET,
+                ruleset_id,
+            )
+        if ruleset.description is not None and not isinstance(ruleset.description, str):
+            self._add(
+                result,
+                "RULESET_DESCRIPTION_INVALID",
+                "description must be a string when provided.",
                 ObjectType.RULESET,
                 ruleset_id,
             )
@@ -256,9 +274,7 @@ class RulesetValidator:
         references: list[tuple[AssignedOperand, ObjectType, str]],
     ) -> None:
         """Collect assigned references from active conditions in one tree."""
-        for condition in group.conditions:
-            if not condition.active_flag:
-                continue
+        for condition in iter_conditions(group, active_only=True):
             self._collect_assigned_references(
                 condition.left,
                 ObjectType.CONDITION,
@@ -272,8 +288,6 @@ class RulesetValidator:
                     condition.condition_id,
                     references,
                 )
-        for nested_group in group.groups:
-            self._collect_group_assigned_references(nested_group, references)
 
     def _collect_assigned_references(
         self,
@@ -283,17 +297,9 @@ class RulesetValidator:
         references: list[tuple[AssignedOperand, ObjectType, str]],
     ) -> None:
         """Collect assigned references recursively through function arguments."""
-        if isinstance(operand, AssignedOperand):
-            references.append((operand, object_type, object_id))
-        elif isinstance(operand, CustomFunctionOperand) and isinstance(operand.args, Mapping):
-            for argument in operand.args.values():
-                for nested_operand in iter_nested_operands(argument):
-                    self._collect_assigned_references(
-                        nested_operand,
-                        object_type,
-                        object_id,
-                        references,
-                    )
+        for nested in iter_operand_tree(operand, include_defaults=False):
+            if isinstance(nested, AssignedOperand):
+                references.append((nested, object_type, object_id))
 
     def _validate_rule(
         self,
@@ -329,6 +335,14 @@ class RulesetValidator:
                 result,
                 "RULE_STOP_ON_MATCH_INVALID",
                 "stop_on_match must be a boolean.",
+                ObjectType.RULE,
+                rule_id,
+            )
+        if rule.description is not None and not isinstance(rule.description, str):
+            self._add(
+                result,
+                "RULE_DESCRIPTION_INVALID",
+                "description must be a string when provided.",
                 ObjectType.RULE,
                 rule_id,
             )
@@ -624,11 +638,11 @@ class RulesetValidator:
         """
         Validate literal collection requirements for collection operators.
         """
-        right = condition.right
+        _, right_value = self._static_literal_value(condition.right)
         if condition.operator in {
             ComparisonOperator.IN,
             ComparisonOperator.NOT_IN,
-        } and not isinstance(right.value, (list, tuple, set)):
+        } and not isinstance(right_value, (list, tuple, set)):
             self._add(
                 result,
                 "IN_OPERATOR_COLLECTION_REQUIRED",
@@ -637,7 +651,7 @@ class RulesetValidator:
                 condition.condition_id,
             )
         if condition.operator in {ComparisonOperator.BETWEEN, ComparisonOperator.NOT_BETWEEN} and (
-            not isinstance(right.value, (list, tuple)) or len(right.value) != 2
+            not isinstance(right_value, (list, tuple)) or len(right_value) != 2
         ):
             self._add(
                 result,
@@ -728,6 +742,14 @@ class RulesetValidator:
                     object_id,
                 )
             else:
+                if default_if_null.default_if_null is not None:
+                    self._add(
+                        result,
+                        "DEFAULT_IF_NULL_NESTED_FORBIDDEN",
+                        "default_if_null cannot define another default_if_null.",
+                        object_type,
+                        object_id,
+                    )
                 self._validate_literal_operand(
                     default_if_null,
                     result,
@@ -758,13 +780,22 @@ class RulesetValidator:
     ) -> None:
         """Require type-hint metadata to use the canonical scalar shape."""
         value_type = operand.value_type
-        if value_type is None:
-            return
-        if not _is_non_empty_text(value_type):
+        if value_type is not None and not _is_non_empty_text(value_type):
             self._add(
                 result,
                 "LITERAL_VALUE_TYPE_INVALID",
                 "Literal value_type must be a non-empty string when provided.",
+                object_type,
+                object_id,
+            )
+            return
+        try:
+            validate_literal(operand.value, value_type)
+        except (ValueError, TypeError, RecursionError) as exc:
+            self._add(
+                result,
+                "LITERAL_VALUE_INVALID",
+                str(exc),
                 object_type,
                 object_id,
             )
@@ -777,6 +808,16 @@ class RulesetValidator:
         object_id: str,
     ) -> None:
         """Reject mappings whose keys collide in persisted string form."""
+        try:
+            validate_string_mapping_keys(value)
+        except (ValueError, RecursionError) as exc:
+            self._add(
+                result,
+                "MAPPING_KEY_INVALID",
+                str(exc),
+                object_type,
+                object_id,
+            )
         collision = self._find_mapping_key_collision(value, set())
         if collision is None:
             return
@@ -908,6 +949,19 @@ class RulesetValidator:
             bound_args = dict(operand.args)
         argument_specs = {argument.name: argument for argument in spec.arguments}
         for arg_name, arg_value in bound_args.items():
+            try:
+                for leaf in iter_argument_leaves(arg_value):
+                    if not isinstance(leaf, Operand):
+                        validate_literal(leaf)
+            except (ValueError, TypeError, RecursionError) as exc:
+                self._add(
+                    result,
+                    "CUSTOM_FUNCTION_ARG_VALUE_INVALID",
+                    f"Argument {arg_name!r} for {operand.function_name!r}: {exc}",
+                    object_type,
+                    object_id,
+                )
+                continue
             argument_spec = argument_specs.get(arg_name)
             nested_operands = tuple(iter_nested_operands(arg_value))
             static_literal, effective_value = self._static_literal_value(arg_value)
@@ -1016,6 +1070,8 @@ class RulesetValidator:
             return isinstance(value, datetime)
         if type_hint == "mapping":
             return isinstance(value, Mapping)
+        if type_hint == "ordered_sequence":
+            return isinstance(value, (list, tuple))
         if type_hint in {
             "sequence",
             "string_sequence",

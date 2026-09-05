@@ -5,14 +5,16 @@ Worker-side row evaluation helpers for the Spark runtime.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from json import dumps as json_dumps
 from typing import Any
 
+from rules_engine.decimal_math import subtract_exact
 from rules_engine.enums import (
     ComparisonOperator,
     LogicalOperator,
@@ -32,9 +34,9 @@ from rules_engine.models import (
     Rule,
     RuleExecutionTrace,
     Ruleset,
-    iter_nested_operands,
 )
 from rules_engine.registry import CustomFunction, FunctionRegistry
+from rules_engine.traversal import iter_conditions, iter_nested_operands, iter_rules
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,14 @@ class _PreparedRuleset:
     assignment_targets: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class RowExecutionResult:
+    """Business outcomes produced by the shared row execution loop."""
+
+    matched_rule_ids: list[str]
+    assignments: dict[str, Any]
+
+
 class SparkRowEvaluator:
     """
     Row-level evaluator reused inside Spark worker UDFs.
@@ -87,8 +97,15 @@ class SparkRowEvaluator:
         self._function_registry = function_registry
         self._rule_formatter = HumanReadableRulesetFormatter()
         self._prepared_ruleset: _PreparedRuleset | None = None
+        self._prepared_source: Ruleset | None = None
         self._function_bindings: list[_FunctionBinding] = []
         self._function_bindings_by_id: dict[int, _FunctionBinding] | None = {}
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Rebuild process-local operand identity indexes after every pickle."""
+        state = dict(self.__dict__)
+        state["_function_bindings_by_id"] = None
+        return state
 
     def evaluate_row(
         self,
@@ -101,64 +118,90 @@ class SparkRowEvaluator:
         the Spark worker, independent of Spark schemas and audit rendering.
         """
         prepared = self._prepare_ruleset(ruleset)
-        matched_rule_ids: list[str] = []
-        assignments: dict[str, Any] = {}
-        assigned_values: dict[str, AssignedValue] = {}
-        for rule in prepared.active_rules:
-            if not self._rule_matches(
-                rule,
-                row,
-                assigned_values,
-            ):
-                continue
-            matched_rule_ids.append(rule.rule_id)
-            resolved_assignments = self._evaluate_assignments(
-                rule.assignments,
-                row,
-                assigned_values,
-            )
-            assignments.update(resolved_assignments)
-            assigned_values.update(
-                {
-                    assignment.target_field: AssignedValue(
-                        value=resolved_assignments[assignment.target_field],
-                        rule_id=rule.rule_id,
-                        assignment_id=assignment.assignment_id,
-                    )
-                    for assignment in rule.assignments
-                }
-            )
-            if rule.stop_on_match:
-                break
+        execution = self._execute_prepared(prepared, row)
         return {
-            "matched": bool(matched_rule_ids),
-            "matched_rule_ids": matched_rule_ids,
+            "matched": bool(execution.matched_rule_ids),
+            "matched_rule_ids": execution.matched_rule_ids,
             "assign": {
                 target_field: {
-                    "applied": target_field in assignments,
-                    "value": assignments.get(target_field),
+                    "applied": target_field in execution.assignments,
+                    "value": execution.assignments.get(target_field),
                 }
                 for target_field in prepared.assignment_targets
             },
         }
 
+    def _execute_prepared(
+        self,
+        prepared: _PreparedRuleset,
+        row: Mapping[str, Any],
+        *,
+        full_audit: bool = False,
+        normalize_assignment: Callable[[Assignment, Any], Any] | None = None,
+        on_rule_matched: Callable[[Rule, list[ResolvedConditionTrace]], None] | None = None,
+        on_assignment: Callable[[Rule, Assignment, Any, Any], None] | None = None,
+    ) -> RowExecutionResult:
+        """Evaluate ordered rules and commit each matched rule atomically.
+
+        Adapters may normalize proposed values and observe completed work. Rule
+        matching, assignment visibility, and stop handling have one owner. The
+        compact path does not construct condition traces or audit events.
+        """
+        matched_rule_ids: list[str] = []
+        assignments: dict[str, Any] = {}
+        assigned_values: dict[str, AssignedValue] = {}
+        for rule in prepared.active_rules:
+            if full_audit:
+                matched, condition_traces = self._evaluate_rule(rule, row, assigned_values)
+            else:
+                matched = self._rule_matches(rule, row, assigned_values)
+                condition_traces = None
+            if not matched:
+                continue
+            matched_rule_ids.append(rule.rule_id)
+            if on_rule_matched is not None:
+                on_rule_matched(rule, condition_traces or [])
+            resolved_assignments: list[tuple[Assignment, Any]] = []
+            for assignment in rule.assignments:
+                value = self._copy_collection(
+                    self._resolve_operand(assignment.value, row, assigned_values)
+                )
+                if normalize_assignment is not None:
+                    value = normalize_assignment(assignment, value)
+                resolved_assignments.append((assignment, value))
+            if on_assignment is not None:
+                for assignment, value in resolved_assignments:
+                    previous = assigned_values.get(assignment.target_field)
+                    old_value = (
+                        previous.value if previous is not None else row.get(assignment.target_field)
+                    )
+                    on_assignment(rule, assignment, old_value, value)
+            for assignment, value in resolved_assignments:
+                assignments[assignment.target_field] = value
+                assigned_values[assignment.target_field] = AssignedValue(
+                    value=value,
+                    rule_id=rule.rule_id,
+                    assignment_id=assignment.assignment_id,
+                )
+            if rule.stop_on_match:
+                break
+        return RowExecutionResult(matched_rule_ids, assignments)
+
     def _prepare_ruleset(self, ruleset: Ruleset) -> _PreparedRuleset:
         """Bind static function metadata and cache ordered active rules."""
         prepared = self._prepared_ruleset
-        if prepared is not None and prepared.source is ruleset:
+        if prepared is not None and self._prepared_source is ruleset:
             return prepared
         self._prepared_ruleset = None
+        self._prepared_source = None
         self._function_bindings = []
         self._function_bindings_by_id = {}
-        active_rules = tuple(
-            rule
-            for rule in sorted(ruleset.rules, key=lambda item: item.rule_order)
-            if rule.active_flag
-        )
+        snapshot = deepcopy(ruleset)
+        active_rules = tuple(iter_rules(snapshot, active_only=True, ordered=True))
         for rule in active_rules:
             self._prepare_rule(rule)
         prepared = _PreparedRuleset(
-            source=ruleset,
+            source=snapshot,
             active_rules=active_rules,
             assignment_targets=tuple(
                 dict.fromkeys(
@@ -169,6 +212,7 @@ class SparkRowEvaluator:
             ),
         )
         self._prepared_ruleset = prepared
+        self._prepared_source = ruleset
         return prepared
 
     def _prepare_rule(self, rule: Rule) -> None:
@@ -179,7 +223,7 @@ class SparkRowEvaluator:
 
     def _prepare_group(self, group: ConditionGroup) -> None:
         """Bind static custom-function metadata in a condition-group tree."""
-        for condition in group.conditions:
+        for condition in iter_conditions(group):
             self._prepare_operand(
                 condition.left,
                 resolve_implementation=condition.active_flag,
@@ -189,8 +233,6 @@ class SparkRowEvaluator:
                     condition.right,
                     resolve_implementation=condition.active_flag,
                 )
-        for nested_group in group.groups:
-            self._prepare_group(nested_group)
 
     def _prepare_operand(
         self,
@@ -387,24 +429,6 @@ class SparkRowEvaluator:
             right=right.trace if right is not None else None,
             comparison_result=result,
         )
-
-    def _evaluate_assignments(
-        self,
-        assignments: tuple[Assignment, ...],
-        row: Mapping[str, Any],
-        assigned_values: Mapping[str, AssignedValue] | None = None,
-    ) -> dict[str, Any]:
-        """
-        Resolve all assignments for a matched rule into output values.
-        """
-        return {
-            assignment.target_field: self._resolve_operand(
-                assignment.value,
-                row,
-                assigned_values,
-            )
-            for assignment in assignments
-        }
 
     def _rule_execution_trace(
         self,
@@ -701,7 +725,8 @@ class SparkRowEvaluator:
     ) -> Any:
         """Resolve operands recursively inside one function argument."""
         if isinstance(value, Operand):
-            return self._resolve_operand(value, row, assigned_values)
+            resolved = self._resolve_operand(value, row, assigned_values)
+            return self._copy_collection(resolved)
         if isinstance(value, Mapping):
             return {
                 str(key): self._resolve_function_argument(
@@ -729,7 +754,11 @@ class SparkRowEvaluator:
     ) -> OperandResolution:
         """Resolve a nested argument and retain its source-column metadata."""
         if isinstance(value, Operand):
-            return self._resolve_operand_resolution(value, row, assigned_values)
+            resolution = self._resolve_operand_resolution(value, row, assigned_values)
+            return OperandResolution(
+                value=self._copy_collection(resolution.value),
+                trace=resolution.trace,
+            )
         resolved = self._resolve_function_argument(value, row, assigned_values)
         return OperandResolution(
             value=resolved,
@@ -740,6 +769,17 @@ class SparkRowEvaluator:
                 "evaluated": True,
             },
         )
+
+    def _copy_collection(self, value: Any) -> Any:
+        """Isolate callable arguments and assignment snapshots, keeping scalars cheap.
+
+        A literal can reach a callable through a prior assignment as well as a
+        direct argument. Copying at both boundaries prevents mutation of prepared
+        metadata, original row values, or an earlier committed assignment.
+        """
+        if isinstance(value, (Mapping, list, tuple, set)):
+            return deepcopy(value)
+        return value
 
     def _function_argument_metadata(self, value: Any) -> dict[str, Any]:
         """Return trace metadata for a possibly nested function argument."""
@@ -934,7 +974,9 @@ class SparkRowEvaluator:
             numeric_left = self._numeric_decimal_or_none(left)
             numeric_right = self._numeric_decimal_or_none(right)
             if numeric_left is not None and numeric_right is not None:
-                return abs(numeric_left - numeric_right) <= tolerance_abs
+                if tolerance_abs == 0:
+                    return numeric_left == numeric_right
+                return subtract_exact(numeric_left, numeric_right).copy_abs() <= tolerance_abs
         if self._is_temporal(left) or self._is_temporal(right):
             temporal_left, temporal_right = self._temporal_pair(
                 left,
@@ -968,24 +1010,21 @@ class SparkRowEvaluator:
             right,
             tolerance_abs,
         )
-        tolerance = self._ordered_tolerance(ordered_left, tolerance_abs)
+        comparison_left = ordered_left
+        upper_bound = lower_bound = ordered_right
+        if tolerance_abs != 0:
+            comparison_left = subtract_exact(ordered_left, ordered_right)
+            upper_bound = tolerance_abs
+            lower_bound = tolerance_abs.copy_negate()
         if operator is ComparisonOperator.GT:
-            return ordered_left > ordered_right + tolerance
+            return comparison_left > upper_bound
         if operator is ComparisonOperator.GE:
-            return ordered_left >= ordered_right - tolerance
+            return comparison_left >= lower_bound
         if operator is ComparisonOperator.LT:
-            return ordered_left < ordered_right - tolerance
+            return comparison_left < lower_bound
         if operator is ComparisonOperator.LE:
-            return ordered_left <= ordered_right + tolerance
+            return comparison_left <= upper_bound
         raise ValueError(f"Unsupported ordered comparison: {operator.value}")
-
-    def _ordered_tolerance(
-        self,
-        value: Any,
-        tolerance_abs: Decimal,
-    ) -> Decimal | timedelta:
-        """Return numeric tolerance; temporal comparisons require zero."""
-        return timedelta(0) if self._is_temporal(value) else tolerance_abs
 
     def _temporal_pair(
         self,

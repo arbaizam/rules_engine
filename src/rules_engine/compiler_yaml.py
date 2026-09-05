@@ -7,10 +7,7 @@ The compiler performs shape checks and enum parsing. Semantic checks remain in
 
 from __future__ import annotations
 
-import math
-import re
 from collections.abc import Callable, Mapping
-from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -18,7 +15,7 @@ from typing import Any
 import yaml
 from yaml.constructor import ConstructorError
 
-from rules_engine.authoring import LITERAL_TYPE_HINTS
+from rules_engine.canonical_values import normalize_literal, normalize_mapping_keys
 from rules_engine.enums import ComparisonOperator, LogicalOperator
 from rules_engine.exceptions import CompilationError
 from rules_engine.models import (
@@ -33,15 +30,6 @@ from rules_engine.models import (
     Rule,
     Ruleset,
 )
-from rules_engine.standard_functions import to_timestamp, to_timestamp_ntz
-
-_LITERAL_TYPE_HINT_CANONICAL_NAMES = {
-    hint: canonical_name
-    for canonical_name, aliases in LITERAL_TYPE_HINTS
-    for hint in (canonical_name, *aliases)
-}
-_LONG_MIN = -(2**63)
-_LONG_MAX = 2**63 - 1
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -528,140 +516,12 @@ class YamlRulesetCompiler:
             return {self._compile_custom_function_arg(item) for item in value}
         return self._normalize_literal_value(value)
 
-    def _normalize_literal_value(
-        self,
-        value: Any,
-        value_type: str | None = None,
-    ) -> Any:
-        """Preserve YAML-authored fractional numbers as exact decimals.
-
-        PyYAML normally parses an unquoted fractional literal as ``float``.
-        Financial rules must not silently switch to binary floating-point, so
-        untyped floats are normalized recursively through their YAML text
-        representation. Explicit floating-point hints retain float semantics.
-        """
-        normalized_type = value_type.lower() if isinstance(value_type, str) else None
-        if isinstance(value, list):
-            return [self._normalize_literal_value(item, value_type) for item in value]
-        if isinstance(value, tuple):
-            return tuple(self._normalize_literal_value(item, value_type) for item in value)
-        if isinstance(value, set):
-            return {self._normalize_literal_value(item, value_type) for item in value}
-        if isinstance(value, Mapping):
-            return self._normalize_mapping_keys(
-                value,
-                lambda item: self._normalize_literal_value(item, value_type),
-                "Literal mapping",
-            )
-        if isinstance(value, float) and not math.isfinite(value):
-            raise CompilationError("Numeric literals must be finite.")
-        if isinstance(value, Decimal) and not value.is_finite():
-            raise CompilationError("Decimal literals must be finite.")
-        if normalized_type is not None:
-            return self._normalize_typed_literal(value, normalized_type)
-        if isinstance(value, float):
-            return Decimal(str(value))
-        return value
-
-    def _normalize_typed_literal(self, value: Any, normalized_type: str) -> Any:
-        """Normalize one non-collection literal according to its declared type."""
-        if value is None:
-            return None
-        canonical_type = _LITERAL_TYPE_HINT_CANONICAL_NAMES.get(
-            normalized_type,
-            normalized_type,
-        )
-        if canonical_type == "string":
-            return self._normalize_string_literal(value)
-        if canonical_type == "integer":
-            return self._normalize_integer_literal(value)
-        if canonical_type == "double":
-            return self._normalize_double_literal(value)
-        if canonical_type == "date":
-            if isinstance(value, datetime):
-                return value.date()
-            if isinstance(value, date):
-                return value
-            if isinstance(value, str):
-                text = value.strip()
-                try:
-                    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) is None:
-                        raise ValueError("Expected ISO date format YYYY-MM-DD.")
-                    return date.fromisoformat(text)
-                except ValueError as exc:
-                    raise CompilationError(
-                        f"Date literal must use ISO YYYY-MM-DD format, found {value!r}."
-                    ) from exc
-            raise CompilationError(
-                f"Date literal must be a date or ISO YYYY-MM-DD string, found {value!r}."
-            )
-        if canonical_type in {"timestamp", "timestamp_ntz"}:
-            converter = to_timestamp if canonical_type == "timestamp" else to_timestamp_ntz
-            try:
-                return converter(value)
-            except (TypeError, ValueError) as exc:
-                representation = (
-                    "an ISO timestamp with a UTC offset"
-                    if canonical_type == "timestamp"
-                    else "an ISO timestamp without a UTC offset"
-                )
-                raise CompilationError(
-                    f"{canonical_type} literal must be a datetime or {representation}, "
-                    f"found {value!r}."
-                ) from exc
-        if canonical_type == "boolean":
-            if not isinstance(value, bool):
-                raise CompilationError(
-                    f"Boolean literal must be an actual boolean, found {value!r}."
-                )
-            return value
-        if canonical_type == "decimal":
-            try:
-                decimal_value = Decimal(str(value))
-            except (InvalidOperation, ValueError) as exc:
-                raise CompilationError(
-                    f"Decimal literal must be numeric, found {value!r}."
-                ) from exc
-            if not decimal_value.is_finite():
-                raise CompilationError("Decimal literals must be finite.")
-            return decimal_value
-        return value
-
-    def _normalize_string_literal(self, value: Any) -> str:
-        """Require one explicitly string-typed literal value."""
-        if not isinstance(value, str):
-            raise CompilationError(
-                f"String literal must be a string, found {value!r}."
-            )
-        return value
-
-    def _normalize_integer_literal(self, value: Any) -> int:
-        """Return one lossless signed 64-bit integer literal value."""
-        if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
-            raise CompilationError(
-                f"Integer literal must be numeric, found {value!r}."
-            )
-        converted = int(value)
-        if value != converted:
-            raise CompilationError(
-                f"Integer literal must not have a fractional component, found {value!r}."
-            )
-        if not _LONG_MIN <= converted <= _LONG_MAX:
-            raise CompilationError(
-                f"Integer literal must fit a signed 64-bit value, found {value!r}."
-            )
-        return converted
-
-    def _normalize_double_literal(self, value: Any) -> float:
-        """Return one finite explicitly floating-point literal value."""
-        if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
-            raise CompilationError(
-                f"Floating-point literal must be numeric, found {value!r}."
-            )
-        converted = float(value)
-        if not math.isfinite(converted):
-            raise CompilationError("Floating-point literals must be finite.")
-        return converted
+    def _normalize_literal_value(self, value: Any, value_type: str | None = None) -> Any:
+        """Normalize authored data through the canonical literal contract."""
+        try:
+            return normalize_literal(value, value_type)
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise CompilationError(str(exc)) from exc
 
     def _enum(self, enum_type: type, value: str, label: str) -> Any:
         """
@@ -718,19 +578,10 @@ class YamlRulesetCompiler:
         label: str,
     ) -> dict[str, Any]:
         """Normalize persisted mapping keys without silently merging values."""
-        normalized: dict[str, Any] = {}
-        original_keys: dict[str, Any] = {}
-        for original_key, item in value.items():
-            key = str(original_key)
-            if key in normalized:
-                first_key = original_keys[key]
-                raise CompilationError(
-                    f"{label} contains keys {first_key!r} and {original_key!r} "
-                    f"that both normalize to {key!r}."
-                )
-            normalized[key] = normalize_value(item)
-            original_keys[key] = original_key
-        return normalized
+        try:
+            return normalize_mapping_keys(value, normalize_value, label)
+        except ValueError as exc:
+            raise CompilationError(str(exc)) from exc
 
     def _require_str(self, payload: Mapping[str, Any], key: str) -> str:
         """

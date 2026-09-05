@@ -20,6 +20,7 @@ from decimal import (
 )
 from typing import Any
 
+from rules_engine.decimal_math import decimal_context
 from rules_engine.models import FunctionRegistryRow
 from rules_engine.registry import (
     CustomFunctionArgSpec,
@@ -142,7 +143,7 @@ def concat_ws(
         raise TypeError("skip_nulls must be a boolean.")
     if values is None:
         return None
-    items = _sequence(values, "values")
+    items = _ordered_sequence(values, "values")
     if not skip_nulls and any(item is None for item in items):
         return None
     return separator.join(to_string(item) for item in items if item is not None)
@@ -198,7 +199,7 @@ def coalesce(values: Any) -> Any:
     if values is None:
         return None
     return next(
-        (value for value in _sequence(values, "values") if value is not None),
+        (value for value in _ordered_sequence(values, "values") if value is not None),
         None,
     )
 
@@ -327,7 +328,7 @@ def to_timestamp(value: Any, on_error: str = "error") -> datetime | None:
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise ValueError("Timestamp must include a UTC offset.")
         return parsed.astimezone(timezone.utc)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         return _conversion_failure(
             on_error,
             f"Cannot convert value to timestamp: {value!r}",
@@ -356,7 +357,7 @@ def to_timestamp_ntz(value: Any, on_error: str = "error") -> datetime | None:
 def decimal_abs(value: Any) -> Decimal | None:
     """Return the absolute decimal value."""
     parsed = _decimal_operand(value, "value")
-    return None if parsed is None else abs(parsed)
+    return None if parsed is None else parsed.copy_abs()
 
 
 def decimal_add(left: Any, right: Any) -> Decimal | None:
@@ -645,6 +646,13 @@ def _sequence(value: Any, label: str) -> list[Any] | tuple[Any, ...] | set[Any]:
     return value
 
 
+def _ordered_sequence(value: Any, label: str) -> list[Any] | tuple[Any, ...]:
+    """Require authored order for first-value and string-join operations."""
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(f"{label} must be an ordered array (list or tuple).")
+    return value
+
+
 def _integer(value: Any, label: str) -> int:
     """Return a lossless integral value."""
     if isinstance(value, bool):
@@ -715,8 +723,7 @@ def _decimal_binary(
     parsed_right = _decimal_operand(right, "right")
     if parsed_left is None or parsed_right is None:
         return None
-    with localcontext() as context:
-        context.prec = 76
+    with localcontext(decimal_context(parsed_left, parsed_right)):
         try:
             return operation(parsed_left, parsed_right)
         except InvalidOperation as exc:
@@ -740,11 +747,17 @@ def _divide(
         if safe:
             return None
         raise ZeroDivisionError("denominator cannot be zero.")
-    with localcontext() as context:
-        context.prec = 76
+    places = _integer(scale, "scale")
+    context = decimal_context(parsed_numerator, parsed_denominator)
+    quotient_digits = max(1, parsed_numerator.adjusted() - parsed_denominator.adjusted() + 1)
+    context.prec = max(
+        context.prec,
+        quotient_digits + max(places, 0) + len(parsed_denominator.as_tuple().digits) + 2,
+    )
+    with localcontext(context):
         return _quantize(
             parsed_numerator / parsed_denominator,
-            scale,
+            places,
             rounding_mode,
         )
 
@@ -758,10 +771,10 @@ def _quantize(value: Decimal, scale: Any, rounding_mode: str) -> Decimal:
         rounding = _ROUNDING_MODES[rounding_mode]
     except KeyError as exc:
         raise ValueError(f"rounding_mode must be one of {sorted(_ROUNDING_MODES)}.") from exc
-    with localcontext() as context:
-        context.prec = 76
+    quantum = Decimal((0, (1,), -places))
+    with localcontext(decimal_context(value, quantum)):
         try:
-            return value.quantize(Decimal(1).scaleb(-places), rounding=rounding)
+            return value.quantize(quantum, rounding=rounding)
         except InvalidOperation as exc:
             raise ValueError("Rounded decimal exceeds the supported precision.") from exc
 
@@ -885,7 +898,7 @@ STANDARD_FUNCTION_SPECS = (
     _spec(
         "concat_ws",
         (
-            Arg("values", type_hint="sequence"),
+            Arg("values", type_hint="ordered_sequence"),
             Arg("separator", type_hint="string"),
             Arg("skip_nulls", False, True, "boolean", literal_only=True),
         ),
@@ -925,7 +938,7 @@ STANDARD_FUNCTION_SPECS = (
     ),
     _spec(
         "coalesce",
-        (Arg("values", type_hint="sequence"),),
+        (Arg("values", type_hint="ordered_sequence"),),
         "common_type:values",
         "Return the first non-null array item.",
     ),
@@ -1073,7 +1086,7 @@ STANDARD_FUNCTION_SPECS = (
     _spec(
         "array_join",
         (
-            Arg("values", type_hint="sequence"),
+            Arg("values", type_hint="ordered_sequence"),
             Arg("separator", type_hint="string"),
             Arg("skip_nulls", False, True, "boolean", literal_only=True),
         ),

@@ -1,0 +1,61 @@
+name: Rules engine checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.10"
+            spark: "3.5.6"
+          - python: "3.12"
+            spark: "4.2.0"
+    env:
+      RULES_ENGINE_RUN_SPARK_TESTS: "1"
+      SPARK_LOCAL_IP: "127.0.0.1"
+      TZ: "UTC"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install development dependencies
+        run: python -m pip install -e '.[dev]' 'pyspark==${{ matrix.spark }}' 'PyYAML==6.0.3'
+      - name: Configure Python workers
+        run: |
+          echo "PYSPARK_PYTHON=$(which python)" >> "$GITHUB_ENV"
+          echo "PYSPARK_DRIVER_PYTHON=$(which python)" >> "$GITHUB_ENV"
+      - name: Lint and whitespace
+        run: |
+          python -m ruff check .
+          git diff --check
+      - name: Run complete suite with real Spark workers
+        run: python -m pytest tests -q --junitxml=test-results.xml
+      - name: Verify test documentation inventory
+        run: python scripts/test_inventory.py --check
+      - name: Build and inspect wheel
+        run: |
+          python -m build --wheel
+          python scripts/check_wheel.py dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: verification-python-${{ matrix.python }}-spark-${{ matrix.spark }}
+          path: |
+            test-results.xml
+            dist/*.whl

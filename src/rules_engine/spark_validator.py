@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Iterator
 from collections.abc import Mapping as MappingABC
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -39,6 +40,7 @@ from rules_engine.spark_types import (
     decimal_literal_type,
     decimal_value_fits,
 )
+from rules_engine.traversal import iter_conditions, iter_operand_tree, iter_rules
 from rules_engine.validator import RulesetValidator
 
 _CANONICAL_SPARK_TYPES: dict[str, T.DataType] = {
@@ -76,17 +78,29 @@ _SCHEMA_VALIDATION_BLOCKERS = {
     "CONDITION_ACTIVE_FLAG_INVALID",
     "CONDITION_OPERATOR_INVALID",
     "CUSTOM_FUNCTION_ARG_NAME_INVALID",
+    "CUSTOM_FUNCTION_ARG_VALUE_INVALID",
     "CUSTOM_FUNCTION_NAME_INVALID",
     "DEFAULT_IF_NULL_INVALID",
     "FIELD_NAME_INVALID",
     "LITERAL_VALUE_TYPE_INVALID",
+    "LITERAL_VALUE_INVALID",
     "LOGICAL_OPERATOR_INVALID",
     "MAPPING_KEY_NORMALIZATION_COLLISION",
+    "MAPPING_KEY_INVALID",
     "OPERAND_INVALID",
     "RULE_ACTIVE_FLAG_INVALID",
     "RULE_CONDITION_GROUP_INVALID",
     "RULE_ORDER_INVALID",
 }
+
+
+@dataclass(frozen=True)
+class PreparedSparkSchema:
+    """Driver-side validation and schema facts reused when building a Spark plan."""
+
+    validation: ValidationResult
+    assignment_schema: T.StructType
+    required_source_columns: tuple[str, ...]
 
 
 class SparkRulesetCompatibilityValidator(RulesetValidator):
@@ -98,10 +112,27 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         schema: T.StructType | Any | None = None,
     ) -> ValidationResult:
         """Validate base metadata and, when supplied, a Spark input schema."""
+        if schema is not None:
+            return self.prepare(ruleset, schema).validation
+        return super().validate(ruleset)
+
+    def prepare(self, ruleset: Ruleset, schema: T.StructType | Any) -> PreparedSparkSchema:
+        """Validate once and retain the assignment types and required input names."""
+        spark_schema = self._coerce_schema(schema)
         result = super().validate(ruleset)
-        if schema is not None and not self._has_schema_validation_blocker(result):
-            self._populate_schema_result(ruleset, self._coerce_schema(schema), result)
-        return result
+        field_types: dict[str, T.DataType] = {}
+        required_columns: tuple[str, ...] = ()
+        if not self._has_schema_validation_blocker(result):
+            field_types, required_columns = self._populate_schema_result(
+                ruleset, spark_schema, result
+            )
+        return PreparedSparkSchema(
+            validation=result,
+            assignment_schema=T.StructType(
+                [T.StructField(name, data_type, True) for name, data_type in field_types.items()]
+            ),
+            required_source_columns=required_columns,
+        )
 
     def assignment_schema(
         self,
@@ -109,20 +140,10 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         schema: T.StructType | Any,
     ) -> T.StructType:
         """Return the validated typed assignment payload schema."""
-        spark_schema = self._coerce_schema(schema)
-        base_result = super().validate(ruleset)
-        if self._has_schema_validation_blocker(base_result):
-            raise ValueError(base_result.to_text())
-        result = ValidationResult()
-        field_types = self._resolve_assignment_types(ruleset, spark_schema, result)
-        if result.has_errors():
-            raise ValueError(result.to_text())
-        return T.StructType(
-            [
-                T.StructField(field_name, data_type, True)
-                for field_name, data_type in field_types.items()
-            ]
-        )
+        prepared = self.prepare(ruleset, schema)
+        if prepared.validation.has_errors():
+            raise ValueError(prepared.validation.to_text())
+        return prepared.assignment_schema
 
     def _has_schema_validation_blocker(self, result: ValidationResult) -> bool:
         """Return whether malformed model structure makes schema traversal unsafe."""
@@ -142,9 +163,23 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         ruleset: Ruleset,
         schema: T.StructType,
         result: ValidationResult,
-    ) -> None:
+    ) -> tuple[dict[str, T.DataType], tuple[str, ...]]:
         """Add all Spark field-reference and assignment-type issues."""
-        self._validate_field_references(ruleset, schema, result)
+        required_columns = self._validate_field_references(ruleset, schema, result)
+        if TIMESTAMP_NTZ_TYPE is None:
+            for operand, object_type, object_id in self._iter_active_operands(ruleset):
+                if isinstance(operand, LiteralOperand) and self._contains_naive_datetime(
+                    operand.value
+                ):
+                    self._add(
+                        result,
+                        "SPARK_TIMESTAMP_NTZ_UNAVAILABLE",
+                        "Naive datetime literals require TimestampNTZ support. Upgrade PySpark "
+                        "and use value_type='timestamp_ntz', or provide a UTC offset with "
+                        "value_type='timestamp' for an instant.",
+                        object_type,
+                        object_id,
+                    )
         assigned_types = self._resolve_assignment_types(ruleset, schema, result)
         self._validate_operand_defaults(
             ruleset,
@@ -170,21 +205,15 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
             result,
             assigned_types,
         )
+        return assigned_types, required_columns
 
     def _active_rules(self, ruleset: Ruleset) -> list[Rule]:
         """Return active rules in evaluation order."""
-        return sorted(
-            (rule for rule in ruleset.rules if rule.active_flag),
-            key=lambda rule: rule.rule_order,
-        )
+        return list(iter_rules(ruleset, active_only=True, ordered=True))
 
     def _iter_group_conditions(self, group: ConditionGroup) -> Iterator[Condition]:
         """Yield active conditions from one group tree in metadata order."""
-        for condition in group.conditions:
-            if condition.active_flag:
-                yield condition
-        for child in group.groups:
-            yield from self._iter_group_conditions(child)
+        yield from iter_conditions(group, active_only=True)
 
     def _iter_active_conditions(self, ruleset: Ruleset) -> Iterator[Condition]:
         """Yield conditions belonging to active rules in evaluation order."""
@@ -193,13 +222,8 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
 
     def _iter_operand_tree(self, operand: Operand | None) -> Iterator[Operand]:
         """Yield one operand and every operand nested in its function arguments."""
-        if operand is None:
-            return
-        yield operand
-        if isinstance(operand, CustomFunctionOperand):
-            for argument in operand.args.values():
-                for nested_operand in iter_nested_operands(argument):
-                    yield from self._iter_operand_tree(nested_operand)
+        if operand is not None:
+            yield from iter_operand_tree(operand, include_defaults=False)
 
     def _iter_active_operands(
         self,
@@ -228,8 +252,9 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         ruleset: Ruleset,
         schema: T.StructType,
         result: ValidationResult,
-    ) -> None:
+    ) -> tuple[str, ...]:
         """Require every active condition and assignment source field."""
+        required_columns: dict[str, None] = {}
         source_field_counts = Counter(field.name for field in schema.fields)
         source_fields_by_case: dict[str, list[str]] = defaultdict(list)
         for field in schema.fields:
@@ -237,6 +262,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         for operand, object_type, object_id in self._iter_active_operands(ruleset):
             if not isinstance(operand, FieldOperand):
                 continue
+            required_columns[operand.field_name] = None
             field_count = source_field_counts[operand.field_name]
             if field_count == 1 and len(source_fields_by_case[operand.field_name.casefold()]) == 1:
                 continue
@@ -269,6 +295,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                 object_id,
                 details=details,
             )
+        return tuple(required_columns)
 
     def _resolve_assignment_types(
         self,
@@ -753,6 +780,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
             return isinstance(data_type, (T.MapType, T.StructType))
         if type_hint in {
             "sequence",
+            "ordered_sequence",
             "string_sequence",
             "integer_sequence",
             "date_sequence",
@@ -763,6 +791,7 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
                 return True
             element_hint = {
                 "sequence": "any",
+                "ordered_sequence": "any",
                 "string_sequence": "string",
                 "integer_sequence": "integer",
                 "date_sequence": "date",
@@ -1187,6 +1216,8 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         if isinstance(value, Decimal):
             return decimal_literal_type(value)
         if isinstance(value, datetime):
+            if value.utcoffset() is None:
+                return TIMESTAMP_NTZ_TYPE() if TIMESTAMP_NTZ_TYPE is not None else None
             return T.TimestampType()
         if isinstance(value, date):
             return T.DateType()
@@ -1197,6 +1228,16 @@ class SparkRulesetCompatibilityValidator(RulesetValidator):
         if isinstance(value, (list, tuple, set)):
             return self._collection_literal_type(value)
         return None
+
+    def _contains_naive_datetime(self, value: Any) -> bool:
+        """Identify unsupported NTZ literals recursively for an actionable diagnostic."""
+        if isinstance(value, datetime):
+            return value.utcoffset() is None
+        if isinstance(value, MappingABC):
+            return any(self._contains_naive_datetime(item) for item in value.values())
+        if isinstance(value, (list, tuple, set)):
+            return any(self._contains_naive_datetime(item) for item in value)
+        return False
 
     def _mapping_literal_type(self, value: MappingABC) -> T.StructType | None:
         """Infer a deterministic Spark struct type for a mapping literal."""

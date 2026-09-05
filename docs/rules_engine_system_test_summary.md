@@ -4,7 +4,7 @@ Source: `notebooks/99.rules_engine_system_tests.py`.
 
 ALM Engineering uses this Databricks notebook for behavior that needs a real
 Spark, Python-worker, or Delta boundary. Compiler and validator permutations
-remain in the pytest suite. The system notebook contains 18 focused tests and
+remain in the pytest suite. The system notebook contains 22 focused tests and
 does not run pytest itself.
 
 ## Test Inventory
@@ -29,12 +29,18 @@ does not run pytest itself.
 | ST-016 | Coverage aggregation | Coverage returns total, no-match, error, per-rule first-match, dead-rule, broad-rule, and clean no-match results. |
 | ST-017 | Assignment application | Keyed result rows remain separate from business rows; explicit nulls clear values, non-null values replace or append columns, structs replace atomically, and keys stay immutable. On compute supporting DataFrame cache APIs, both projections also share explicit persistence; serverless logs that cache-only check as skipped. |
 | ST-018 | Standard-function worker contract | Optional defaults, operands nested in argument arrays, array predicates and joins, nested conversion plus decimal arithmetic, business-month boundaries, and `on_error: "null"` retain their types and values across a real Python worker. |
+| ST-019 | Decimal precision | Self-comparison and `decimal_abs` preserve all 38 significant digits in compact and full-audit execution. |
+| ST-020 | Timestamp and fallback boundaries | Spark timestamps compare with offset-bearing literals by instant; collection null fallbacks pass validation and execute in both audit modes. |
+| ST-021 | Output conversion and audit parity | Replacing an existing NaN succeeds in both audit modes; an invalid timestamp returned by a custom function produces a row error and clears all assignment outcomes. |
+| ST-022 | Execution provenance and persistence integrity | Results record the referenced function contract and hash; persisted rows round-trip, and hash or indexed-identity mismatches fail loading. |
 
 ## Execution Contract
 
-Run the notebook from a Databricks checkout containing `databricks.yml` at the
-repository root. The import cell locates that file and appends
-`<repository>/src` to `sys.path`.
+Run the notebook from the repository root or any nested directory of a
+Databricks checkout. The import cell finds the tracked `pyproject.toml` and
+`src/rules_engine` directory, then appends `<repository>/src` to `sys.path`.
+The same discovery contract is used by all three example notebooks and has
+a local regression test that does not require Databricks.
 
 Provide these inputs before execution:
 
@@ -58,7 +64,7 @@ table.
 The run is successful only when execution reaches the final message:
 
 ```text
-PASS: All 18 current-contract rules engine system tests completed.
+PASS: All 22 current-contract rules engine system tests completed.
 ```
 
 Any failed assertion or unexpected exception stops the notebook at the

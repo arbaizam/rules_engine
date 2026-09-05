@@ -2,9 +2,17 @@
 
 ALM Engineering designed the `rules_engine` to apply clear, reviewable,
 **row-level**, business rules to PySpark DataFrames. Rules are authored
-in strict YAML, compiled into immutable Python dataclasses, and validated.
+in strict YAML, compiled into frozen Python dataclasses, and validated.
 The rules engine supports one authoring language: canonical YAML. The
 dataclasses are the compiled in-memory model.
+
+Evaluation takes a private snapshot of compiled metadata during preparation.
+Collection arguments passed to custom functions and committed assignment
+collections are copied, including literals, null fallbacks, input fields,
+and earlier assignments. Dataclass fields are frozen; nested authoring lists
+and mappings are ordinary Python collections, so create a new ruleset when
+changing an evaluated definition. Audit values are captured when each
+assignment occurs.
 
 ## Full-audit provenance
 
@@ -21,8 +29,8 @@ We elected to keep the core contract narrow and explicit to:
 
 - evaluate one row at a time. Cross-row facts must already be present as
   DataFrame columns;
-- reject unknown YAML keys, duplicate YAML keys, aliases, and ambiguous
-  shapes instead of guessing what an author meant;
+- reject unknown YAML keys, duplicate YAML keys, unsupported operator/key
+  aliases, and ambiguous shapes instead of guessing what an author meant;
 - use `field` when a rule needs the original input row and `assigned` when
   a later rule needs a value committed by an earlier matching rule;
 - resolve null substitutions on the operand before we compare values;
@@ -105,6 +113,13 @@ rules:
 | Numbers | Finite YAML integers, decimals, or floats | `NaN` and infinite values are rejected. Untyped fractional YAML values are preserved as `Decimal`. |
 | Dates | YAML date values or ISO `YYYY-MM-DD` with `value_type: date` | Invalid calendar dates fail compilation. |
 | Collections | YAML lists and mappings; tuples may appear in canonical exported YAML | The operator or Spark target type may impose tighter rules. |
+
+Supported literals are null, strings, booleans, finite integers/floats/decimals,
+dates, timestamps, and recursive lists, tuples, sets, or mappings of those
+values. Binary YAML values and other object types are rejected during
+compilation. Sets are accepted for membership operations, but order-sensitive
+functions such as `coalesce`, `concat_ws`, and `array_join` require an ordered
+list or tuple (or a Spark array field).
 
 ### Ruleset fields
 
@@ -272,6 +287,12 @@ therefore intentionally make an originally null value non-null before the
 unary comparison. The fallback itself cannot be null and cannot contain a
 nested `default_if_null`.
 
+Collection shape checks use the effective literal after null substitution.
+For example, `right: {literal: null, default_if_null: [1, 2]}` is valid for
+`in`, `not_in`, `between`, and `not_between`. The range operators still require
+exactly two bounds. `error_on_null=true` applies only when a comparison
+operand remains null after fallback handling.
+
 ### Operator reference
 
 | Operator | Right operand | Allowed values or shapes | Definition |
@@ -296,6 +317,11 @@ nested `default_if_null`.
 | `is_not_null` | Forbidden | Left may resolve to any value | True when the effective left value is not null. `error_on_null` is not allowed. |
 
 ### Assignments
+
+Decimal comparison and arithmetic precision is isolated from the caller's
+Python decimal context. Zero-tolerance comparisons preserve exact equality
+and ordering across the supported Spark decimal range. Floating-point type
+hints still explicitly select floating-point behavior.
 
 The normal mapping form uses the key as `target_field`. A scalar or list value
 is shorthand for a literal operand. A mapping value must be an explicit
@@ -402,6 +428,14 @@ the manifest reflects the functions available in that environment, including
 registered custom functions.
 
 ## Spark evaluation contract
+
+Spark `timestamp` inputs are normalized to aware UTC values at the worker
+boundary so they compare with offset-bearing literals by instant. This also
+applies inside arrays, structs, and maps. `timestamp_ntz` values retain naive
+wall-clock semantics; untyped naive datetime literals infer this type.
+Custom timestamp returns must match the declared kind. Output conversion and
+recursive value checks run inside the row error handler, so invalid custom
+results are captured when `fail_on_error=false`.
 
 ```python
 from rules_engine import FunctionRegistry, SparkRulesEngineRuntime
@@ -528,6 +562,15 @@ chaining.
 | `id` | String | Authored `ruleset_id` | Technical ruleset identity used for evaluation. |
 | `version` | String | Authored version | Exact ruleset version used for evaluation. |
 | `content_hash` | String | SHA-256 hexadecimal hash | Hash of the canonical immutable payload. |
+| `function_dependencies` | String | Canonical JSON array, or `[]` | Referenced active function contracts, sorted by name, including implementation reference, version, arguments, permissions, and return hint. |
+| `function_dependencies_hash` | String | SHA-256 hexadecimal hash | Hash of the exact UTF-8 `function_dependencies` JSON string. |
+
+Function provenance describes the registry used to prepare the evaluation.
+It does not enforce pinned function versions or fingerprint executable Python
+code. The ruleset content hash and function dependency hash identify separate
+parts of an execution's configuration.
+The manifest preserves observable default types with reserved JSON envelopes,
+so list, tuple, and set defaults produce distinct dependency hashes.
 
 ### `rules_engine_matched_rules` elements
 
@@ -606,6 +649,10 @@ element is its effective assignment.
 | `include_error_traceback` | `true` or `false`; default `false` | Adds a Python traceback to captured row errors. We use it only for debugging because it makes rows much larger. |
 | `full_audit` | `true` or `false`; default `false` | `true` adds matched-rule and assignment-history columns. It does not change matching or assignment results. |
 | Rule `stop_on_match` | `true` or `false`; default `false` | `false` lets later rules run. `true` applies the matching rule and then stops. |
+
+Existing values recorded in audit history may include NaN or infinity;
+recording that history does not revalidate them as proposed assignments.
+New floating-point assignments must still be finite.
 
 All compact and full-audit output names for the selected prefix are reserved.
 We reject an input DataFrame containing any reserved name or case-only variant
@@ -693,9 +740,9 @@ if a referenced implementation is missing.
 |---|---:|---|---|
 | `name` | Yes | Unique non-empty string within the function | Keyword passed to the callable and authored under `args`. |
 | `required` | No | `true` or `false`; default `true` | When `false`, YAML may omit the argument. |
-| `default` | No | JSON-compatible literal or collection; default `null` | Value bound by the runtime when an optional argument is omitted. |
-| `type_hint` | No | `any`, `string`, `integer`, `number`, `boolean`, `date`, `timestamp`, `mapping`, `sequence`, `string_sequence`, `integer_sequence`, or `date_sequence`; default `any` | Validates literal arguments immediately and field-backed arguments when Spark schema metadata is available. Null is allowed for every type. |
-| `allowed_values` | No | Non-empty tuple of JSON-compatible literal values or `null` | Restricts a configuration argument to an explicit set, such as `error` or `null`. It requires `literal_only=true`; an optional default must be in the set. |
+| `default` | No | JSON-compatible literal or collection with string mapping keys; default `null` | Value bound by the runtime when an optional argument is omitted. |
+| `type_hint` | No | `any`, `string`, `integer`, `number`, `boolean`, `date`, `timestamp`, `mapping`, `sequence`, `ordered_sequence`, `string_sequence`, `integer_sequence`, or `date_sequence`; default `any` | Validates literal arguments immediately and field-backed arguments when Spark schema metadata is available. `ordered_sequence` rejects sets; sequence hints otherwise allow supported collections. Null is allowed for every type. |
+| `allowed_values` | No | Non-empty tuple of JSON-compatible literal values with string mapping keys, or `null` | Restricts a configuration argument to an explicit set, such as `error` or `null`. It requires `literal_only=true`; an optional default must be in the set. |
 | `literal_only` | No | `true` or `false`; default `false` | When `true`, the argument cannot read a field, assignment, or nested function. We use this for modes and other plan-level configuration. |
 
 ### Standard functions
@@ -728,7 +775,7 @@ Optional arguments are shown with their defaults.
 | `regex_extract` | `value`, `pattern`; optional `group=1` | `string` | Returns a capture group or null when no match exists. |
 | `regex_replace` | `value`, `pattern`, `replacement` | `string` | Replaces regular-expression matches. |
 | `regex_match` | `value`, `pattern` | `boolean` | Tests whether a regex matches anywhere in the text. |
-| `text_contains_any` | `value`, string `candidates` | `boolean` | Tests whether text contains any non-null candidate string. |
+| `text_contains_any` | `value`, array of strings `candidates` | `boolean` | Tests whether text contains any non-null candidate string. |
 | `is_blank` | `value` | `boolean` | Returns true for null or whitespace-only text. |
 
 #### Null and conversion functions
@@ -834,6 +881,14 @@ assign:
 
 The repository owns two Delta tables. We create them only through an explicit
 `create_tables` call.
+
+`payload_json` uses canonical model format 1, identified by the top-level
+`"$rules_engine_format": 1` marker.
+The persistence codec reconstructs model nodes directly; it does not parse
+YAML or reinterpret argument mappings as authoring syntax. Loading verifies
+the payload hash and its ruleset ID, name, and version against the indexed
+row. Unsupported formats, malformed payloads, and inconsistent records raise
+`RepositoryError`.
 
 ### `ruleset_versions`
 
@@ -985,7 +1040,7 @@ are never stored in Delta. Returns `None`.
 ruleset = service.compile_yaml_text(yaml_text)
 ```
 
-Compiles one YAML string into an immutable `Ruleset`. It rejects invalid YAML,
+Compiles one YAML string into a frozen `Ruleset`. It rejects invalid YAML,
 duplicate keys, unknown keys, wrong primitive types, and invalid shapes by
 raising `CompilationError`. It does not perform semantic validation, access
 Spark, or persist anything.
@@ -1183,22 +1238,26 @@ imports and behavior out of compile-only paths where practical.
 | `rules_engine.__init__` | Defines the supported top-level package surface. It imports compile-only objects directly and lazily imports Spark-backed objects so YAML tooling can load without paying the full Spark import cost. | Top-level exports such as `RulesEngineService`, `YamlRulesetCompiler`, `RulesetValidator`, `SparkRulesEngineRuntime`, and `__version__`. |
 | `rules_engine.analytics` | Runs the production Spark evaluator and aggregates rule match behavior. It calculates total, no-match, error, match, first-match, dead-rule, and broad-rule measures and retains a lazy DataFrame of clean no-match rows. | `RuleCoverage`, `CoverageReport`, `RulesetCoverageAnalyzer`. |
 | `rules_engine.authoring` | Builds the deterministic, JSON-compatible contract consumed by authoring applications. It exposes engine-owned operator behavior, enums, literal type hints, function contracts, and build identity without presentation metadata. | `build_authoring_manifest`, `AUTHORING_MANIFEST_VERSION`. |
-| `rules_engine.compiler_yaml` | Parses strict YAML with duplicate-key protection and converts canonical mappings into immutable dataclasses. It applies only structural defaults, preserves fractional values exactly, parses supported typed dates and decimals, and rejects unknown keys and ambiguous operand shapes. | `YamlRulesetCompiler`. |
+| `rules_engine.compiler_yaml` | Parses strict YAML with duplicate-key protection and converts canonical mappings into frozen dataclasses. It applies only structural defaults, preserves fractional values exactly, parses supported typed dates and decimals, and rejects unknown keys and ambiguous operand shapes. | `YamlRulesetCompiler`. |
 | `rules_engine.dataframe_evaluation` | Owns the one lazy source-plus-results Spark plan created by DataFrame evaluation. It exposes the key-only result projection, applies explicit assignment outcomes to business columns without a join, preserves column order, handles atomic struct values, and manages optional shared persistence. | `DataFrameEvaluation`. |
 | `rules_engine.enums` | Holds the only accepted lifecycle, logical, operand, comparison, and diagnostic object values. Centralizing these strings prevents aliases from drifting between compilation, validation, runtime behavior, and persistence. | `RulesetStatus`, `LogicalOperator`, `OperandKind`, `ComparisonOperator`, `ObjectType`. |
 | `rules_engine.exceptions` | Defines the package exception hierarchy so callers can distinguish compilation, validation, registry, and repository failures from ordinary Python errors. | `RulesEngineError`, `CompilationError`, `ValidationFailedError`, `RegistryError`, `RepositoryError`. |
 | `rules_engine.exporter_yaml` | Converts compiled dataclasses back to canonical YAML. It preserves explicit identities, nested groups, exact decimals and dates, operand forms, default values, and mappings so export and recompile produce the same model. | `YamlRulesetExporter`. |
 | `rules_engine.human_readable` | Renders rules, groups, operands, operators, and assignments as readable text for reviewers and full-audit explanations. It formats authored logic; it does not evaluate or persist rules. | `HumanReadableRulesetFormatter`. |
-| `rules_engine.models` | Defines the canonical immutable rule tree, operands, assignments, persistence rows, validation results, and runtime traces. These dataclasses are the shared language used by every other module. | `Ruleset`, `Rule`, `ConditionGroup`, `Condition`, operand classes, `Assignment`, row and trace models. |
+| `rules_engine.models` | Defines frozen rule-tree dataclasses, operands, assignments, persistence rows, validation results, and runtime traces. Evaluation owns a private snapshot of nested metadata. | `Ruleset`, `Rule`, `ConditionGroup`, `Condition`, operand classes, `Assignment`, row and trace models. |
 | `rules_engine.publish` | Coordinates publication. It runs semantic validation and calls the repository only when validation passes. | `PublishService`. |
 | `rules_engine.registry` | Keeps custom-function metadata and executable implementations in memory under one exact function name. It validates unique argument contracts, binds optional defaults in declared order, persists rich argument metadata, enforces unique registration, and provides focused errors for unknown specs or missing implementations. | `CustomFunctionArgSpec`, `CustomFunctionSpec`, `FunctionRegistry`, `CustomFunction`. |
 | `rules_engine.repository` | Owns the Delta table names, schemas, DDL, immutable publication, explicit-version loading, retirement, and registry metadata merge behavior. It detects duplicate identities instead of selecting an arbitrary row. | `RulesEngineTableNames`, `RulesetRepository`, `SparkDeltaRulesetRepository`. |
 | `rules_engine.runtime` | Implements the deterministic pure-Python row evaluator used inside the Spark UDF. It evaluates Boolean trees, resolves operands and null defaults, calls registered functions, performs comparisons, commits assignments atomically by rule, and returns explicit `{applied, value}` assignment outcomes. | `SparkRowEvaluator` and runtime result/trace behavior used by higher-level APIs. |
-| `rules_engine.serializer` | Creates deterministic canonical JSON, SHA-256 content hashes, queryable summary counts, and `RulesetVersionRow` objects. It also reconstructs a `Ruleset` while preserving supported Python literal types. | `DeltaRowSerializer`. |
+| `rules_engine.serializer` | Creates persisted rows, hashes and counts; verifies exact payload bytes and indexed identity before decoding. | `DeltaRowSerializer`. |
+| `rules_engine.canonical_values` | Owns supported literal types, scalar-hint normalization, mapping-key checks, and deterministic extended JSON. | Shared normalization, validation, and JSON codec helpers. |
+| `rules_engine.model_codec` | Encodes and decodes the explicitly versioned canonical model format, including unambiguous function-argument nodes. | `encode_ruleset`, `decode_ruleset`, `PERSISTENCE_FORMAT_VERSION`. |
+| `rules_engine.decimal_math` | Isolates decimal precision, rounding, exponent bounds, and traps from caller state. | Shared exact arithmetic context and subtraction. |
+| `rules_engine.traversal` | Traverses rules, groups, conditions and operands with explicit active-only and literal-boundary policies. | Shared traversal helpers. |
 | `rules_engine.service` | Provides the public facade documented above. It wires the package components into the normal compile, publish, load, describe, evaluate, cover, and retire workflows. | `RulesEngineService`. |
 | `rules_engine.spark_runtime` | Adapts the pure row evaluator to a typed Spark Python UDF. It validates key metadata and the incoming schema, infers typed `{applied, value}` assignment outcomes, sends only required source columns to workers, checks callable serialization, builds ordered compact/full-audit fields, and returns one lazy `DataFrameEvaluation`. | `SparkRulesEngineRuntime`, `required_source_columns`. |
 | `rules_engine.spark_types` | Provides shared exact-fit helpers for Spark integer, decimal, date, and timestamp handling. We use it to prevent silent overflow, precision loss, and incompatible temporal assignments. | `decimal_literal_type`, `decimal_value_fits`, shared type constants. |
-| `rules_engine.spark_validator` | Extends semantic validation with actual Spark schema checks. It verifies field existence, default compatibility, function return hints, collection and temporal comparisons, assignment target consistency, and lossless type coercion, then builds the assignment `StructType`. | `SparkRulesetCompatibilityValidator`. |
+| `rules_engine.spark_validator` | Performs one semantic/schema preparation pass, returning diagnostics, assignment types and required source columns. It checks fields, defaults, function contracts, collections, temporal comparisons, and lossless assignment compatibility. | `SparkRulesetCompatibilityValidator`, `PreparedSparkSchema`. |
 | `rules_engine.standard_functions` | Implements and declares 58 deterministic text, regex, conversion, exact-decimal, null-composition, calendar, business-day, and array functions. It keeps optional defaults, argument types, allowed configuration values, permissions, return hints, and implementation versions beside each callable. | Standard callables, `register_standard_functions`, `standard_function_rows`. |
 | `rules_engine.validator` | Applies semantic rules that are independent of a DataFrame schema. It checks ownership, non-empty content, unique IDs/orders, operand arity, null options, assignment dependencies, and custom-function permissions and argument contracts. | `RulesetValidator`. |
 | `rules_engine.version` | Stores the installed package version used by the top-level package and the `rules_engine_engine_version` output column. | `__version__`. |
@@ -1209,6 +1268,7 @@ imports and behavior out of compile-only paths where practical.
 docs/
   rules_engine_system_test_summary.md
   rules_engine_unit_test_summary.md
+  rules_engine_test_inventory.md       Generated test counts
 examples/
   rulesets/
     rules_engine_system_testing_rules.yaml
@@ -1217,20 +1277,38 @@ examples/
   rules_engine_quickstart_guide.py
 notebooks/
   99.rules_engine_system_tests.py
+scripts/
+  test_inventory.py                    Generate/check test documentation
+  check_wheel.py                       Verify packaged source and version
 src/
   rules_engine/                        Package source
 tests/                                 Unit and Spark tests
 outputs/                               Additional generated YAML artifacts
+.github/workflows/ci.yml                Spark matrix and artifact checks
 ```
 
 ## Development checks
 
 ```powershell
+python -m pip install -e ".[dev]"
 python -m ruff check .
 python -m pytest tests
+python scripts/test_inventory.py --check
+python -m build --wheel
+python scripts/check_wheel.py dist
 ```
 
 Spark tests are skipped unless `RULES_ENGINE_RUN_SPARK_TESTS=1` is set.
+The CI workflow runs the complete suite with Java 17 on Python 3.10 / Spark
+3.5.6 and Python 3.12 / Spark 4.2.0. Development tools and CI Spark versions
+are pinned; GitHub Actions are pinned to commit IDs. Set `PYSPARK_PYTHON` to
+the same interpreter used for tests when running locally.
+
+After adding or removing tests, run `python scripts/test_inventory.py` and
+include the generated [inventory](docs/rules_engine_test_inventory.md) in the
+change. CI verifies its collected counts. The wheel check compares packaged
+source bytes and version with the checkout to detect stale build content.
+
 Repository-wide `ruff format --check` is not a release gate. Changed Python
 source and tests must still pass `ruff check .`, `git diff --check`, and the
 applicable tests.

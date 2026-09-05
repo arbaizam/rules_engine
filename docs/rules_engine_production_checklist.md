@@ -2,15 +2,21 @@
 
 ## Local gates
 
-- [ ] Run the complete pytest suite with real Spark workers enabled.
+- [ ] Install development dependencies with `python -m pip install -e ".[dev]"`.
+- [ ] Run the complete pytest suite with real Spark workers enabled on the
+  supported CI combinations: Python 3.10 / Spark 3.5.6 and Python 3.12 /
+  Spark 4.2.0, using Java 17.
 - [ ] Run `ruff check .`.
-- [ ] Build the wheel and inspect its package version.
+- [ ] Run `python scripts/test_inventory.py --check` and update the generated
+  inventory when test collection changes.
+- [ ] Build the wheel and run `python scripts/check_wheel.py dist` to verify
+  its version and source contents.
 - [ ] Run `git diff --check`.
 
 ## Target Databricks Runtime gates
 
 - [ ] Install the wheel and restart the target cluster.
-- [ ] Run all 18 tests in `notebooks/99.rules_engine_system_tests.py` and retain
+- [ ] Run all 22 tests in `notebooks/99.rules_engine_system_tests.py` and retain
   the output.
 - [ ] Run a bounded canary with `full_audit=true` against representative data,
   including a target assigned by at least three matching rules.
@@ -23,6 +29,12 @@
 - Every non-final event points to the immediate next event for its target.
 - Every event for a target shares the same non-null `final_winning_*` values.
 - The effective event's proposed value equals the emitted assignment value.
+- Full-width decimal values and zero-tolerance comparisons remain exact.
+- Spark timestamp fields compare with offset-bearing literals by instant.
+- Compact and full-audit business results agree, including overwrites of
+  existing non-finite values and captured custom-function errors.
+- The ruleset payload and referenced-function manifest each have a verifiable
+  content hash; persisted identity and payload identity agree.
 
 Stop promotion for any business-result drift, null final-winner IDs, worker
 serialization errors, or failing system tests.

@@ -609,13 +609,7 @@ def test_compiled_literals_honor_every_fixed_spark_type_hint():
     assert set(representatives) == set(SPARK_TYPE_HINTS)
     for value_type, authored in representatives.items():
         payload = _payload({"target": {"literal": authored, "value_type": value_type}})
-        literal = (
-            YamlRulesetCompiler()
-            .compile_payload(payload)
-            .rules[0]
-            .assignments[0]
-            .value.value
-        )
+        literal = YamlRulesetCompiler().compile_payload(payload).rules[0].assignments[0].value.value
         declared_type = SPARK_TYPE_HINTS[value_type]
         if isinstance(declared_type, T.DecimalType):
             assert isinstance(literal, Decimal)
@@ -987,9 +981,7 @@ def test_mapping_literal_rejects_struct_shape_and_nested_type_conflicts():
     )
 
     for literal in invalid_literals:
-        ruleset = YamlRulesetCompiler().compile_payload(
-            _payload({"details": {"literal": literal}})
-        )
+        ruleset = YamlRulesetCompiler().compile_payload(_payload({"details": {"literal": literal}}))
         result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
 
         assert "SPARK_ASSIGNMENT_TARGET_TYPE_INCOMPATIBLE" in _checks(result)
@@ -1091,15 +1083,15 @@ def test_spark_validator_rejects_timestamp_representation_condition_change():
     not hasattr(T, "TimestampNTZType"),
     reason="Spark version does not expose TimestampNTZType.",
 )
-def test_timestamp_ntz_literal_mismatch_explains_value_type_fix():
-    """A bare datetime diagnostic names the supported NTZ authoring hint."""
+def test_naive_timestamp_literal_mismatch_explains_ntz_representation():
+    """A naive literal cannot silently adopt the timezone of an instant column."""
     payload = _payload({"bucket": "A"}, condition_field="event_at")
     payload["rules"][0]["when"]["all"][0]["operator"] = "ge"
     payload["rules"][0]["when"]["all"][0]["right"] = {
         "literal": datetime(2026, 1, 1)  # noqa: DTZ001 - TimestampNTZ is naive.
     }
     ruleset = YamlRulesetCompiler().compile_payload(payload)
-    schema = T.StructType([T.StructField("event_at", T.TimestampNTZType(), True)])
+    schema = T.StructType([T.StructField("event_at", T.TimestampType(), True)])
 
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
     issue = next(
