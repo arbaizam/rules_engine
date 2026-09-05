@@ -9,7 +9,7 @@ import pytest
 from rules_engine.canonical_values import canonical_json_value, decode_json_types
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exceptions import CompilationError, RepositoryError
-from rules_engine.model_codec import PERSISTENCE_FORMAT_VERSION
+from rules_engine.model_codec import PERSISTENCE_FORMAT_VERSION, decode_ruleset, encode_ruleset
 from rules_engine.models import CustomFunctionOperand, FieldOperand, LiteralOperand
 from rules_engine.registry import CustomFunctionArgSpec, CustomFunctionSpec, FunctionRegistry
 from rules_engine.runtime import SparkRowEvaluator
@@ -173,6 +173,22 @@ def test_persistence_disambiguates_mapping_data_and_dynamic_argument_operands():
     assert serializer.content_hash(restored) == row.content_hash
     assert isinstance(restored.rules[0].assignments[0].value.args["metadata"], dict)
     assert json.loads(row.payload_json)["$rules_engine_format"] == PERSISTENCE_FORMAT_VERSION
+
+
+@pytest.mark.parametrize(
+    "item",
+    [[], {"$rules_engine_arg": "mapping", "value": {}}],
+)
+def test_persistence_codec_reports_unhashable_set_arguments_as_value_errors(item):
+    """Malformed set elements fail with the codec's normal domain exception."""
+    payload = encode_ruleset(
+        _with_assignment_value(CustomFunctionOperand("probe", {"values": {1}}))
+    )
+    args = payload["rules"][0]["assign"][0]["value"]["custom_function"]["args"]
+    args["values"]["value"] = [item]
+
+    with pytest.raises(ValueError, match="Persisted set argument.*hashable"):
+        decode_ruleset(payload)
 
 
 def test_persistence_preserves_binary_float_and_decimal_kinds_without_authoring_coercion():

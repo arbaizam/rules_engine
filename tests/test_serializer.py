@@ -1,11 +1,13 @@
 import hashlib
 import json
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
 
 from rules_engine.compiler_yaml import YamlRulesetCompiler
+from rules_engine.models import LiteralOperand
 from rules_engine.serializer import (
     DeltaRowSerializer,
     _canonical_json_dumps,
@@ -99,15 +101,65 @@ def test_serializer_stamps_provenance_hash_and_summary_counts():
         }
     )
 
-    row = DeltaRowSerializer().serialize_ruleset_version(ruleset)
+    default_provenance = DeltaRowSerializer().serialize_ruleset_version(ruleset)
+    assert default_provenance.published_by is None
+    assert default_provenance.published_at is None
+    assert (
+        default_provenance.rule_count,
+        default_provenance.condition_count,
+        default_provenance.assignment_count,
+    ) == (1, 1, 1)
+
+    original_rule = ruleset.rules[0]
+    nested_condition = replace(original_rule.root_group.conditions[0], condition_id="nested")
+    first_rule = replace(
+        original_rule,
+        root_group=replace(
+            original_rule.root_group,
+            groups=(replace(
+                original_rule.root_group,
+                condition_group_id="nested",
+                conditions=(nested_condition,),
+            ),),
+        ),
+        assignments=(
+            original_rule.assignments[0],
+            replace(original_rule.assignments[0], assignment_id="second", target_field="score"),
+        ),
+    )
+    second_rule = replace(
+        original_rule,
+        rule_id="r2",
+        rule_name="Rule 2",
+        rule_order=2,
+        root_group=replace(
+            original_rule.root_group,
+            condition_group_id="second",
+            conditions=tuple(
+                replace(nested_condition, condition_id=f"second:{index}")
+                for index in range(3)
+            ),
+        ),
+        assignments=(replace(
+            original_rule.assignments[0], assignment_id="third", target_field="review"
+        ),),
+    )
+    ruleset = replace(ruleset, rules=(first_rule, second_rule))
+    row = DeltaRowSerializer().serialize_ruleset_version(
+        ruleset, published_by="approver", published_at="2026-09-05T15:30:00Z"
+    )
 
     assert row.owner == "Rules Team"
     assert row.owner_department == "ALM Engineering"
-    assert row.published_by is None
+    assert row.status == "published"
+    assert row.published_by == "approver"
+    assert row.published_at == "2026-09-05T15:30:00Z"
+    assert row.retired_by is None
+    assert row.retired_at is None
     assert len(row.content_hash) == 64
-    assert row.rule_count == 1
-    assert row.condition_count == 1
-    assert row.assignment_count == 1
+    assert row.rule_count == 2
+    assert row.condition_count == 5
+    assert row.assignment_count == 3
 
 
 def test_serializer_counts_nested_custom_function_operands():
@@ -235,6 +287,24 @@ def test_content_hash_and_payload_json_are_deterministic():
 
     assert first.payload_json == second.payload_json
     assert first.content_hash == second.content_hash
+
+    first_value = {"b": set([2, 10]), "a": {"y": 2, "x": 1}}
+    reordered_value = {"a": {"x": 1, "y": 2}, "b": set([10, 2])}
+    expected_literal_json = (
+        '{"a":{"x":1,"y":2},"b":{"$rules_engine_type":"set","value":[10,2]}}'
+    )
+    assert _canonical_json_dumps(first_value) == expected_literal_json
+    assert _canonical_json_dumps(reordered_value) == expected_literal_json
+
+    def with_literal(value):
+        rule = ruleset.rules[0]
+        assignment = replace(rule.assignments[0], value=LiteralOperand(value))
+        return replace(ruleset, rules=(replace(rule, assignments=(assignment,)),))
+
+    first_mapping = serializer.serialize_ruleset_version(with_literal(first_value))
+    reordered_mapping = serializer.serialize_ruleset_version(with_literal(reordered_value))
+    assert first_mapping.payload_json == reordered_mapping.payload_json
+    assert first_mapping.content_hash == reordered_mapping.content_hash
 
 
 def test_deserializer_reconstructs_canonical_models():

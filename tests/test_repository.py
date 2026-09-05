@@ -1,6 +1,8 @@
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 
 import pytest
+from pyspark.sql import Row
 
 import rules_engine.repository as repository_module
 from rules_engine.compiler_yaml import YamlRulesetCompiler
@@ -68,11 +70,24 @@ class FakeSpark:
 
 
 class FakePredicate:
+    """Evaluate the equality/conjunction subset used by repository selection."""
+
+    def __init__(self, evaluate):
+        self.evaluate = evaluate
+
     def __eq__(self, other):
-        return self
+        return FakePredicate(lambda row: self.evaluate(row) == other)
 
     def __and__(self, other):
-        return self
+        return FakePredicate(lambda row: self.evaluate(row) and other.evaluate(row))
+
+
+def _selection_functions(monkeypatch):
+    monkeypatch.setattr(
+        repository_module,
+        "F",
+        SimpleNamespace(col=lambda name: FakePredicate(lambda row: row[name])),
+    )
 
 
 class FakeLoadDataFrame:
@@ -80,11 +95,11 @@ class FakeLoadDataFrame:
         self.rows = rows
 
     def where(self, predicate):
-        return self
+        return FakeLoadDataFrame([row for row in self.rows if predicate.evaluate(row)])
 
     def limit(self, count):
         assert count == 2
-        return self
+        return FakeLoadDataFrame(self.rows[:count])
 
     def collect(self):
         return self.rows
@@ -186,16 +201,29 @@ def test_save_published_allows_distinct_versions_for_same_ruleset_name():
     Fails when: The repository enforces a single published sibling per ruleset_name.
     """
     repo = _repository()
-    saved_versions = []
-    repo._ruleset_row_dict = lambda ruleset_id, version: None
-    repo._ruleset_row_dict_by_name_version = lambda ruleset_name, version: None
-    repo._write_rows = lambda table_name, rows, schema: saved_versions.extend(
-        row["version"] for row in rows
+    saved_rows = []
+    repo._ruleset_row_dict = lambda ruleset_id, version: next(
+        (row for row in saved_rows if (row["ruleset_id"], row["version"]) == (ruleset_id, version)),
+        None,
     )
+    repo._ruleset_row_dict_by_name_version = lambda ruleset_name, version: next(
+        (row for row in saved_rows
+         if (row["ruleset_name"], row["version"]) == (ruleset_name, version)),
+        None,
+    )
+    repo._write_rows = lambda table_name, rows, schema: saved_rows.extend(rows)
 
+    repo.save_published(_ruleset(ruleset_name="Ruleset", version="1"))
     repo.save_published(_ruleset(ruleset_name="Ruleset", version="2"))
 
-    assert saved_versions == ["2"]
+    assert [(row["ruleset_name"], row["version"], row["status"]) for row in saved_rows] == [
+        ("Ruleset", "1", "published"), ("Ruleset", "2", "published")
+    ]
+    with pytest.raises(RepositoryError, match="version=2"):
+        repo.save_published(_ruleset(ruleset_name="Ruleset", version="2"))
+    with pytest.raises(RepositoryError, match="ruleset_name=Ruleset, version=1"):
+        repo.save_published(_ruleset(ruleset_id="another-id", version="1"))
+    assert len(saved_rows) == 2
 
 
 def test_save_published_requires_explicit_table_creation():
@@ -234,13 +262,9 @@ def test_load_published_requires_explicit_table_creation():
 
 def test_load_published_rejects_duplicate_rows_for_explicit_version(monkeypatch):
     """Pinned loads fail loudly when the immutable version key is not unique."""
-    monkeypatch.setattr(
-        repository_module,
-        "F",
-        SimpleNamespace(col=lambda name: FakePredicate()),
-    )
+    _selection_functions(monkeypatch)
     repo = SparkDeltaRulesetRepository(
-        FakeLoadSpark([object(), object()]),
+        FakeLoadSpark([Row(ruleset_name="Ruleset", version="1", status="published")] * 2),
         RulesEngineTableNames(
             ruleset_versions="ruleset_versions",
             function_registry="function_registry",
@@ -254,14 +278,69 @@ def test_load_published_rejects_duplicate_rows_for_explicit_version(monkeypatch)
         repo.load_published("Ruleset", version="1")
 
 
+@pytest.mark.parametrize("version", [None, "1"])
+def test_load_published_selects_and_deserializes_one_matching_published_row(monkeypatch, version):
+    """Name, lifecycle and optional version select the authoritative canonical payload."""
+    _selection_functions(monkeypatch)
+    serializer = _repository().serializer
+    expected = _ruleset()
+    selected = serializer.serialize_ruleset_version(expected)
+    rows = [
+        serializer.serialize_ruleset_version(_ruleset(ruleset_name="Other", ruleset_id="other")),
+        replace(selected, status="retired"),
+    ]
+    if version is not None:
+        rows.append(serializer.serialize_ruleset_version(_ruleset(version="2")))
+    # Distractors precede the desired row: limiting before filtering must fail.
+    rows.append(selected)
+    repo = SparkDeltaRulesetRepository(
+        FakeLoadSpark([Row(**asdict(row)) for row in rows]),
+        RulesEngineTableNames("ruleset_versions", "function_registry"),
+    )
+
+    loaded = repo.load_published("Ruleset", version=version)
+
+    assert loaded == expected
+    assert serializer.content_hash(loaded) == selected.content_hash
+
+
+@pytest.mark.parametrize("version", [None, "1"])
+def test_load_published_rejects_no_matching_published_row(monkeypatch, version):
+    """Unrelated and retired metadata cannot satisfy a missing publication."""
+    _selection_functions(monkeypatch)
+    rows = [
+        Row(ruleset_name="Other", version="1", status="published"),
+        Row(ruleset_name="Ruleset", version="1", status="retired"),
+    ]
+    if version is not None:
+        rows.append(Row(ruleset_name="Ruleset", version="2", status="published"))
+    repo = SparkDeltaRulesetRepository(
+        FakeLoadSpark(rows), RulesEngineTableNames("ruleset_versions", "function_registry"),
+    )
+
+    with pytest.raises(RepositoryError, match="Published ruleset not found: Ruleset"):
+        repo.load_published("Ruleset", version=version)
+
+
+def test_load_published_requires_version_when_published_siblings_exist(monkeypatch):
+    """Unpinned loading cannot arbitrarily choose between published versions."""
+    _selection_functions(monkeypatch)
+    repo = SparkDeltaRulesetRepository(
+        FakeLoadSpark([
+            Row(ruleset_name="Ruleset", version=version, status="published")
+            for version in ("1", "2")
+        ]),
+        RulesEngineTableNames("ruleset_versions", "function_registry"),
+    )
+
+    with pytest.raises(RepositoryError, match="Multiple published versions.*specify version"):
+        repo.load_published("Ruleset")
+
+
 def test_retire_rejects_duplicate_stable_identity_before_update(monkeypatch):
     """Retirement cannot update several rows sharing one stable identity."""
-    monkeypatch.setattr(
-        repository_module,
-        "F",
-        SimpleNamespace(col=lambda name: FakePredicate()),
-    )
-    spark = FakeLoadSpark([object(), object()])
+    _selection_functions(monkeypatch)
+    spark = FakeLoadSpark([Row(ruleset_id="rs1", version="1")] * 2)
     repo = SparkDeltaRulesetRepository(
         spark,
         RulesEngineTableNames(
@@ -479,9 +558,31 @@ def test_save_function_registry_rows_requires_explicit_table_creation():
     assert spark.created_frames == []
 
 
-def test_write_rows_appends_by_name_only_after_table_existence_check():
-    """Existing metadata writes align columns by name and cannot create on a failed check."""
+@pytest.mark.parametrize("update_existing", [False, True])
+def test_registry_merge_failure_drops_its_staging_view(monkeypatch, update_existing):
+    """Both registry save modes clean up the exact temporary view after SQL failure."""
     spark = FakeSpark()
+    repo = SparkDeltaRulesetRepository(
+        spark, RulesEngineTableNames("ruleset_versions", "function_registry"),
+    )
+
+    def fail_merge(query):
+        assert "MERGE INTO" in query
+        assert spark.created_frames[0].view_name in query
+        raise RuntimeError("merge rejected")
+
+    monkeypatch.setattr(spark, "sql", fail_merge)
+    with pytest.raises(RuntimeError, match="merge rejected"):
+        repo.save_function_registry_rows(standard_function_rows()[:1], update_existing=update_existing)
+
+    assert len(spark.created_frames) == 1
+    assert spark.catalog.dropped_views == [spark.created_frames[0].view_name]
+
+
+@pytest.mark.parametrize("tables_exist", [True, False])
+def test_write_rows_appends_by_name_only_after_table_existence_check(tables_exist, monkeypatch):
+    """Existing metadata writes align columns by name and cannot create on a failed check."""
+    spark = FakeSpark(tables_exist=tables_exist)
     repo = SparkDeltaRulesetRepository(
         spark,
         RulesEngineTableNames(
@@ -490,8 +591,29 @@ def test_write_rows_appends_by_name_only_after_table_existence_check():
         ),
     )
 
+    events = []
+    original_create = spark.createDataFrame
+
+    def table_exists(name):
+        events.append(("exists", name))
+        return tables_exist
+
+    def create_frame(*args, **kwargs):
+        events.append(("create", None))
+        return original_create(*args, **kwargs)
+
+    monkeypatch.setattr(spark.catalog, "tableExists", table_exists)
+    monkeypatch.setattr(spark, "createDataFrame", create_frame)
+    if not tables_exist:
+        with pytest.raises(RepositoryError, match="metadata table does not exist"):
+            repo._write_rows("ruleset_versions", [{"ruleset_id": "rs1"}], repo.ruleset_version_schema)
+        assert events == [("exists", "ruleset_versions")]
+        assert spark.created_frames == []
+        return
+
     repo._write_rows("ruleset_versions", [{"ruleset_id": "rs1"}], repo.ruleset_version_schema)
 
+    assert events == [("exists", "ruleset_versions"), ("create", None)]
     writer = spark.created_frames[0].write
     assert writer.format_name == "delta"
     assert writer.mode_name == "append"

@@ -17,6 +17,7 @@ class RecordingRepository:
         self.saved_function_rows = None
         self.update_existing = None
         self.retired = None
+        self.load_calls = []
 
     def create_base_tables(self, mode="error"):
         self.created_mode = mode
@@ -35,6 +36,7 @@ class RecordingRepository:
         self.published_by = published_by
 
     def load_published(self, ruleset_name, version=None):
+        self.load_calls.append((ruleset_name, version))
         if self.saved_ruleset is None or self.saved_ruleset.ruleset_name != ruleset_name:
             raise RepositoryError(f"Published ruleset not found: {ruleset_name}")
         return self.saved_ruleset
@@ -130,6 +132,7 @@ def test_service_publish_yaml_text_and_loads_published_ruleset():
     assert ruleset.ruleset_id == "service_ruleset"
     assert loaded == repository.saved_ruleset
     assert repository.published_by == "tester"
+    assert repository.load_calls == [("Service Ruleset", "1")]
 
 
 def test_service_create_tables_save_standard_functions_and_retire():
@@ -316,6 +319,7 @@ rules:
 
     rows = service.describe_rules(ruleset_name="Trace Ruleset", version="1")
 
+    assert repository.load_calls == [("Trace Ruleset", "1")]
     assert rows == [
         {
             "rule_id": "r1",
@@ -351,3 +355,68 @@ def test_service_publish_accepts_compiled_ruleset():
     service.publish(ruleset, published_by="tester")
 
     assert repository.saved_ruleset.ruleset_id == "service_ruleset"
+
+
+def test_service_publishes_yaml_path_with_provenance(tmp_path):
+    """Path publication reads the supplied file and persists the returned model and actor."""
+    path = tmp_path / "rules.yaml"
+    path.write_text(_yaml_text(), encoding="utf-8")
+    repository = RecordingRepository()
+    service = _service(repository)
+
+    result = service.publish_yaml_path(path, published_by="path-author")
+
+    assert result == YamlRulesetCompiler().compile_text(_yaml_text())
+    assert repository.saved_ruleset is result
+    assert repository.published_by == "path-author"
+
+
+@pytest.mark.parametrize("supplied", [False, True])
+@pytest.mark.parametrize("operation", ["describe", "evaluate", "coverage"])
+def test_service_resolves_pinned_or_supplied_ruleset_and_forwards_options(
+    monkeypatch, supplied, operation,
+):
+    """Each public read uses the pinned version, or the explicit model ahead of any name."""
+    repository = RecordingRepository()
+    service = _service(repository)
+    ruleset = service.publish_yaml_text(_yaml_text())
+    captured = []
+
+    def describe(actual):
+        captured.append((None, actual, {}))
+        return "described"
+
+    def capture(df, actual, **options):
+        captured.append((df, actual, options))
+        return "evaluated"
+
+    monkeypatch.setattr(service.rule_formatter, "describe_rules", describe)
+    monkeypatch.setattr(service.runtime, "evaluate_dataframe", capture)
+    monkeypatch.setattr(service.coverage_analyzer, "analyze", capture)
+    resolution = {
+        "ruleset": ruleset if supplied else None,
+        "ruleset_name": "must-not-load" if supplied else "Service Ruleset",
+        "version": "other-version" if supplied else "1",
+    }
+    if operation == "describe":
+        assert service.describe_rules(**resolution) == "described"
+        expected = (None, ruleset, {})
+    elif operation == "coverage":
+        assert service.coverage_report(
+            "frame", **resolution, broad_match_threshold=0.75, column_prefix="audit.coverage",
+        ) == "evaluated"
+        expected = ("frame", ruleset, {
+            "broad_match_threshold": 0.75, "column_prefix": "audit.coverage",
+        })
+    else:
+        assert service.evaluate_dataframe(
+            "frame", **resolution, key_columns=["id"], column_prefix="audit",
+            fail_on_error=False, include_error_traceback=True, full_audit=True,
+        ) == "evaluated"
+        expected = ("frame", ruleset, {
+            "key_columns": ["id"], "column_prefix": "audit", "fail_on_error": False,
+            "include_error_traceback": True, "full_audit": True,
+        })
+    assert captured == [expected]
+    assert captured[0][1] is ruleset
+    assert repository.load_calls == ([] if supplied else [("Service Ruleset", "1")])

@@ -16,7 +16,7 @@ from typing import Any
 import yaml
 
 from rules_engine.canonical_values import (
-    normalize_literal,
+    _PreservedFloat,
     normalize_mapping_keys,
     validate_literal,
     validate_string_mapping_keys,
@@ -36,7 +36,7 @@ from rules_engine.models import (
 
 
 class _DecimalSafeDumper(yaml.SafeDumper):
-    """Safe dumper that emits Decimal values as YAML numeric scalars."""
+    """Safe dumper that keeps Decimal and binary-float kinds distinguishable."""
 
 
 def _represent_decimal(dumper: _DecimalSafeDumper, value: Decimal):
@@ -44,6 +44,11 @@ def _represent_decimal(dumper: _DecimalSafeDumper, value: Decimal):
         "tag:yaml.org,2002:float",
         str(value),
     )
+
+
+def _represent_float(dumper: _DecimalSafeDumper, value: float):
+    """Preserve binary-float identity without inventing a literal type hint."""
+    return dumper.represent_scalar("!rules_engine/float", repr(value))
 
 
 def _represent_set(dumper: _DecimalSafeDumper, value: set[Any]):
@@ -60,6 +65,8 @@ def _represent_tuple(dumper: _DecimalSafeDumper, value: tuple[Any, ...]):
 
 
 _DecimalSafeDumper.add_representer(Decimal, _represent_decimal)
+_DecimalSafeDumper.add_representer(float, _represent_float)
+_DecimalSafeDumper.add_representer(_PreservedFloat, _represent_float)
 _DecimalSafeDumper.add_representer(set, _represent_set)
 _DecimalSafeDumper.add_representer(tuple, _represent_tuple)
 
@@ -81,8 +88,8 @@ class YamlRulesetExporter:
         Returns
         -------
         dict[str, Any]
-            Canonical authoring payload used by the Decimal-aware
-            :meth:`export_text` renderer.
+            Canonical authoring payload that preserves numeric kinds through
+            ``compile_payload`` or the :meth:`export_text` renderer.
         """
         payload: dict[str, Any] = {
             "ruleset_id": ruleset.ruleset_id,
@@ -215,7 +222,21 @@ class YamlRulesetExporter:
         Recursively convert Python values into YAML-safe scalar/list/dict values.
         """
         validate_literal(value)
-        return normalize_literal(value, normalize_untyped_float=False)
+
+        def preserve_float_kind(item: Any) -> Any:
+            if isinstance(item, float):
+                return _PreservedFloat(item)
+            if isinstance(item, Mapping):
+                return {key: preserve_float_kind(child) for key, child in item.items()}
+            if isinstance(item, list):
+                return [preserve_float_kind(child) for child in item]
+            if isinstance(item, tuple):
+                return tuple(preserve_float_kind(child) for child in item)
+            if isinstance(item, set):
+                return {preserve_float_kind(child) for child in item}
+            return item
+
+        return preserve_float_kind(value)
 
     def _export_arg_value(self, value: Any) -> Any:
         """
@@ -233,11 +254,14 @@ class YamlRulesetExporter:
         if isinstance(value, set):
             return {self._export_arg_value(item) for item in value}
         if isinstance(value, Mapping):
-            if set(value) & {"field", "assigned", "literal", "custom_function"}:
-                # Explicitly escape static mappings that resemble operand syntax.
-                # The canonical persistence codec also supports dynamic mappings.
-                return {"literal": self._export_value(value)}
-            return self._export_mapping(value, self._export_arg_value)
+            exported = self._export_mapping(value, self._export_arg_value)
+            if set(value) & {
+                "field", "assigned", "literal", "custom_function", "$rules_engine_mapping"
+            }:
+                # Preserve raw mappings separately from LiteralOperand, including
+                # nested operands and data that uses the escape key itself.
+                return {"$rules_engine_mapping": exported}
+            return exported
         return self._export_value(value)
 
     def _export_mapping(

@@ -69,7 +69,6 @@ class _FunctionBinding:
 class _PreparedRuleset:
     """Ruleset metadata reused across repeated row evaluations."""
 
-    source: Ruleset
     active_rules: tuple[Rule, ...]
     assignment_targets: tuple[str, ...]
 
@@ -201,7 +200,6 @@ class SparkRowEvaluator:
         for rule in active_rules:
             self._prepare_rule(rule)
         prepared = _PreparedRuleset(
-            source=snapshot,
             active_rules=active_rules,
             assignment_targets=tuple(
                 dict.fromkeys(
@@ -777,7 +775,7 @@ class SparkRowEvaluator:
         direct argument. Copying at both boundaries prevents mutation of prepared
         metadata, original row values, or an earlier committed assignment.
         """
-        if isinstance(value, (Mapping, list, tuple, set)):
+        if isinstance(value, (Mapping, list, tuple, set, bytearray)):
             return deepcopy(value)
         return value
 

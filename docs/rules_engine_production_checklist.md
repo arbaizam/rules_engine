@@ -5,13 +5,15 @@
 - [ ] Install development dependencies with `python -m pip install -e ".[dev]"`.
 - [ ] Run the complete pytest suite with real Spark workers enabled on the
   supported CI combinations: Python 3.10 / Spark 3.5.6 and Python 3.12 /
-  Spark 4.2.0, using Java 17.
+  Spark 4.2.0, using Java 17. CI covers UTC, America/New_York,
+  Australia/Lord_Howe, Asia/Kathmandu, and Pacific/Chatham OS timezones.
 - [ ] Run `ruff check .`.
 - [ ] Run `python scripts/test_inventory.py --check` and update the generated
   inventory when test collection changes.
 - [ ] Build the wheel and run `python scripts/check_wheel.py dist` to verify
   its version and source contents.
-- [ ] Run `git diff --check`.
+- [ ] Run `git diff --check` for pending changes and
+  `git show --check --format=oneline --diff-merges=first-parent HEAD` for the commit.
 
 ## Target Databricks Runtime gates
 
@@ -35,6 +37,9 @@
   existing non-finite values and captured custom-function errors.
 - The ruleset payload and referenced-function manifest each have a verifiable
   content hash; persisted identity and payload identity agree.
+- Export/recompile preserves the ruleset content hash and concrete numeric kinds,
+  including binary floats in literals and function arguments. Retain canonical
+  `!rules_engine/float` tags when reviewing exported YAML.
 
 Stop promotion for any business-result drift, null final-winner IDs, worker
 serialization errors, or failing system tests.

@@ -7,6 +7,7 @@ The compiler performs shape checks and enum parsing. Semantic checks remain in
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Any
 import yaml
 from yaml.constructor import ConstructorError
 
-from rules_engine.canonical_values import normalize_literal, normalize_mapping_keys
+from rules_engine.canonical_values import _PreservedFloat, normalize_literal, normalize_mapping_keys
 from rules_engine.enums import ComparisonOperator, LogicalOperator
 from rules_engine.exceptions import CompilationError
 from rules_engine.models import (
@@ -111,6 +112,37 @@ def _construct_yaml_decimal(
 _UniqueKeySafeLoader.add_constructor(
     "tag:yaml.org,2002:float",
     _construct_yaml_decimal,
+)
+
+
+def _construct_yaml_binary_float(
+    loader: _UniqueKeySafeLoader,
+    node: yaml.ScalarNode,
+) -> _PreservedFloat:
+    """Restore an exported finite binary float without adding model metadata."""
+    text = loader.construct_scalar(node)
+    try:
+        value = _PreservedFloat(text)
+    except ValueError as exc:
+        raise ConstructorError(
+            "while constructing a binary float",
+            node.start_mark,
+            f"binary float literal {text!r} must be numeric",
+            node.start_mark,
+        ) from exc
+    if not math.isfinite(value):
+        raise ConstructorError(
+            "while constructing a binary float",
+            node.start_mark,
+            f"binary float literal {text!r} must be finite",
+            node.start_mark,
+        )
+    return value
+
+
+_UniqueKeySafeLoader.add_constructor(
+    "!rules_engine/float",
+    _construct_yaml_binary_float,
 )
 
 
@@ -498,6 +530,15 @@ class YamlRulesetCompiler:
         Compile operand-shaped args recursively through lists and mappings.
         """
         if isinstance(value, Mapping):
+            if "$rules_engine_mapping" in value:
+                self._reject_unsupported_keys(
+                    value, {"$rules_engine_mapping"}, "Custom function argument mapping escape"
+                )
+                return self._normalize_mapping_keys(
+                    self._require_mapping(value, "$rules_engine_mapping"),
+                    self._compile_custom_function_arg,
+                    "Custom function argument mapping",
+                )
             operand_keys = {
                 key for key in ("field", "assigned", "literal", "custom_function") if key in value
             }

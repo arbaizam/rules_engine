@@ -1,5 +1,5 @@
 # Databricks notebook source
-# ruff: noqa: E402, F821, I001
+# ruff: noqa: E402, I001
 # MAGIC %md
 # MAGIC # Rules Engine System Tests
 # MAGIC
@@ -528,9 +528,19 @@ for row_id in compact_rows:
         "rules_engine_matched",
         "rules_engine_matched_rule_ids",
         "rules_engine_assign",
-        "rules_engine_ruleset",
     ):
         assert compact_rows[row_id][field_name] == full_rows[row_id][field_name]
+    compact_identity = compact_rows[row_id]["rules_engine_ruleset"]
+    full_identity = full_rows[row_id]["rules_engine_ruleset"]
+    assert "function_dependencies" not in compact_identity
+    assert compact_identity == {
+        name: value for name, value in full_identity.items() if name != "function_dependencies"
+    }
+    assert full_identity["function_dependencies"] == compact_evaluation.function_dependencies
+    assert compact_identity["function_dependencies_hash"] == (
+        compact_evaluation.function_dependencies_hash
+    )
+assert compact_evaluation.function_dependencies == full_evaluation.function_dependencies
 
 assert compact_rows["success"]["rules_engine_matched"] is True
 assert compact_rows["success"]["rules_engine_matched_rule_ids"] == ["positive_amount"]
@@ -1511,17 +1521,20 @@ boundary_input = spark.createDataFrame(
     [("good", float("nan")), ("bad", float("inf"))], "row_id string, amount double"
 )
 boundary_results = []
+boundary_evaluations = []
 for audit in (False, True):
-    boundary_rows = service.evaluate_dataframe(
+    boundary_evaluation = service.evaluate_dataframe(
         boundary_input, ruleset=boundary_ruleset, key_columns=["row_id"],
         full_audit=audit, fail_on_error=False,
-    ).results_df.collect()
+    )
+    boundary_rows = boundary_evaluation.results_df.collect()
     boundary_by_id = {row["row_id"]: row.asDict(recursive=True) for row in boundary_rows}
     assert boundary_by_id["good"]["rules_engine_error"] is None
     assert boundary_by_id["good"]["rules_engine_assign"]["amount"] == {"applied": True, "value": 1.0}
     assert boundary_by_id["bad"]["rules_engine_error"] is not None
     assert all(not outcome["applied"] for outcome in boundary_by_id["bad"]["rules_engine_assign"].values())
     boundary_results.append(boundary_by_id)
+    boundary_evaluations.append(boundary_evaluation)
 for row_id in ("good", "bad"):
     for field in ("rules_engine_error", "rules_engine_matched_rule_ids", "rules_engine_assign"):
         assert boundary_results[0][row_id][field] == boundary_results[1][row_id][field]
@@ -1532,7 +1545,10 @@ print("PASS: Audit preserves business outcomes and invalid temporal returns beco
 _start("ST-022", "Verify function provenance and persisted payload integrity")
 
 execution_identity = boundary_results[0]["good"]["rules_engine_ruleset"]
-dependency_json = execution_identity["function_dependencies"]
+dependency_json = boundary_evaluations[0].function_dependencies
+assert "function_dependencies" not in execution_identity
+assert boundary_evaluations[1].function_dependencies == dependency_json
+assert boundary_results[1]["good"]["rules_engine_ruleset"]["function_dependencies"] == dependency_json
 dependencies = json.loads(dependency_json)
 assert [item["function_name"] for item in dependencies] == ["system_timestamp_or_bad"]
 assert dependencies[0]["version"] == "1"
@@ -1540,6 +1556,9 @@ assert dependencies[0]["implementation_reference"] == "alm.system_tests.system_t
 assert execution_identity["function_dependencies_hash"] == hashlib.sha256(
     dependency_json.encode("utf-8")
 ).hexdigest()
+assert execution_identity["function_dependencies_hash"] == (
+    boundary_evaluations[0].function_dependencies_hash
+)
 integrity_serializer = DeltaRowSerializer()
 integrity_row = integrity_serializer.serialize_ruleset_version(boundary_ruleset)
 assert integrity_serializer.deserialize_ruleset_version(integrity_row) == boundary_ruleset

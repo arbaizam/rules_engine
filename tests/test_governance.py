@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 from pyspark.sql import types as T
 
@@ -41,8 +43,9 @@ def test_non_boolean_full_audit_fails_before_spark_execution():
         result_field_names(full_audit="true")
 
 
-def test_python_evaluator_and_spark_worker_share_rule_ordering_semantics():
-    """The compact Python and Spark-worker paths share ordering and stop semantics."""
+@pytest.mark.parametrize("full_audit", [False, True], ids=["compact", "full-audit"])
+def test_python_evaluator_and_spark_worker_share_rule_ordering_semantics(full_audit):
+    """Shuffled metadata yields independently specified merge and stop outcomes."""
     ruleset = YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "differential",
@@ -114,6 +117,15 @@ def test_python_evaluator_and_spark_worker_share_rule_ordering_semantics():
             ],
         }
     )
+    rules_by_id = {rule.rule_id: rule for rule in ruleset.rules}
+    # Shuffle the compiled model so compiler ordering cannot conceal a runtime
+    # that mistakenly executes the authored sequence instead of rule_order.
+    ruleset = replace(
+        ruleset,
+        rules=tuple(
+            rules_by_id[rule_id] for rule_id in ("after-stop", "stop", "inactive", "merge-a")
+        ),
+    )
     row_evaluator = SparkRowEvaluator(FunctionRegistry())
     runtime = SparkRulesEngineRuntime(NoOpRepository(), FunctionRegistry())
     spark_evaluator = runtime._build_row_evaluator(
@@ -124,14 +136,57 @@ def test_python_evaluator_and_spark_worker_share_rule_ordering_semantics():
             "shared": T.StringType(),
             "after": T.StringType(),
         },
+        full_audit=full_audit,
     )
 
-    for row in (
-        {"eligible": True, "stop": True},
-        {"eligible": True, "stop": False},
-        {"eligible": False, "stop": False},
+    for row, matched_rule_ids, assignments in (
+        (
+            {"eligible": True, "stop": True},
+            ["merge-a", "stop"],
+            {
+                "first": {"applied": True, "value": "A"},
+                "shared": {"applied": True, "value": "late"},
+                "after": {"applied": False, "value": None},
+            },
+        ),
+        (
+            {"eligible": True, "stop": False},
+            ["merge-a", "after-stop"],
+            {
+                "first": {"applied": True, "value": "A"},
+                "shared": {"applied": True, "value": "early"},
+                "after": {"applied": True, "value": "evaluated"},
+            },
+        ),
+        (
+            {"eligible": False, "stop": False},
+            [],
+            {
+                "first": {"applied": False, "value": None},
+                "shared": {"applied": False, "value": None},
+                "after": {"applied": False, "value": None},
+            },
+        ),
+        (
+            {"eligible": False, "stop": True},
+            ["stop"],
+            {
+                "first": {"applied": False, "value": None},
+                "shared": {"applied": True, "value": "late"},
+                "after": {"applied": False, "value": None},
+            },
+        ),
     ):
-        expected = row_evaluator.evaluate_row(ruleset, row)
+        expected = {
+            "matched": bool(matched_rule_ids),
+            "matched_rule_ids": matched_rule_ids,
+            "assign": assignments,
+        }
+        python_result = row_evaluator.evaluate_row(ruleset, row)
         actual = spark_evaluator(FakeSparkRow(row))
 
+        assert python_result == expected
+        assert actual["error"] is None
         assert {key: actual[key] for key in ("matched", "matched_rule_ids", "assign")} == expected
+        if full_audit:
+            assert [trace["rule_id"] for trace in actual["matched_rules"]] == matched_rule_ids

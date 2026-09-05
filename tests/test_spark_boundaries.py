@@ -1,4 +1,7 @@
-"""Worker-boundary regressions runnable without a JVM or Spark session."""
+"""Simulated worker-boundary regressions using PySpark's Python-side codecs.
+
+These tests do not start a JVM; live worker coverage is in test_spark_runtime.py.
+"""
 
 from datetime import datetime, timedelta, timezone
 
@@ -8,7 +11,7 @@ from pyspark.sql import types as T
 
 import rules_engine.spark_validator as spark_validator_module
 from rules_engine.compiler_yaml import YamlRulesetCompiler
-from rules_engine.registry import CustomFunctionSpec, FunctionRegistry
+from rules_engine.registry import CustomFunctionArgSpec, CustomFunctionSpec, FunctionRegistry
 from rules_engine.spark_runtime import SparkRulesEngineRuntime, _result_struct
 from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
 from rules_engine.validator import RulesetValidator
@@ -63,7 +66,7 @@ def _worker(rules, schema, *, registry=None, full_audit=False, raise_on_error=Fa
 
 
 @pytest.mark.parametrize("operator", ["eq", "ge", "in", "between"])
-def test_timestamp_field_compares_with_offset_literal_after_real_spark_decode(operator):
+def test_timestamp_field_compares_with_offset_literal_after_python_codec_decode(operator):
     """Spark's naive local datetime retains its instant when compared with UTC literals."""
     instant = datetime(2026, 2, 1, tzinfo=timezone.utc)
     right = "2026-02-01T01:00:00+01:00"
@@ -202,6 +205,95 @@ def test_prepared_spark_schema_validates_and_resolves_assignment_types_once(monk
     assert calls == {"base": 1, "types": 1}
     assert prepared.required_source_columns == ("source",)
     assert prepared.assignment_schema["target"].dataType == T.LongType()
+
+
+@pytest.mark.parametrize("value", [1e39, -1e39])
+@pytest.mark.parametrize("full_audit", [False, True])
+def test_float32_overflow_reports_the_assignment_value_and_target_type(value, full_audit):
+    registry = FunctionRegistry()
+    registry.register(
+        CustomFunctionSpec("large", "tests.large", (), True, True, return_type_hint="any"),
+        lambda: value,
+    )
+    rules = _rules({"target": {"custom_function": {"name": "large", "args": {}}}})
+    schema = T.StructType([T.StructField("target", T.FloatType())])
+    evaluate, result_schema = _worker(rules, schema, registry=registry, full_audit=full_audit)
+
+    result = evaluate(Row(target=0.0))
+
+    assert result["error"] == (
+        f"OverflowError: Assignment value {value!r} is outside the range for float."
+    )
+    assert result["assign"]["target"] == {"applied": False, "value": None}
+    result_schema.toInternal(result)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(3.4e38, 3.3999999521443642e38), (1e-46, 0.0), (-1e-46, -0.0)],
+)
+@pytest.mark.parametrize("full_audit", [False, True])
+def test_float32_rounding_is_visible_to_later_rules(value, expected, full_audit):
+    registry = FunctionRegistry()
+    registry.register(
+        CustomFunctionSpec("narrow", "tests.narrow", (), True, True, return_type_hint="any"),
+        lambda: value,
+    )
+    registry.register(
+        CustomFunctionSpec(
+            "float_hex",
+            "tests.float_hex",
+            (CustomFunctionArgSpec("value"),),
+            True,
+            True,
+            return_type_hint="string",
+        ),
+        lambda *, value: value.hex(),
+    )
+    condition = {"left": {"literal": True}, "operator": "eq", "right": {"literal": True}}
+    rules = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "float_rounding",
+            "ruleset_name": "Float rounding",
+            "version": "1",
+            "owner": "Engineering",
+            "owner_department": "Technology",
+            "rules": [
+                {
+                    "rule_name": "Narrow",
+                    "when": {"all": [condition]},
+                    "assign": {"target": {"custom_function": {"name": "narrow", "args": {}}}},
+                },
+                {
+                    "rule_name": "Copy narrowed value",
+                    "when": {"all": [condition]},
+                    "assign": {
+                        "copied": {"assigned": "target"},
+                        "observed_hex": {
+                            "custom_function": {
+                                "name": "float_hex",
+                                "args": {"value": {"assigned": "target"}},
+                            }
+                        },
+                    },
+                },
+            ],
+        }
+    )
+    schema = T.StructType([T.StructField("target", T.FloatType())])
+    evaluate, result_schema = _worker(rules, schema, registry=registry, full_audit=full_audit)
+
+    result = evaluate(Row(target=0.0))
+
+    assert result["error"] is None
+    assert result["assign"]["target"] == {"applied": True, "value": expected}
+    assert result["assign"]["copied"] == {"applied": True, "value": expected}
+    assert result["assign"]["target"]["value"].hex() == expected.hex()
+    assert result["assign"]["copied"]["value"].hex() == expected.hex()
+    # A string result observes the committed bits before another FloatType cast
+    # can hide an unrounded assigned-state read.
+    assert result["assign"]["observed_hex"] == {"applied": True, "value": expected.hex()}
+    result_schema.toInternal(result)
 
 
 def test_naive_literal_infers_ntz_and_rejects_timestamp_field_comparison():

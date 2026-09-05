@@ -28,7 +28,7 @@ from pyspark.sql import Column, DataFrame, Row
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
-from rules_engine.dataframe_evaluation import DataFrameEvaluation
+from rules_engine.dataframe_evaluation import DataFrameEvaluation, top_level_column
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.models import (
     Assignment,
@@ -83,8 +83,7 @@ def required_source_columns(ruleset: Ruleset) -> tuple[str, ...]:
 
 def _source_column(column_name: str) -> Column:
     """Return a top-level Spark column with its literal source name preserved."""
-    escaped_name = column_name.replace("`", "``")
-    return F.col(f"`{escaped_name}`").alias(column_name)
+    return top_level_column(column_name).alias(column_name)
 
 
 OPERAND_TRACE_STRUCT = T.StructType(
@@ -292,7 +291,7 @@ class SparkRulesEngineRuntime:
             Shared lazy plan exposing keyed results and applied business rows.
         """
         normalized_keys = self._validate_key_columns(df, ruleset, key_columns)
-        evaluated, assign_schema = self.evaluate_attached_dataframe(
+        evaluated, assign_schema, manifest = self._evaluate_attached_dataframe(
             df,
             ruleset,
             column_prefix=column_prefix,
@@ -310,6 +309,7 @@ class SparkRulesEngineRuntime:
             ),
             assignment_fields=assign_schema.fields,
             assign_column=f"{column_prefix}_assign",
+            function_dependencies=manifest,
         )
 
     def evaluate_attached_dataframe(
@@ -323,6 +323,27 @@ class SparkRulesEngineRuntime:
         full_audit: bool = False,
     ) -> tuple[DataFrame, T.StructType]:
         """Build a source-plus-results plan for package integrations."""
+        evaluated, assign_schema, _ = self._evaluate_attached_dataframe(
+            df,
+            ruleset,
+            column_prefix=column_prefix,
+            fail_on_error=fail_on_error,
+            include_error_traceback=include_error_traceback,
+            full_audit=full_audit,
+        )
+        return evaluated, assign_schema
+
+    def _evaluate_attached_dataframe(
+        self,
+        df: DataFrame,
+        ruleset: Ruleset,
+        *,
+        column_prefix: str,
+        fail_on_error: bool,
+        include_error_traceback: bool,
+        full_audit: bool,
+    ) -> tuple[DataFrame, T.StructType, str]:
+        """Build one plan and retain its canonical function manifest on the driver."""
         _require_bool("full_audit", full_audit)
         _require_bool("fail_on_error", fail_on_error)
         _require_bool("include_error_traceback", include_error_traceback)
@@ -403,13 +424,19 @@ class SparkRulesEngineRuntime:
         )
         result_col = f"__rules_engine_result_{uuid4().hex}"
         evaluated = df.withColumn(result_col, result_udf(row_struct))
+        manifest = json.dumps(
+            self._function_registry.dependency_manifest(ruleset),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
         output = self._append_output_columns(
             evaluated,
             result_col=result_col,
             column_prefix=column_prefix,
             ruleset=ruleset,
             full_audit=full_audit,
-            function_dependencies=self._function_registry.dependency_manifest(ruleset),
+            function_dependencies=manifest,
         )
         logger.info(
             "Spark runtime evaluation DataFrame built: ruleset_id=%s version=%s output_prefix=%s",
@@ -417,7 +444,7 @@ class SparkRulesEngineRuntime:
             ruleset.version,
             column_prefix,
         )
-        return output, assign_schema
+        return output, assign_schema, manifest
 
     @staticmethod
     def _validate_key_columns(
@@ -506,7 +533,7 @@ class SparkRulesEngineRuntime:
         column_prefix: str,
         ruleset: Ruleset,
         full_audit: bool,
-        function_dependencies: Sequence[Mapping[str, Any]],
+        function_dependencies: str,
     ) -> DataFrame:
         """Append the public result contract in its documented column order."""
         result = F.col(result_col)
@@ -514,14 +541,12 @@ class SparkRulesEngineRuntime:
             f"{column_prefix}_{field_name}": result.getField(field_name)
             for field_name in result_field_names(full_audit=full_audit)
         }
-        manifest = json.dumps(
-            function_dependencies, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        )
+        manifest = function_dependencies
         output_columns[f"{column_prefix}_ruleset"] = F.struct(
             F.lit(ruleset.ruleset_id).alias("id"),
             F.lit(ruleset.version).alias("version"),
             F.lit(DeltaRowSerializer().content_hash(ruleset)).alias("content_hash"),
-            F.lit(manifest).alias("function_dependencies"),
+            *([F.lit(manifest).alias("function_dependencies")] if full_audit else []),
             F.lit(hashlib.sha256(manifest.encode("utf-8")).hexdigest()).alias(
                 "function_dependencies_hash"
             ),
@@ -540,13 +565,6 @@ class SparkRulesEngineRuntime:
                 "avoid captured objects that cloudpickle cannot serialize. "
                 f"Serialization failed with {type(exc).__name__}: {exc}"
             ) from exc
-
-    def _assignment_schema(self, ruleset: Ruleset, source_schema: T.StructType) -> T.StructType:
-        """Build a ruleset-specific assignment result struct."""
-        return self._compatibility_validator.assignment_schema(
-            ruleset,
-            source_schema,
-        )
 
     def _build_row_evaluator(
         self,
@@ -761,7 +779,14 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         if include_traceback:
             error = f"{error}\n{traceback.format_exc()}"
         payload = dict(base_payload_template)
-        payload.update(error=error, matched_rule_ids=[])
+        payload.update(
+            error=error,
+            matched_rule_ids=[],
+            assign={
+                field_name: dict(assignment)
+                for field_name, assignment in base_payload_template["assign"].items()
+            },
+        )
         if full_audit:
             payload.update(matched_rules=[], assignment_results=[])
         return payload
@@ -972,13 +997,20 @@ class _SparkRowUdfEvaluator(SparkRowEvaluator):
         return converted
 
     def _spark_float_value(self, value: Any, data_type: T.DataType) -> float:
-        """Return a finite Spark floating-point assignment value."""
-        converted = float(value)
-        if isinstance(data_type, T.FloatType):
-            # Use the same binary32 value downstream rules will observe in Spark.
-            converted = struct.unpack("!f", struct.pack("!f", converted))[0]
+        """Return a finite value, rounding FloatType assignments to binary32."""
+        try:
+            converted = float(value)
+        except OverflowError as exc:
+            raise OverflowError(
+                f"Assignment value {value!r} is outside the range for {data_type.simpleString()}."
+            ) from exc
         if not math.isfinite(converted):
             raise ValueError("Floating-point assignment values must be finite.")
+        if isinstance(data_type, T.FloatType):
+            if abs(converted) > float.fromhex("0x1.fffffep+127"):
+                raise OverflowError(f"Assignment value {value!r} is outside the range for float.")
+            # Use the same binary32 value downstream rules will observe in Spark.
+            converted = struct.unpack("!f", struct.pack("!f", converted))[0]
         return converted
 
     def _spark_decimal_value(

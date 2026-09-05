@@ -314,7 +314,15 @@ def test_code_authored_literal_value_type_returns_a_structured_issue(invalid_val
     assert "LITERAL_VALUE_TYPE_INVALID" in {issue.check_name for issue in result.issues}
 
 
-def test_custom_function_args_mismatch_fails_validation():
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param({"x": 1}, id="missing-required"),
+        pytest.param({"x": 1, "y": 2, "extra": 3}, id="extra-only"),
+        pytest.param({"x": 1, "yy": 2}, id="misspelled-required"),
+    ],
+)
+def test_custom_function_args_mismatch_fails_validation(arguments):
     """
     What: Validates custom function argument names against the registry contract.
     Why: Runtime function calls must be deterministic and fully specified.
@@ -332,14 +340,22 @@ def test_custom_function_args_mismatch_fails_validation():
     )
     result = _validate_condition(
         {
-            "left": {"custom_function": {"name": "score", "args": {"x": 1}}},
+            "left": {"custom_function": {"name": "score", "args": arguments}},
             "operator": "gt",
             "right": {"literal": 1},
         },
         registry=registry,
     )
 
-    assert any(issue.check_name == "CUSTOM_FUNCTION_ARGS_MISMATCH" for issue in result.issues)
+    issue = next(
+        issue for issue in result.issues if issue.check_name == "CUSTOM_FUNCTION_ARGS_MISMATCH"
+    )
+    assert issue.details == {
+        "function_name": "score",
+        "required": ["x", "y"],
+        "optional": [],
+        "actual": sorted(arguments),
+    }
 
 
 def test_custom_function_optional_defaults_and_argument_constraints_are_validated():
@@ -514,20 +530,48 @@ def test_error_on_null_is_rejected_for_unary_null_operators():
     assert "ERROR_ON_NULL_UNARY_FORBIDDEN" in {issue.check_name for issue in result.issues}
 
 
-def test_assigned_operand_requires_an_active_lower_order_producer():
+@pytest.mark.parametrize("producer_kind", ["same-rule", "future", "inactive-earlier"])
+def test_assigned_operand_requires_an_active_lower_order_producer(producer_kind):
     """Same-rule, future, and inactive assignments cannot satisfy a reference."""
     payload = _base_payload(
         {
+            "condition_id": "consumer_condition",
             "left": {"assigned": "bucket"},
             "operator": "eq",
             "right": {"literal": "A"},
         }
     )
+    if producer_kind != "same-rule":
+        payload["rules"][0]["assign"] = {"review": True}
+        payload["rules"].append(
+            {
+                "rule_id": "producer",
+                "rule_name": "Bucket producer",
+                "rule_order": 2 if producer_kind == "future" else 0,
+                "active_flag": producer_kind == "future",
+                "when": {
+                    "all": [
+                        {
+                            "left": {"field": "status"},
+                            "operator": "eq",
+                            "right": {"literal": "OPEN"},
+                        }
+                    ]
+                },
+                "assign": {"bucket": "A"},
+            }
+        )
     ruleset = YamlRulesetCompiler().compile_payload(payload)
 
     result = RulesetValidator().validate(ruleset)
 
-    assert "ASSIGNED_VALUE_PRIOR_PRODUCER_REQUIRED" in {issue.check_name for issue in result.issues}
+    issue = next(
+        issue
+        for issue in result.issues
+        if issue.check_name == "ASSIGNED_VALUE_PRIOR_PRODUCER_REQUIRED"
+    )
+    assert issue.object_id == "consumer_condition"
+    assert issue.details == {"rule_id": "r1", "rule_order": 1, "target_field": "bucket"}
 
 
 def test_assigned_operand_accepts_a_potential_prior_producer():
@@ -560,6 +604,7 @@ def test_assigned_operand_accepts_a_potential_prior_producer():
 
     result = RulesetValidator().validate(ruleset)
 
+    assert result.passed, result.to_text()
     assert "ASSIGNED_VALUE_PRIOR_PRODUCER_REQUIRED" not in {
         issue.check_name for issue in result.issues
     }
@@ -831,6 +876,10 @@ def test_assignment_id_may_be_reused_when_versions_are_validated_independently()
         }
     ]
     next_version = {**payload, "version": "2"}
+    validator = RulesetValidator()
+    first_ruleset = YamlRulesetCompiler().compile_payload(payload)
+    second_ruleset = YamlRulesetCompiler().compile_payload(next_version)
 
-    assert RulesetValidator().validate(YamlRulesetCompiler().compile_payload(payload)).passed
-    assert RulesetValidator().validate(YamlRulesetCompiler().compile_payload(next_version)).passed
+    assert validator.validate(first_ruleset).passed
+    assert validator.validate(second_ruleset).passed
+    assert validator.validate(first_ruleset).passed

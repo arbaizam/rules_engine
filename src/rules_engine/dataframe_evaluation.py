@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 
 from pyspark import StorageLevel
@@ -10,7 +11,7 @@ from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
 
-def _top_level_column(column_name: str) -> Column:
+def top_level_column(column_name: str) -> Column:
     """Return a top-level Spark column without interpreting dots as paths."""
     escaped_name = column_name.replace("`", "``")
     return F.col(f"`{escaped_name}`")
@@ -34,6 +35,7 @@ class DataFrameEvaluation:
         result_columns: Sequence[str],
         assignment_fields: Sequence[T.StructField],
         assign_column: str,
+        function_dependencies: str,
     ) -> None:
         """Create an evaluation from runtime-owned plan metadata."""
         self._evaluated_df = evaluated_df
@@ -42,6 +44,17 @@ class DataFrameEvaluation:
         self._result_columns = tuple(result_columns)
         self._assignment_fields = tuple(assignment_fields)
         self._assign_column = assign_column
+        self._function_dependencies = function_dependencies
+
+    @property
+    def function_dependencies(self) -> str:
+        """Return the canonical JSON manifest captured when this plan was prepared."""
+        return self._function_dependencies
+
+    @property
+    def function_dependencies_hash(self) -> str:
+        """Return the SHA-256 hash of the manifest used by every result row."""
+        return hashlib.sha256(self._function_dependencies.encode("utf-8")).hexdigest()
 
     @property
     def key_columns(self) -> tuple[str, ...]:
@@ -58,7 +71,7 @@ class DataFrameEvaluation:
         """Return keys plus rules-engine results, without business payload columns."""
         return self._evaluated_df.select(
             *(
-                _top_level_column(column_name).alias(column_name)
+                top_level_column(column_name).alias(column_name)
                 for column_name in (*self._key_columns, *self._result_columns)
             )
         )
@@ -76,12 +89,12 @@ class DataFrameEvaluation:
         for column_name in self._source_columns:
             assignment_field = assignment_by_name.get(column_name)
             if assignment_field is None:
-                business_columns.append(_top_level_column(column_name).alias(column_name))
+                business_columns.append(top_level_column(column_name).alias(column_name))
                 continue
             business_columns.append(
                 self._applied_value(
                     assignment_field,
-                    otherwise=_top_level_column(column_name),
+                    otherwise=top_level_column(column_name),
                 ).alias(column_name)
             )
         for assignment_field in self._assignment_fields:
@@ -118,7 +131,7 @@ class DataFrameEvaluation:
         otherwise: Column,
     ) -> Column:
         """Choose the typed assigned value only when the target was applied."""
-        outcome = _top_level_column(self._assign_column).getField(assignment_field.name)
+        outcome = top_level_column(self._assign_column).getField(assignment_field.name)
         return F.when(
             outcome.getField("applied"),
             outcome.getField("value"),

@@ -9,7 +9,8 @@ dataclasses are the compiled in-memory model.
 Evaluation takes a private snapshot of compiled metadata during preparation.
 Collection arguments passed to custom functions and committed assignment
 collections are copied, including literals, null fallbacks, input fields,
-and earlier assignments. Dataclass fields are frozen; nested authoring lists
+earlier assignments, and mutable binary (`bytearray`) values returned by
+functions or read from Spark binary columns. Dataclass fields are frozen; nested authoring lists
 and mappings are ordinary Python collections, so create a new ruleset when
 changing an evaluated definition. Audit values are captured when each
 assignment occurs.
@@ -120,6 +121,15 @@ values. Binary YAML values and other object types are rejected during
 compilation. Sets are accepted for membership operations, but order-sensitive
 functions such as `coalesce`, `concat_ws`, and `array_join` require an ordered
 list or tuple (or a Spark array field).
+
+Canonical exports use `!rules_engine/float '1.5'` to preserve an existing
+Python binary float, including negative zero, without adding a `value_type`
+hint to the model. Ordinary untagged fractional YAML still compiles as
+`Decimal`. The float tag works recursively in literals, defaults and function
+arguments; malformed and non-finite tagged values fail compilation. Tuples
+use `!rules_engine/tuple`. Recompile exported text with `YamlRulesetCompiler`,
+which understands these safe application tags. The exporter’s payload API
+also preserves the float kind when passed directly to `compile_payload`.
 
 ### Ruleset fields
 
@@ -234,6 +244,23 @@ Custom-function arguments may be literals, operands, or lists/mappings that
 contain operands. Nested custom functions are supported at any of those
 levels. Required arguments must be present, optional arguments use their
 registered defaults when omitted, and unknown argument names fail validation.
+
+An argument data mapping with keys such as `field`, `assigned`, `literal`, or
+`custom_function` uses the reserved `$rules_engine_mapping` escape. The wrapper
+must contain only that key and its value must be a mapping. Values inside the
+escaped mapping can still contain operands:
+
+```yaml
+args:
+  column_map:
+    $rules_engine_mapping:
+      field: legacy_name
+      dynamic: {field: source_column}
+```
+
+Here `field` is a data key, while `dynamic` resolves an input column. Export
+uses the same escape for data mappings containing `$rules_engine_mapping`
+itself. Export and recompile preserve the model and its canonical content hash.
 
 ### Literal type hints
 
@@ -562,13 +589,20 @@ chaining.
 | `id` | String | Authored `ruleset_id` | Technical ruleset identity used for evaluation. |
 | `version` | String | Authored version | Exact ruleset version used for evaluation. |
 | `content_hash` | String | SHA-256 hexadecimal hash | Hash of the canonical immutable payload. |
-| `function_dependencies` | String | Canonical JSON array, or `[]` | Referenced active function contracts, sorted by name, including implementation reference, version, arguments, permissions, and return hint. |
+| `function_dependencies` | String; full audit only | Canonical JSON array, or `[]` | Referenced active function contracts, sorted by name, including implementation reference, version, arguments, permissions, and return hint. Omitted from compact rows. |
 | `function_dependencies_hash` | String | SHA-256 hexadecimal hash | Hash of the exact UTF-8 `function_dependencies` JSON string. |
 
 Function provenance describes the registry used to prepare the evaluation.
 It does not enforce pinned function versions or fingerprint executable Python
 code. The ruleset content hash and function dependency hash identify separate
 parts of an execution's configuration.
+`evaluation.function_dependencies` always returns the exact canonical JSON
+manifest captured on the driver during preparation;
+`evaluation.function_dependencies_hash` returns its SHA-256 hash. Save the
+manifest once with execution metadata and use the per-row hash to reference it.
+Compact results and attached DataFrames omit the manifest from each row;
+`full_audit=true` includes it in `rules_engine_ruleset` for self-contained audit
+exports. Existing compact consumers of that field should use the driver property.
 The manifest preserves observable default types with reserved JSON envelopes,
 so list, tuple, and set defaults produce distinct dependency hashes.
 
@@ -652,7 +686,13 @@ element is its effective assignment.
 
 Existing values recorded in audit history may include NaN or infinity;
 recording that history does not revalidate them as proposed assignments.
-New floating-point assignments must still be finite.
+New floating-point assignments must still be finite. Assignments to an existing
+Spark `FloatType` column must be within binary32 range and are rounded to the
+nearest representable binary32 value before later rules read them through
+`assigned`. Ties round to even; very small values may become signed zero
+(for example, `1e-46` becomes `0.0`). Values outside the finite binary32 range
+produce a row error naming the value and `float` target type. `DoubleType`
+assignments retain binary64 precision.
 
 All compact and full-audit output names for the selected prefix are reserved.
 We reject an input DataFrame containing any reserved name or case-only variant
@@ -1242,7 +1282,7 @@ imports and behavior out of compile-only paths where practical.
 | `rules_engine.dataframe_evaluation` | Owns the one lazy source-plus-results Spark plan created by DataFrame evaluation. It exposes the key-only result projection, applies explicit assignment outcomes to business columns without a join, preserves column order, handles atomic struct values, and manages optional shared persistence. | `DataFrameEvaluation`. |
 | `rules_engine.enums` | Holds the only accepted lifecycle, logical, operand, comparison, and diagnostic object values. Centralizing these strings prevents aliases from drifting between compilation, validation, runtime behavior, and persistence. | `RulesetStatus`, `LogicalOperator`, `OperandKind`, `ComparisonOperator`, `ObjectType`. |
 | `rules_engine.exceptions` | Defines the package exception hierarchy so callers can distinguish compilation, validation, registry, and repository failures from ordinary Python errors. | `RulesEngineError`, `CompilationError`, `ValidationFailedError`, `RegistryError`, `RepositoryError`. |
-| `rules_engine.exporter_yaml` | Converts compiled dataclasses back to canonical YAML. It preserves explicit identities, nested groups, exact decimals and dates, operand forms, default values, and mappings so export and recompile produce the same model. | `YamlRulesetExporter`. |
+| `rules_engine.exporter_yaml` | Converts compiled dataclasses back to canonical YAML. It preserves explicit identities, nested groups, exact decimals, binary float kinds, dates, operand forms, defaults and mappings so export and recompile retain the same model and content hash. | `YamlRulesetExporter`. |
 | `rules_engine.human_readable` | Renders rules, groups, operands, operators, and assignments as readable text for reviewers and full-audit explanations. It formats authored logic; it does not evaluate or persist rules. | `HumanReadableRulesetFormatter`. |
 | `rules_engine.models` | Defines frozen rule-tree dataclasses, operands, assignments, persistence rows, validation results, and runtime traces. Evaluation owns a private snapshot of nested metadata. | `Ruleset`, `Rule`, `ConditionGroup`, `Condition`, operand classes, `Assignment`, row and trace models. |
 | `rules_engine.publish` | Coordinates publication. It runs semantic validation and calls the repository only when validation passes. | `PublishService`. |

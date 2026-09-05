@@ -9,7 +9,7 @@ from pyspark.sql import Row
 from pyspark.sql import types as T
 
 import rules_engine.spark_runtime as spark_runtime_module
-from rules_engine.analytics import RulesetCoverageAnalyzer
+from rules_engine.analytics import RuleCoverage, RulesetCoverageAnalyzer
 from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.registry import (
@@ -20,6 +20,7 @@ from rules_engine.registry import (
 from rules_engine.serializer import DeltaRowSerializer
 from rules_engine.spark_runtime import SparkRulesEngineRuntime, required_source_columns
 from rules_engine.standard_functions import register_standard_functions
+from rules_engine.version import __version__
 
 pytest.importorskip("pyspark")
 
@@ -118,6 +119,25 @@ def driver_spark_context(spark):
 
 def _spark_runtime():
     return SparkRulesEngineRuntime(DummyRepository(), FunctionRegistry())
+
+
+def _assert_worker_input_columns(monkeypatch, runtime, expected):
+    """Assert the actual deserialized UDF input on the worker, before evaluation."""
+    build = runtime._build_row_evaluator
+
+    def build_checked(*args, **kwargs):
+        evaluate = build(*args, **kwargs)
+
+        def checked(row):
+            actual = tuple(row.asDict())
+            assert actual == expected, f"Unexpected worker input: {actual!r} != {expected!r}"
+            if expected == ("__rules_engine_empty",):
+                assert row["__rules_engine_empty"] is None
+            return evaluate(row)
+
+        return checked
+
+    monkeypatch.setattr(runtime, "_build_row_evaluator", build_checked)
 
 
 def _evaluation(
@@ -250,6 +270,9 @@ def test_spark_runtime_evaluates_row_rule(spark):
     assert applied_rows["A"]["bucket"] == "matched"
     assert applied_rows["B"]["bucket"] == "unchanged"
 
+
+def test_full_audit_tracks_overridden_assignments_across_multiple_matches(spark):
+    """Later matches retain ordered traces and identify the final winning assignment."""
     multi_match_ruleset = YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "multi",
@@ -661,8 +684,9 @@ def test_spark_runtime_applies_typed_operand_defaults_before_comparison(spark):
     assert string_left["default_applied"] is True
 
 
-def test_spark_runtime_quarantines_error_on_null(spark):
-    """A remaining null becomes a compact row error when explicitly required."""
+@pytest.mark.parametrize("full_audit", [False, True])
+def test_spark_runtime_quarantines_error_on_null(spark, full_audit):
+    """A remaining null becomes a quarantined error in compact and full-audit execution."""
     ruleset = _compile(
         {
             "left": {"field": "status"},
@@ -677,11 +701,17 @@ def test_spark_runtime_quarantines_error_on_null(spark):
         frame,
         ruleset,
         fail_on_error=False,
-        full_audit=True,
+        full_audit=full_audit,
     ).results_df.collect()[0]
 
     assert row["rules_engine_matched"] is False
-    assert row["rules_engine_matched_rules"] == []
+    assert row["rules_engine_matched_rule_ids"] == []
+    if full_audit:
+        assert row["rules_engine_matched_rules"] == []
+        assert row["rules_engine_assignment_results"] == []
+    else:
+        assert "rules_engine_matched_rules" not in row.asDict()
+        assert "rules_engine_assignment_results" not in row.asDict()
     assert "error_on_null=true" in row["rules_engine_error"]
 
 
@@ -824,7 +854,8 @@ def test_spark_runtime_executes_nested_array_and_optional_standard_arguments(spa
     assert row["tags_text"] == "review|active"
 
 
-def test_spark_runtime_serializes_only_required_literal_source_columns(spark):
+@pytest.mark.parametrize("full_audit", [False, True])
+def test_spark_runtime_serializes_only_required_literal_source_columns(spark, monkeypatch, full_audit):
     """
     What: Evaluates a dotted source field while retaining an unrelated input column.
     Why: The UDF should receive only required fields without changing output columns.
@@ -839,16 +870,22 @@ def test_spark_runtime_serializes_only_required_literal_source_columns(spark):
         assign={"copied": {"field": "source_value"}},
     )
     df = spark.createDataFrame(
-        [("A", "kept", "assigned")],
-        ["risk.score", "unused_payload", "source_value"],
+        [("A", "kept", "assigned", "previous")],
+        ["risk.score", "unused_payload", "source_value", "copied"],
     )
 
     assert required_source_columns(ruleset) == ("risk.score", "source_value")
+    runtime = _spark_runtime()
+    _assert_worker_input_columns(
+        monkeypatch, runtime,
+        ("risk.score", "source_value", "copied") if full_audit else ("risk.score", "source_value"),
+    )
 
     evaluation = _evaluation(
         df,
         ruleset,
-        full_audit=True,
+        runtime=runtime,
+        full_audit=full_audit,
         key_columns=["risk.score"],
     )
     row = evaluation.results_df.collect()[0]
@@ -858,10 +895,16 @@ def test_spark_runtime_serializes_only_required_literal_source_columns(spark):
     assert row["rules_engine_matched"] is True
     assert row["rules_engine_assign"]["copied"]["value"] == "assigned"
     assert applied["copied"] == "assigned"
-    assert row["rules_engine_matched_rules"][0]["conditions"][0]["left"]["value"] == "A"
+    if full_audit:
+        assert row["rules_engine_matched_rules"][0]["conditions"][0]["left"]["value"] == "A"
+        assert row["rules_engine_assignment_results"][0]["old_value"] == "previous"
 
 
-def test_spark_runtime_evaluates_literal_only_rule_without_source_dependencies(spark):
+@pytest.mark.parametrize("full_audit", [False, True])
+@pytest.mark.parametrize("existing_target", [False, True])
+def test_spark_runtime_evaluates_literal_only_rule_without_source_dependencies(
+    spark, monkeypatch, full_audit, existing_target,
+):
     """
     What: Evaluates a literal-only rule with an empty dependency set.
     Why: The optimized UDF input struct must support rules requiring no source fields.
@@ -893,11 +936,21 @@ def test_spark_runtime_evaluates_literal_only_rule_without_source_dependencies(s
             ],
         }
     )
-    df = spark.createDataFrame([{"unused_payload": "kept"}])
+    source = {"unused_payload": "kept"}
+    if existing_target:
+        source["matched"] = False
+    df = spark.createDataFrame([source])
 
     assert required_source_columns(ruleset) == ()
 
-    evaluation = _evaluation(df, ruleset)
+    runtime = _spark_runtime()
+    _assert_worker_input_columns(
+        monkeypatch, runtime,
+        ("matched",) if full_audit and existing_target else ("__rules_engine_empty",),
+    )
+    evaluation = _evaluation(
+        df, ruleset, runtime=runtime, key_columns=["unused_payload"], full_audit=full_audit,
+    )
     output = evaluation.results_df
     row = output.collect()[0]
 
@@ -1019,7 +1072,7 @@ def test_spark_runtime_applies_column_prefix_to_all_new_outputs(spark):
     ]
 
 
-def test_spark_runtime_validates_schema_before_building_udf(spark):
+def test_spark_runtime_validates_schema_before_building_udf(spark, monkeypatch):
     """An incompatible existing target fails before row evaluation."""
     ruleset = _compile(
         {
@@ -1030,12 +1083,19 @@ def test_spark_runtime_validates_schema_before_building_udf(spark):
         assign={"target": 10},
     )
     df = spark.createDataFrame([("A", "existing")], ["account", "target"])
+    runtime = _spark_runtime()
+
+    def unexpected_build(*args, **kwargs):
+        pytest.fail("Worker/UDF construction must not run before schema rejection")
+
+    monkeypatch.setattr(runtime, "_build_row_evaluator", unexpected_build)
+    monkeypatch.setattr(spark_runtime_module.F, "udf", unexpected_build)
 
     with pytest.raises(
         ValidationFailedError,
         match="SPARK_ASSIGNMENT_TARGET_TYPE_INCOMPATIBLE",
     ):
-        _evaluation(df, ruleset)
+        _evaluation(df, ruleset, runtime=runtime)
 
 
 def test_spark_runtime_rejects_a_ruleset_with_no_active_rules(spark):
@@ -1293,6 +1353,10 @@ def test_spark_runtime_preserves_timestamp_assignment_type(spark):
     )
     row = evaluation.results_df.collect()[0]
 
+    assert evaluation.results_df.schema["rules_engine_assign"].dataType[
+        "copied_timestamp"
+    ].dataType["value"].dataType == T.TimestampType()
+    assert evaluation.apply_assignments().schema["copied_timestamp"].dataType == T.TimestampType()
     assert row["rules_engine_assign"]["copied_timestamp"]["value"] == expected
     assert evaluation.apply_assignments().collect()[0]["copied_timestamp"] == expected
 
@@ -1362,6 +1426,7 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
     compact = compact_evaluation.results_df
     full = full_evaluation.results_df
     compact_row = compact.collect()[0]
+    full_row = full.collect()[0]
 
     assert compact.columns == [
         "row_id",
@@ -1389,10 +1454,13 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
         "id": ruleset.ruleset_id,
         "version": ruleset.version,
         "content_hash": DeltaRowSerializer().content_hash(ruleset),
-        "function_dependencies": "[]",
         "function_dependencies_hash": hashlib.sha256(b"[]").hexdigest(),
     }
-    assert compact_row["rules_engine_engine_version"]
+    assert compact_evaluation.function_dependencies == "[]"
+    assert compact_evaluation.function_dependencies_hash == hashlib.sha256(b"[]").hexdigest()
+    assert full_row["rules_engine_ruleset"]["function_dependencies"] == "[]"
+    assert compact_row["rules_engine_engine_version"] == __version__
+    assert full_row["rules_engine_engine_version"] == __version__
     assert compact_evaluation.apply_assignments().columns == [
         "row_id",
         "account",
@@ -1402,8 +1470,11 @@ def test_full_audit_emits_ordered_optional_detail_and_identity(spark):
 
 
 @pytest.mark.parametrize("column_prefix", ["rules_engine_coverage", "audit.v3`coverage"])
-def test_coverage_report_finds_dead_broad_and_clean_no_match_rows(spark, column_prefix):
-    """Coverage aggregates matches and returns clean no-match rows."""
+@pytest.mark.parametrize("broad_match_threshold", [0.40, 0.60])
+def test_coverage_report_finds_dead_broad_and_clean_no_match_rows(
+    spark, column_prefix, broad_match_threshold,
+):
+    """Coverage reports exact first/all matches and excludes errors from clean no-match rows."""
     ruleset = YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "coverage",
@@ -1420,7 +1491,9 @@ def test_coverage_report_finds_dead_broad_and_clean_no_match_rows(spark, column_
                         "all": [
                             {
                                 "condition_id": "prime-fico",
-                                "left": {"field": "fico"},
+                                "left": {"custom_function": {
+                                    "name": "checked_fico", "args": {"value": {"field": "fico"}},
+                                }},
                                 "operator": "ge",
                                 "right": {"literal": 720},
                             }
@@ -1464,29 +1537,63 @@ def test_coverage_report_finds_dead_broad_and_clean_no_match_rows(spark, column_
         }
     )
     registry = FunctionRegistry()
+
+    def checked_fico(value):
+        if value < 0:
+            raise ValueError("invalid fico")
+        return value
+
+    registry.register(
+        CustomFunctionSpec(
+            "checked_fico", "tests.checked_fico", (CustomFunctionArgSpec("value"),),
+            True, False, return_type_hint="integer",
+        ), checked_fico,
+    )
     runtime = SparkRulesEngineRuntime(DummyRepository(), registry)
     original_ansi = spark.conf.get("spark.sql.ansi.enabled")
     spark.conf.set("spark.sql.ansi.enabled", "true")
     try:
         report = RulesetCoverageAnalyzer(runtime).analyze(
             spark.createDataFrame(
-                [(1, 740), (2, 690), (3, 600)],
+                [(1, 740), (2, 690), (3, 600), (4, 650), (5, -1)],
                 ["loan_id", "fico"],
             ),
             ruleset,
-            broad_match_threshold=0.60,
+            broad_match_threshold=broad_match_threshold,
             column_prefix=column_prefix,
         )
-        no_match = report.no_match_rows.collect()[0]
+        no_match = report.no_match_rows.collect()
     finally:
         spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
-    assert report.total_row_count == 3
-    assert report.no_match_count == 1
-    assert report.error_count == 0
+    assert report.total_row_count == 5
+    assert report.no_match_count == 2
+    assert report.error_count == 1
     assert report.dead_rule_ids == ("impossible",)
-    assert report.suspiciously_broad_rule_ids == ("near",)
-    assert no_match["loan_id"] == 3
+    assert report.suspiciously_broad_rule_ids == (("near",) if broad_match_threshold == 0.40 else ())
+    assert report.first_match_distribution == {"prime": 1, "near": 1, "impossible": 0}
+    assert report.rules == (
+        RuleCoverage("prime", "Prime", 1, 1, 1, 0.20, False, False),
+        RuleCoverage("near", "Near prime", 2, 2, 1, 0.40, False, broad_match_threshold == 0.40),
+        RuleCoverage("impossible", "Impossible", 3, 0, 0, 0.0, True, False),
+    )
+    assert {row["loan_id"] for row in no_match} == {3, 4}
+    assert all(row[f"{column_prefix}_error"] is None for row in no_match)
+
+
+def test_coverage_report_handles_empty_input_with_zero_counts_and_rates(spark):
+    """Empty input has no errors/no-match rows, all rules dead, and no broad rules even at zero."""
+    ruleset = _compile({"left": {"field": "amount"}, "operator": "gt", "right": {"literal": 0}})
+    report = RulesetCoverageAnalyzer(_spark_runtime()).analyze(
+        spark.createDataFrame([], "id long, amount long"), ruleset, broad_match_threshold=0.0,
+    )
+
+    assert (report.total_row_count, report.no_match_count, report.error_count) == (0, 0, 0)
+    assert report.rules == (RuleCoverage("r1", "Rule 1", 1, 0, 0, 0.0, True, False),)
+    assert report.first_match_distribution == {"r1": 0}
+    assert report.dead_rule_ids == ("r1",)
+    assert report.suspiciously_broad_rule_ids == ()
+    assert report.no_match_rows.collect() == []
 
 
 @pytest.mark.parametrize("session_timezone", ["UTC", "America/New_York"])
@@ -1573,7 +1680,7 @@ def test_bad_timestamp_result_is_an_error_row_with_recorded_function_contract(sp
     assert row["rules_engine_matched"] is False
     assert row["rules_engine_assign"]["target"].asDict() == {"applied": False, "value": None}
     identity = row["rules_engine_ruleset"]
-    manifest_json = identity["function_dependencies"]
+    manifest_json = evaluation.function_dependencies
     assert (
         identity["function_dependencies_hash"]
         == hashlib.sha256(manifest_json.encode("utf-8")).hexdigest()
@@ -1630,6 +1737,7 @@ def test_function_identity_distinguishes_observable_default_collection_kinds(spa
     )
     df = spark.createDataFrame([(1,)], ["id"])
     identities = []
+    manifests = []
     for default, expected in [([1, 2], 0), ((1, 2), 1)]:
         registry = FunctionRegistry()
         registry.register(
@@ -1645,15 +1753,64 @@ def test_function_identity_distinguishes_observable_default_collection_kinds(spa
             lambda value: int(isinstance(value, tuple)),
         )
         runtime = SparkRulesEngineRuntime(DummyRepository(), registry)
-        row = _evaluation(df, rules, runtime=runtime).results_df.collect()[0]
+        evaluation = _evaluation(df, rules, runtime=runtime)
+        row = evaluation.results_df.collect()[0]
         assert row["rules_engine_assign"]["kind"]["value"] == expected
         identities.append(row["rules_engine_ruleset"])
+        manifests.append(evaluation.function_dependencies)
 
     assert identities[0]["content_hash"] == identities[1]["content_hash"]
     assert (
         identities[0]["function_dependencies_hash"] != identities[1]["function_dependencies_hash"]
     )
-    list_default = json.loads(identities[0]["function_dependencies"])[0]["arguments"][0]["default"]
-    tuple_default = json.loads(identities[1]["function_dependencies"])[0]["arguments"][0]["default"]
+    list_default = json.loads(manifests[0])[0]["arguments"][0]["default"]
+    tuple_default = json.loads(manifests[1])[0]["arguments"][0]["default"]
     assert list_default == [1, 2]
     assert tuple_default == {"$rules_engine_type": "tuple", "value": [1, 2]}
+
+
+def test_large_function_manifest_is_retained_once_for_compact_results(spark):
+    """Compact and attached rows carry a verifiable hash; full audit includes the manifest."""
+    registry = FunctionRegistry()
+    assignments = {}
+    defaults = [1]
+    for index in range(10):
+        name = f"function_{index}"
+        registry.register(
+            CustomFunctionSpec(
+                name,
+                f"tests.{name}",
+                (CustomFunctionArgSpec("values", required=False, default=defaults),),
+                True,
+                True,
+                return_type_hint="integer",
+            ),
+            lambda values: len(values),
+        )
+        assignments[f"target_{index}"] = {"custom_function": {"name": name, "args": {}}}
+    rules = _compile(
+        {"left": {"literal": True}, "operator": "eq", "right": {"literal": True}},
+        assign=assignments,
+    )
+    runtime = SparkRulesEngineRuntime(DummyRepository(), registry)
+    df = spark.createDataFrame([(1,), (2,)], ["id"])
+    evaluation = _evaluation(df, rules, runtime=runtime)
+    manifest = evaluation.function_dependencies
+    assert len(json.loads(manifest)) == 10
+    assert len(manifest) > 1000
+    for row in evaluation.results_df.collect():
+        identity = row["rules_engine_ruleset"].asDict()
+        assert "function_dependencies" not in identity
+        assert identity["function_dependencies_hash"] == hashlib.sha256(
+            manifest.encode("utf-8")
+        ).hexdigest()
+        assert identity["function_dependencies_hash"] == evaluation.function_dependencies_hash
+    attached, _ = runtime.evaluate_attached_dataframe(df, rules)
+    assert "function_dependencies" not in attached.schema["rules_engine_ruleset"].dataType.names
+    audited = _evaluation(df, rules, runtime=runtime, full_audit=True)
+    assert audited.function_dependencies == manifest
+    assert audited.results_df.collect()[0]["rules_engine_ruleset"]["function_dependencies"] == manifest
+    # Later registry changes must not alter the manifest for an already prepared plan.
+    defaults.append(2)
+    assert evaluation.function_dependencies == manifest
+    assert registry.dependency_manifest(rules) != json.loads(manifest)

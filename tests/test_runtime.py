@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import ROUND_UP, Decimal, Inexact, Rounded, localcontext
 
@@ -10,7 +11,7 @@ from rules_engine.compiler_yaml import YamlRulesetCompiler
 from rules_engine.enums import ComparisonOperator
 from rules_engine.exceptions import ValidationFailedError
 from rules_engine.human_readable import HumanReadableRulesetFormatter
-from rules_engine.models import ValidationResult
+from rules_engine.models import LiteralOperand, ValidationResult
 from rules_engine.registry import (
     CustomFunctionArgSpec,
     CustomFunctionSpec,
@@ -28,6 +29,7 @@ from rules_engine.spark_runtime import (
     required_source_columns,
     result_field_names,
 )
+from rules_engine.spark_validator import SparkRulesetCompatibilityValidator
 
 
 class DummyRepository:
@@ -435,6 +437,9 @@ def test_result_payload_keys_match_the_declared_schema(
     assert tuple(success) == expected_field_names
     assert tuple(error) == expected_field_names
     assert error["assign"] == {"bucket": {"applied": False, "value": None}}
+    error["assign"]["bucket"].update(applied=True, value="caller mutation")
+    assert another_error["assign"] == {"bucket": {"applied": False, "value": None}}
+    assert base_payload_template["assign"] == {"bucket": {"applied": False, "value": None}}
     assert error["matched_rule_ids"] is not another_error["matched_rule_ids"]
     if full_audit:
         assert error["matched_rules"] is not another_error["matched_rules"]
@@ -450,6 +455,8 @@ def test_result_payload_keys_match_the_declared_schema(
         "assign",
         "ruleset",
         "engine_version",
+        "matched_rules",
+        "assignment_results",
     ),
 )
 def test_dataframe_evaluation_reserves_every_output_name_in_compact_mode(
@@ -472,30 +479,6 @@ def test_dataframe_evaluation_reserves_every_output_name_in_compact_mode(
             ruleset,
             key_columns=["row_id"],
         )
-
-
-def test_compact_evaluation_reserves_full_audit_only_names():
-    """Switching audit detail later cannot silently overwrite an input column."""
-    ruleset = _compile(
-        {
-            "left": {"field": "account"},
-            "operator": "eq",
-            "right": {"literal": "A"},
-        }
-    )
-
-    for field_name in (
-        "matched_rules",
-        "assignment_results",
-    ):
-        column_name = f"rules_engine_{field_name}"
-        input_frame = type("InputFrame", (), {"columns": ["row_id", column_name]})()
-        with pytest.raises(ValueError, match=column_name):
-            _spark_runtime().evaluate_dataframe(
-                input_frame,
-                ruleset,
-                key_columns=["row_id"],
-            )
 
 
 def test_dataframe_evaluation_reserves_output_names_case_insensitively():
@@ -568,57 +551,19 @@ def test_dataframe_evaluation_rejects_invalid_key_metadata(key_columns, message)
         )
 
 
-def test_dataframe_evaluation_rejects_an_ambiguous_key_column():
-    """Duplicate source names cannot provide deterministic row identity."""
+@pytest.mark.parametrize(
+    ("columns", "condition_field"),
+    [
+        pytest.param(["row_id", "row_id", "account"], "account", id="duplicate-key"),
+        pytest.param(["row_id", "ROW_ID", "account"], "account", id="case-ambiguous-key"),
+        pytest.param(["row_id", "status", "Foo", "foo"], "status", id="unselected-source"),
+    ],
+)
+def test_dataframe_evaluation_rejects_ambiguous_source_columns(columns, condition_field):
+    """Every source name must be unambiguous, whether selected as a key or not."""
     ruleset = _compile(
         {
-            "left": {"field": "account"},
-            "operator": "eq",
-            "right": {"literal": "A"},
-        }
-    )
-    input_frame = type(
-        "InputFrame",
-        (),
-        {"columns": ["row_id", "row_id", "account"]},
-    )()
-
-    with pytest.raises(ValueError, match="ambiguous"):
-        _spark_runtime().evaluate_dataframe(
-            input_frame,
-            ruleset,
-            key_columns=["row_id"],
-        )
-
-
-def test_dataframe_evaluation_rejects_a_case_ambiguous_key_column():
-    """Spark's default resolver cannot identify a key among case variants."""
-    ruleset = _compile(
-        {
-            "left": {"field": "account"},
-            "operator": "eq",
-            "right": {"literal": "A"},
-        }
-    )
-    input_frame = type(
-        "InputFrame",
-        (),
-        {"columns": ["row_id", "ROW_ID", "account"]},
-    )()
-
-    with pytest.raises(ValueError, match="ambiguous"):
-        _spark_runtime().evaluate_dataframe(
-            input_frame,
-            ruleset,
-            key_columns=["row_id"],
-        )
-
-
-def test_dataframe_evaluation_rejects_unselected_ambiguous_source_columns():
-    """Assignment application must be able to project every source column safely."""
-    ruleset = _compile(
-        {
-            "left": {"field": "status"},
+            "left": {"field": condition_field},
             "operator": "eq",
             "right": {"literal": "A"},
         },
@@ -627,7 +572,7 @@ def test_dataframe_evaluation_rejects_unselected_ambiguous_source_columns():
     input_frame = type(
         "InputFrame",
         (),
-        {"columns": ["row_id", "status", "Foo", "foo"]},
+        {"columns": columns},
     )()
 
     with pytest.raises(ValueError, match="ambiguous column names"):
@@ -1410,7 +1355,7 @@ def test_spark_row_evaluator_preserves_mapping_literal_assignment_as_struct():
         },
     )
 
-    schema = _spark_runtime()._assignment_schema(
+    schema = SparkRulesetCompatibilityValidator().assignment_schema(
         ruleset, T.StructType([T.StructField("account", T.StringType())])
     )
     field_types = {field.name: field.dataType for field in schema.fields}
@@ -1497,7 +1442,7 @@ def test_spark_assignment_schema_ignores_inactive_rules():
         }
     )
 
-    schema = _spark_runtime()._assignment_schema(
+    schema = SparkRulesetCompatibilityValidator().assignment_schema(
         ruleset, T.StructType([T.StructField("account", T.StringType())])
     )
     field_types = {field.name: field.dataType for field in schema.fields}
@@ -1586,19 +1531,20 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
         }
     )
 
-    result = _evaluate_worker(
+    worker = _spark_runtime()._build_row_evaluator(
         ruleset,
-        {"account": "A", "bucket": "original", "risk": "high", "cleared": None},
+        ["bucket", "risk", "cleared"],
+        {field_name: T.StringType() for field_name in ("bucket", "risk", "cleared")},
+        full_audit=True,
     )
+    row = {"account": "A", "bucket": "original", "risk": "high", "cleared": None}
+    result = worker(FakeSparkRow(row))
     compact_result = _evaluate_worker(
         ruleset,
-        {"account": "A", "bucket": "original", "risk": "high", "cleared": None},
+        row,
         full_audit=False,
     )
-    another_result = _evaluate_worker(
-        ruleset,
-        {"account": "A", "bucket": "original", "risk": "high", "cleared": None},
-    )
+    another_result = worker(FakeSparkRow(row))
 
     assert result["matched_rule_ids"] == ["first_match", "second_match"]
     assert result["assign"] == {
@@ -1616,7 +1562,7 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
         "risk",
         "cleared",
     ]
-    assert result["matched_rules"][-1]["rule_id"] == "second_match"
+    assert another_result == result
     assert result["matched_rules"][0] is not another_result["matched_rules"][0]
     assert (
         result["matched_rules"][0]["conditions"]
@@ -1627,8 +1573,8 @@ def test_spark_row_evaluator_merges_assignments_when_stop_on_match_false():
         "second_match",
     ]
     assert all(item["conditions"] for item in result["matched_rules"])
-    assert result["matched_rules"][0]["rule_id"] == "first_match"
-    assert result["matched_rules"][0]["explanation"] == "account == 'A'"
+    another_result["matched_rules"][0]["conditions"].clear()
+    assert worker(FakeSparkRow(row)) == result
     assignment_results = {item["assignment_id"]: item for item in result["assignment_results"]}
     assert assignment_results["first_bucket"]["effective"] is False
     assert assignment_results["first_bucket"]["old_value"] == "original"
@@ -1728,7 +1674,7 @@ def test_full_audit_builds_explanations_only_for_matched_rules(monkeypatch):
         record_explanation,
     )
     runtime = _spark_runtime()
-    assign_schema = runtime._assignment_schema(
+    assign_schema = SparkRulesetCompatibilityValidator().assignment_schema(
         ruleset, T.StructType([T.StructField("account", T.StringType())])
     )
     evaluator = runtime._build_row_evaluator(
@@ -1843,6 +1789,33 @@ def test_full_audit_evaluates_each_condition_once_and_emits_only_matched_traces(
     Why: Full audit must not re-invoke custom logic to construct matched-rule detail.
     Fails when: Conditions are skipped, repeated, or losing rules enter matched_rules.
     """
+    function_calls = []
+
+    def observe(*, condition_id, value):
+        function_calls.append((condition_id, value))
+        return value
+
+    registry = FunctionRegistry()
+    registry.register(
+        CustomFunctionSpec(
+            function_name="observe",
+            implementation_reference="tests.observe",
+            arguments=(CustomFunctionArgSpec("condition_id"), CustomFunctionArgSpec("value")),
+            allowed_in_condition_flag=True,
+            allowed_in_assignment_flag=False,
+            return_type_hint="string",
+        ),
+        observe,
+    )
+
+    def observed_field(condition_id, field_name):
+        return {
+            "custom_function": {
+                "name": "observe",
+                "args": {"condition_id": condition_id, "value": {"field": field_name}},
+            }
+        }
+
     ruleset = YamlRulesetCompiler().compile_payload(
         {
             "ruleset_id": "trace_efficiency",
@@ -1858,13 +1831,13 @@ def test_full_audit_evaluates_each_condition_once_and_emits_only_matched_traces(
                         "all": [
                             {
                                 "condition_id": "loser_first",
-                                "left": {"field": "account"},
+                                "left": observed_field("loser_first", "account"),
                                 "operator": "eq",
                                 "right": {"literal": "B"},
                             },
                             {
                                 "condition_id": "loser_second",
-                                "left": {"field": "status"},
+                                "left": observed_field("loser_second", "status"),
                                 "operator": "eq",
                                 "right": {"literal": "open"},
                             },
@@ -1881,7 +1854,7 @@ def test_full_audit_evaluates_each_condition_once_and_emits_only_matched_traces(
                         "all": [
                             {
                                 "condition_id": "first_match_condition",
-                                "left": {"field": "account"},
+                                "left": observed_field("first_match_condition", "account"),
                                 "operator": "eq",
                                 "right": {"literal": "A"},
                             }
@@ -1901,9 +1874,16 @@ def test_full_audit_evaluates_each_condition_once_and_emits_only_matched_traces(
 
     monkeypatch.setattr(SparkRowEvaluator, "_condition_trace", record_trace)
 
-    result = _evaluate_worker(ruleset, {"account": "A", "status": "open"})
+    result = _evaluate_worker(ruleset, {"account": "A", "status": "open"}, registry=registry)
 
-    assert result["matched_rules"][0]["rule_id"] == "first_match"
+    assert result["error"] is None
+    assert result["matched_rule_ids"] == ["first_match"]
+    assert [trace["rule_id"] for trace in result["matched_rules"]] == ["first_match"]
+    assert function_calls == [
+        ("loser_first", "A"),
+        ("loser_second", "open"),
+        ("first_match_condition", "A"),
+    ]
     assert traced_condition_ids == [
         "loser_first",
         "loser_second",
@@ -2010,7 +1990,7 @@ def test_base_payload_field_construction_is_hoisted_out_of_row_evaluation(
         tracked_result_field_names,
     )
     runtime = _spark_runtime()
-    assign_schema = runtime._assignment_schema(
+    assign_schema = SparkRulesetCompatibilityValidator().assignment_schema(
         ruleset, T.StructType([T.StructField("account", T.StringType())])
     )
     evaluator = runtime._build_row_evaluator(
@@ -2026,11 +2006,12 @@ def test_base_payload_field_construction_is_hoisted_out_of_row_evaluation(
     assert calls == [True]
 
 
-def test_match_only_losing_rule_preserves_later_condition_errors():
+@pytest.mark.parametrize("full_audit", [False, True], ids=["compact", "full-audit"])
+def test_losing_rule_preserves_later_condition_errors_in_both_audit_modes(full_audit):
     """
-    What: Evaluates every condition in a losing group when a later one errors.
-    Why: Optimization must not hide row errors that the traced evaluator surfaced.
-    Fails when: Match-only evaluation short-circuits after the first false condition.
+    What: Both audit modes visit a later erroneous condition after a false condition.
+    Why: Compact evaluation must preserve the traced evaluator's visible row errors.
+    Fails when: Either evaluation path short-circuits after the first false condition.
     """
     ruleset = _compile_when(
         {
@@ -2049,9 +2030,12 @@ def test_match_only_losing_rule_preserves_later_condition_errors():
         }
     )
 
-    result = _evaluate_worker(ruleset, {"account": "A", "amount": "invalid"})
+    result = _evaluate_worker(
+        ruleset, {"account": "A", "amount": "invalid"}, full_audit=full_audit
+    )
 
     assert result["matched"] is False
+    assert result["error"] is not None
     assert "Ordered comparison requires numeric" in result["error"]
     assert "'invalid'" in result["error"]
 
@@ -2187,7 +2171,7 @@ def test_spark_assignment_schema_rejects_incompatible_same_target_assignments():
     )
 
     with pytest.raises(ValueError, match="SPARK_ASSIGNMENT_TYPE_CONFLICT"):
-        _spark_runtime()._assignment_schema(
+        SparkRulesetCompatibilityValidator().assignment_schema(
             ruleset, T.StructType([T.StructField("account", T.StringType())])
         )
 
@@ -2457,7 +2441,8 @@ def test_spark_row_evaluator_can_include_debug_traceback():
     assert "Traceback" in result["error"]
 
 
-def test_spark_row_evaluator_can_raise_during_materializing_action():
+def test_spark_row_evaluator_wraps_fail_fast_errors_in_the_worker():
+    """The Python worker raises an actionable RuntimeError when fail-fast is enabled."""
     ruleset = _compile(
         {
             "left": {"field": "missing"},
@@ -2775,7 +2760,7 @@ def test_assigned_collections_and_returned_results_do_not_alias_prepared_literal
         result["assign"]["seed"]["value"].clear()
         assert result["assign"]["copy"]["value"] == [1, 2]
     assert ruleset.rules[0].assignments[0].value.value == [1, 2]
-    assert evaluator._prepared_ruleset.source.rules[0].assignments[0].value.value == [1, 2]
+    assert evaluator._prepared_ruleset.active_rules[0].assignments[0].value.value == [1, 2]
     for full_audit in [False, True]:
         worker = _spark_runtime(registry)._build_row_evaluator(
             ruleset,
@@ -2791,3 +2776,154 @@ def test_assigned_collections_and_returned_results_do_not_alias_prepared_literal
             result = worker(FakeSparkRow({}))
             assert result["assign"] == expected
             result["assign"]["seed"]["value"].clear()
+
+
+@pytest.mark.parametrize("full_audit", [False, True])
+def test_worker_closure_excludes_inactive_rule_metadata(full_audit):
+    """Executor payload size depends on live rules rather than retired history."""
+    light = _compile(
+        {"left": {"field": "amount"}, "operator": "gt", "right": {"literal": 0}}
+    )
+    retired_marker = "INACTIVE_RULE_METADATA_MUST_STAY_ON_DRIVER"
+    template = light.rules[0]
+    retired = tuple(
+        replace(
+            template,
+            rule_id=f"retired-{index}",
+            rule_name=f"Retired rule {index}",
+            rule_order=index + 2,
+            active_flag=False,
+            description=f"{retired_marker}-{index}-" + "x" * 2000,
+            assignments=(
+                replace(
+                    template.assignments[0],
+                    value=LiteralOperand(f"{retired_marker}-literal-{index}-" + "y" * 2000),
+                ),
+            ),
+        )
+        for index in range(200)
+    )
+    heavy = replace(light, rules=light.rules + retired)
+    serializer = CloudPickleSerializer()
+
+    def dump(ruleset):
+        worker = _spark_runtime()._build_row_evaluator(
+            ruleset,
+            ["bucket"],
+            {"bucket": T.StringType()},
+            full_audit=full_audit,
+            source_schema=T.StructType([T.StructField("amount", T.LongType())]),
+        )
+        return serializer.dumps(worker)
+
+    light_payload = dump(light)
+    heavy_payload = dump(heavy)
+    assert retired_marker.encode() not in heavy_payload
+    assert len(heavy_payload) < len(light_payload) * 1.5
+    restored = serializer.loads(heavy_payload)
+    assert restored(FakeSparkRow({"amount": 1}))["assign"]["bucket"] == {
+        "applied": True,
+        "value": "matched",
+    }
+
+
+@pytest.mark.parametrize("mode", ["python", "compact", "audit"])
+def test_binary_arguments_and_assignments_are_isolated_from_cached_results(mode):
+    """Binary mutations cannot alter committed values, row inputs, or later rows."""
+    cached = bytearray(b"AB")
+    retained = []
+
+    def seed():
+        return cached
+
+    def consume(*, value):
+        retained.append(value)
+        value.clear()
+        return 1
+
+    registry = FunctionRegistry()
+    registry.register(
+        CustomFunctionSpec("seed", "tests.seed", (), True, True, return_type_hint="any"),
+        seed,
+    )
+    registry.register(
+        CustomFunctionSpec(
+            "consume",
+            "tests.consume",
+            (CustomFunctionArgSpec("value"),),
+            True,
+            True,
+            return_type_hint="integer",
+        ),
+        consume,
+    )
+    when = {"all": [{"left": {"literal": True}, "operator": "eq", "right": {"literal": True}}]}
+    ruleset = YamlRulesetCompiler().compile_payload(
+        {
+            "ruleset_id": "binary-isolation",
+            "ruleset_name": "Binary isolation",
+            "version": "1",
+            "owner": "Rules Team",
+            "owner_department": "Engineering",
+            "rules": [
+                {
+                    "rule_id": "seed",
+                    "rule_name": "Seed",
+                    "when": when,
+                    "assign": {"seed": {"custom_function": {"name": "seed", "args": {}}}},
+                },
+                {
+                    "rule_id": "consume",
+                    "rule_name": "Consume",
+                    "when": when,
+                    "assign": {
+                        "copy": {"assigned": "seed"},
+                        "consumed": {
+                            "custom_function": {
+                                "name": "consume",
+                                "args": {"value": {"assigned": "seed"}},
+                            }
+                        },
+                        "input_consumed": {
+                            "custom_function": {
+                                "name": "consume",
+                                "args": {"value": {"field": "input"}},
+                            }
+                        },
+                    },
+                },
+            ],
+        }
+    )
+    evaluator = SparkRowEvaluator(registry)
+    worker = _spark_runtime(registry)._build_row_evaluator(
+        ruleset,
+        ["seed", "copy", "consumed", "input_consumed"],
+        {
+            "seed": T.BinaryType(),
+            "copy": T.BinaryType(),
+            "consumed": T.LongType(),
+            "input_consumed": T.LongType(),
+        },
+        full_audit=mode == "audit",
+    )
+    for _ in range(2):
+        row = {"input": bytearray(b"CD")}
+        result = (
+            evaluator.evaluate_row(ruleset, row)
+            if mode == "python"
+            else worker(FakeSparkRow(row))
+        )
+        assert result.get("error") is None
+        assert result["assign"] == {
+            "seed": {"applied": True, "value": bytearray(b"AB")},
+            "copy": {"applied": True, "value": bytearray(b"AB")},
+            "consumed": {"applied": True, "value": 1},
+            "input_consumed": {"applied": True, "value": 1},
+        }
+        result["assign"]["seed"]["value"].clear()
+        for value in retained:
+            value.extend(b"retained mutation")
+        assert result["assign"]["copy"]["value"] == bytearray(b"AB")
+        assert row["input"] == bytearray(b"CD")
+        assert cached == bytearray(b"AB")

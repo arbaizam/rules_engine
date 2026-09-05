@@ -58,26 +58,34 @@ def _specification(
 def test_manifest_exposes_the_complete_engine_operator_contract():
     """Every comparison enum must have one exact authoring behavior record."""
     manifest = build_authoring_manifest(FunctionRegistry())
-    operators = {item["name"]: item for item in manifest["comparison_operators"]}
-
-    assert list(operators) == [operator.value for operator in ComparisonOperator]
-    assert operators["is_null"] == {
-        "name": "is_null",
-        "arity": 1,
-        "right_operand_shape": "none",
-        "supports_tolerance": False,
-    }
-    assert operators["in"]["right_operand_shape"] == "collection"
-    assert operators["not_in"]["right_operand_shape"] == "collection"
-    assert operators["between"]["right_operand_shape"] == "pair"
-    assert operators["not_between"]["right_operand_shape"] == "pair"
-    assert {
-        name for name, item in operators.items() if item["supports_tolerance"]
-    } == {"eq", "ne", "gt", "ge", "lt", "le", "in", "not_in"}
-    assert all(
-        item["arity"] == (1 if item["right_operand_shape"] == "none" else 2)
-        for item in operators.values()
-    )
+    expected = [
+        ("eq", 2, "any", True),
+        ("ne", 2, "any", True),
+        ("gt", 2, "any", True),
+        ("ge", 2, "any", True),
+        ("lt", 2, "any", True),
+        ("le", 2, "any", True),
+        ("in", 2, "collection", True),
+        ("not_in", 2, "collection", True),
+        ("between", 2, "pair", False),
+        ("not_between", 2, "pair", False),
+        ("like", 2, "any", False),
+        ("not_like", 2, "any", False),
+        ("contains", 2, "any", False),
+        ("not_contains", 2, "any", False),
+        ("starts_with", 2, "any", False),
+        ("ends_with", 2, "any", False),
+        ("is_null", 1, "none", False),
+        ("is_not_null", 1, "none", False),
+    ]
+    records = manifest["comparison_operators"]
+    assert [item["name"] for item in records] == [item.value for item in ComparisonOperator]
+    assert len(records) == len({item["name"] for item in records})
+    assert records == [
+        {"name": name, "arity": arity, "right_operand_shape": shape,
+         "supports_tolerance": tolerance}
+        for name, arity, shape, tolerance in expected
+    ]
 
 
 def test_manifest_exposes_enums_literal_hints_and_build_identity():

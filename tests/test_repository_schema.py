@@ -1,3 +1,4 @@
+import re
 from dataclasses import fields
 
 import pytest
@@ -34,6 +35,58 @@ class FakeSpark:
 
     def sql(self, query):
         self.queries.append(query)
+
+
+@pytest.mark.parametrize("mode", [None, "error", "errorifexists", "ERROR", "ignore", "overwrite"])
+def test_bootstrap_ddl_matches_every_struct_field_and_mode(mode):
+    """Emitted DDL preserves every schema field, type and nullability in each supported mode."""
+    spark = FakeSpark()
+    repo = SparkDeltaRulesetRepository(
+        spark, RulesEngineTableNames("ruleset_versions", "function_registry"),
+    )
+    if mode is None:
+        repo.create_base_tables()
+    else:
+        repo.create_base_tables(mode=mode)
+
+    creates = [query for query in spark.queries if "CREATE TABLE" in query]
+    assert len(creates) == 2
+    assert len(spark.queries) == (4 if mode == "overwrite" else 2)
+    for query, name, schema in zip(
+        creates,
+        ("ruleset_versions", "function_registry"),
+        (repo.ruleset_version_schema, repo.function_registry_schema),
+        strict=True,
+    ):
+        match = re.fullmatch(
+            r"\s*CREATE TABLE (IF NOT EXISTS )?`(\w+)`\s*\((.*?)\)\s*USING DELTA\s*",
+            query, flags=re.DOTALL,
+        )
+        assert match is not None
+        assert match[1] == ("IF NOT EXISTS " if mode == "ignore" else None)
+        assert match[2] == name
+        actual = []
+        for declaration in match[3].split(","):
+            tokens = declaration.split()
+            assert tokens[2:] in ([], ["NOT", "NULL"])
+            actual.append((tokens[0], tokens[1].lower(), tokens[2:] == []))
+        assert actual == [
+            (field.name, field.dataType.simpleString(), field.nullable)
+            for field in schema.fields
+        ]
+
+
+@pytest.mark.parametrize("mode", ["append", "", "replace"])
+def test_bootstrap_rejects_invalid_modes_before_any_sql(mode):
+    """Unknown write modes fail without creating or dropping metadata tables."""
+    spark = FakeSpark()
+    repo = SparkDeltaRulesetRepository(
+        spark, RulesEngineTableNames("ruleset_versions", "function_registry"),
+    )
+    with pytest.raises(RepositoryError, match="Base table creation mode"):
+        repo.create_base_tables(mode=mode)
+    assert spark.queries == []
+    assert spark.created_frames == []
 
 
 def test_ruleset_version_schema_contains_payload_provenance_and_hash_fields():

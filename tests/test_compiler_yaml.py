@@ -64,7 +64,67 @@ rules:
     assert ruleset.rules[0].assignments[1].value.value == Decimal("0.123456789012345678901")
 
 
-def test_valid_simple_row_rule_compiles_and_validates():
+def test_explicit_binary_float_yaml_tag_preserves_kind_without_changing_type_hints():
+    """Canonical float tags preserve kind while ordinary fractions remain Decimal."""
+    ruleset = YamlRulesetCompiler().compile_text(
+        """ruleset_id: tagged
+ruleset_name: Tagged numbers
+version: '1'
+rules:
+- rule_name: Types
+  when: {all: [{left: {literal: true}, operator: eq, right: {literal: true}}]}
+  assign:
+    binary: !rules_engine/float '1.5'
+    decimal: 1.5
+    typed_decimal: {literal: !rules_engine/float '1.5', value_type: decimal}
+    typed_double: {literal: !rules_engine/float '1.5', value_type: double}
+"""
+    )
+    operands = {assignment.target_field: assignment.value for assignment in ruleset.rules[0].assignments}
+    assert type(operands["binary"].value) is float
+    assert operands["binary"].value_type is None
+    assert type(operands["decimal"].value) is Decimal
+    assert operands["decimal"].value_type is None
+    assert operands["typed_decimal"].value == Decimal("1.5")
+    assert type(operands["typed_decimal"].value) is Decimal
+    assert operands["typed_decimal"].value_type == "decimal"
+    assert type(operands["typed_double"].value) is float
+    assert operands["typed_double"].value_type == "double"
+
+    payload = _minimal_payload()
+    payload["rules"][0]["when"]["all"][0]["right"] = {"literal": 1.5}
+    ordinary_value = YamlRulesetCompiler().compile_payload(payload).rules[0].root_group.conditions[0].right
+    assert type(ordinary_value.value) is Decimal
+    assert ordinary_value.value_type is None
+
+
+@pytest.mark.parametrize(
+    ("tagged_value", "message"),
+    [
+        ("NaN", "finite"),
+        ("inf", "finite"),
+        ("-inf", "finite"),
+        ("1e309", "finite"),
+        ("not-a-number", "numeric"),
+        ("[1.5]", "expected a scalar node"),
+        ("{value: 1.5}", "expected a scalar node"),
+    ],
+)
+def test_explicit_binary_float_yaml_tag_rejects_invalid_values(tagged_value, message):
+    """The safe float tag cannot bypass the finite literal contract."""
+    text = f"""ruleset_id: tagged
+ruleset_name: Tagged numbers
+version: '1'
+rules:
+- rule_name: Invalid number
+  when: {{all: [{{left: {{literal: true}}, operator: eq, right: {{literal: true}}}}]}}
+  assign: {{result: !rules_engine/float {tagged_value}}}
+"""
+    with pytest.raises(CompilationError, match=message):
+        YamlRulesetCompiler().compile_text(text)
+
+
+def test_valid_simple_row_rule_compiles_with_owner_and_default_metadata():
     """
     What: Compiles a minimal row-level YAML rule with owner metadata.
     Why: Basic YAML authoring must produce canonical condition metadata.
@@ -254,6 +314,53 @@ def test_custom_function_arguments_compile_operands_inside_collections():
     assert [value.field_name for value in values] == ["primary", "secondary"]
 
 
+def test_custom_function_mapping_escape_preserves_data_keys_and_nested_operands():
+    payload = _minimal_payload()
+    payload["rules"][0]["assign"] = {
+        "result": {
+            "custom_function": {
+                "name": "lookup",
+                "args": {
+                    "mapping": {
+                        "$rules_engine_mapping": {
+                            "field": "legacy_name",
+                            "dynamic": {"field": "source"},
+                            "$rules_engine_mapping": "ordinary data",
+                        }
+                    }
+                },
+            }
+        }
+    }
+
+    ruleset = YamlRulesetCompiler().compile_payload(payload)
+
+    assert ruleset.rules[0].assignments[0].value.args["mapping"] == {
+        "field": "legacy_name",
+        "dynamic": FieldOperand("source"),
+        "$rules_engine_mapping": "ordinary data",
+    }
+
+
+@pytest.mark.parametrize(
+    ("escaped", "message"),
+    [
+        ({"$rules_engine_mapping": None}, "must be a mapping"),
+        ({"$rules_engine_mapping": []}, "must be a mapping"),
+        ({"$rules_engine_mapping": {}, "field": "x"}, "unsupported keys"),
+        ({"$rules_engine_mapping": {}, "other": True}, "unsupported keys"),
+    ],
+)
+def test_custom_function_mapping_escape_rejects_malformed_shapes(escaped, message):
+    payload = _minimal_payload()
+    payload["rules"][0]["assign"] = {
+        "result": {"custom_function": {"name": "lookup", "args": {"mapping": escaped}}}
+    }
+
+    with pytest.raises(CompilationError, match=message):
+        YamlRulesetCompiler().compile_payload(payload)
+
+
 def test_assigned_operand_compiles_with_a_null_fallback():
     """YAML can explicitly read the latest value from an earlier matched rule."""
     ruleset = YamlRulesetCompiler().compile_payload(
@@ -367,7 +474,17 @@ def test_nonfinite_explicit_numeric_payloads_fail_compilation(value, value_type)
         YamlRulesetCompiler().compile_payload(payload)
 
 
-def test_explicit_decimal_collection_is_normalized_recursively():
+@pytest.mark.parametrize(
+    ("authored", "expected"),
+    [
+        (["0.0425", "0.05"], [Decimal("0.0425"), Decimal("0.05")]),
+        (
+            {"nested": [("0.0425", {"0.05"})]},
+            {"nested": [(Decimal("0.0425"), {Decimal("0.05")})]},
+        ),
+    ],
+)
+def test_explicit_decimal_collection_is_normalized_recursively(authored, expected):
     """A collection hint applies exact Decimal normalization recursively."""
     ruleset = YamlRulesetCompiler().compile_payload(
         {
@@ -383,7 +500,7 @@ def test_explicit_decimal_collection_is_normalized_recursively():
                                 "left": {"field": "rate"},
                                 "operator": "in",
                                 "right": {
-                                    "literal": ["0.0425", "0.05"],
+                                    "literal": authored,
                                     "value_type": "decimal",
                                 },
                             }
@@ -396,7 +513,19 @@ def test_explicit_decimal_collection_is_normalized_recursively():
     )
 
     values = ruleset.rules[0].root_group.conditions[0].right.value
-    assert values == [Decimal("0.0425"), Decimal("0.05")]
+    assert values == expected
+
+    def assert_decimal_leaves(value):
+        if isinstance(value, dict):
+            for item in value.values():
+                assert_decimal_leaves(item)
+        elif isinstance(value, (list, tuple, set)):
+            for item in value:
+                assert_decimal_leaves(item)
+        else:
+            assert type(value) is Decimal
+
+    assert_decimal_leaves(values)
 
 
 def test_explicit_date_literal_normalizes_quoted_iso_text():
@@ -456,7 +585,10 @@ def test_explicit_timestamp_literals_normalize_to_datetime(value_type, authored,
 
     ruleset = YamlRulesetCompiler().compile_payload(payload)
 
-    assert ruleset.rules[0].root_group.conditions[0].right.value == expected
+    value = ruleset.rules[0].root_group.conditions[0].right.value
+    assert value == expected
+    assert value.tzinfo is (timezone.utc if value_type == "timestamp" else None)
+    assert value.replace(tzinfo=None) == expected.replace(tzinfo=None)
 
 
 @pytest.mark.parametrize(
@@ -552,11 +684,19 @@ def test_known_scalar_literal_hints_reject_incompatible_values(
         YamlRulesetCompiler().compile_payload(payload)
 
 
-def test_known_scalar_literal_hints_validate_collection_items_recursively():
+@pytest.mark.parametrize(
+    "authored",
+    [
+        [1, "2"],
+        [1, {"nested": (2, ["3"])}],
+        {"nested": ({1, "2"},)},
+    ],
+)
+def test_known_scalar_literal_hints_validate_collection_items_recursively(authored):
     """One invalid typed collection item must fail compilation at the source."""
     payload = _minimal_payload()
     payload["rules"][0]["when"]["all"][0]["right"] = {
-        "literal": [1, "2"],
+        "literal": authored,
         "value_type": "integer",
     }
 
@@ -637,7 +777,18 @@ def test_canonical_string_operators_compile():
 
 @pytest.mark.parametrize(
     "location",
-    ("ruleset", "rule", "condition", "assignment", "function"),
+    (
+        "ruleset",
+        "rule",
+        "group",
+        "condition",
+        "assignment",
+        "function",
+        "field_operand",
+        "assigned_operand",
+        "literal_operand",
+        "custom_function_operand",
+    ),
 )
 def test_unknown_mapping_keys_are_rejected_at_every_contract_level(location):
     """Every structured authoring mapping has an explicit closed key set."""
@@ -646,6 +797,8 @@ def test_unknown_mapping_keys_are_rejected_at_every_contract_level(location):
         target = payload
     elif location == "rule":
         target = payload["rules"][0]
+    elif location == "group":
+        target = payload["rules"][0]["when"]
     elif location == "condition":
         target = payload["rules"][0]["when"]["all"][0]
     elif location == "assignment":
@@ -657,13 +810,18 @@ def test_unknown_mapping_keys_are_rejected_at_every_contract_level(location):
             }
         ]
         target = payload["rules"][0]["assign"][0]
+    elif location in {"field_operand", "assigned_operand", "literal_operand"}:
+        kind = location.removesuffix("_operand")
+        target = {kind: "account"}
+        payload["rules"][0]["when"]["all"][0]["left"] = target
     else:
         function = {
             "name": "identity",
             "args": {"value": {"field": "account"}},
         }
-        payload["rules"][0]["when"]["all"][0]["left"] = {"custom_function": function}
-        target = function
+        operand = {"custom_function": function}
+        payload["rules"][0]["when"]["all"][0]["left"] = operand
+        target = operand if location == "custom_function_operand" else function
     target["unexpected"] = True
 
     with pytest.raises(CompilationError, match="unsupported keys"):
@@ -674,9 +832,12 @@ def test_mixed_type_unsupported_keys_raise_compilation_error():
     """Malformed YAML keys must not escape as a Python sorting error."""
     payload = _minimal_payload()
     payload[1] = "unsupported"
+    payload["unexpected"] = "also unsupported"
 
-    with pytest.raises(CompilationError, match=r"unsupported keys: \[1\]"):
+    with pytest.raises(CompilationError, match="unsupported keys") as raised:
         YamlRulesetCompiler().compile_payload(payload)
+    assert "'unexpected'" in str(raised.value)
+    assert "1" in str(raised.value)
 
 
 def test_required_authoring_text_rejects_whitespace_only_values():

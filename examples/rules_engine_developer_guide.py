@@ -75,6 +75,7 @@ from rules_engine import (
     YamlRulesetExporter,
 )
 from rules_engine.exceptions import RepositoryError
+from rules_engine.serializer import DeltaRowSerializer
 
 print(f"rules_engine version: {rules_engine.__version__}")
 print(f"rules_engine package: {rules_engine.__file__}")
@@ -213,6 +214,10 @@ ruleset
 # MAGIC   on in-memory objects.
 # MAGIC - Exported YAML includes IDs so round-trip equality is preserved, not just
 # MAGIC   semantic similarity.
+# MAGIC - Canonical `!rules_engine/float` and `!rules_engine/tuple` tags preserve
+# MAGIC   numeric and collection kinds. Recompile with `YamlRulesetCompiler`.
+# MAGIC - Compare content hashes too: Python numeric equality alone cannot
+# MAGIC   distinguish a binary float from an equal Decimal.
 
 # COMMAND ----------
 
@@ -221,6 +226,7 @@ exported_yaml = exporter.export_text(ruleset)
 round_tripped = compiler.compile_text(exported_yaml)
 
 assert round_tripped == ruleset
+assert DeltaRowSerializer().content_hash(round_tripped) == DeltaRowSerializer().content_hash(ruleset)
 print(exported_yaml)
 
 # COMMAND ----------
@@ -464,6 +470,8 @@ display(applied_df.orderBy("row_id"))
 # MAGIC - `rules_engine_error`: row-level evaluator error text, null when clean.
 # MAGIC - `rules_engine_ruleset`: ruleset ID, version, content hash, and a
 # MAGIC   canonical JSON manifest of referenced function contracts plus its hash.
+# MAGIC   The manifest is included in rows only with `full_audit=True`; in both
+# MAGIC   modes, `evaluation.function_dependencies` retains it once on the driver.
 # MAGIC - `rules_engine_engine_version`: installed evaluator version.
 # MAGIC
 # MAGIC `apply_assignments()` returns only business columns. Existing targets are

@@ -190,12 +190,14 @@ def test_converters_are_strict_and_offer_an_explicit_null_failure_policy():
 
 
 def test_timestamp_converters_distinguish_instant_and_wall_clock_values():
-    assert sf.to_timestamp("2024-01-01T01:00:00+01:00") == datetime(
+    instant = sf.to_timestamp("2024-01-01T01:00:00+01:00")
+    assert instant == datetime(
         2024,
         1,
         1,
         tzinfo=timezone.utc,
     )
+    assert instant.utcoffset() == timedelta(0)
     expected_wall_clock = datetime(
         2024,
         1,
@@ -203,7 +205,9 @@ def test_timestamp_converters_distinguish_instant_and_wall_clock_values():
         1,
         tzinfo=timezone.utc,
     ).replace(tzinfo=None)
-    assert sf.to_timestamp_ntz("2024-01-01T01:00:00") == expected_wall_clock
+    wall_clock = sf.to_timestamp_ntz("2024-01-01T01:00:00")
+    assert wall_clock == expected_wall_clock
+    assert wall_clock.tzinfo is None
     assert sf.to_timestamp("2024-01-01T01:00:00", on_error="null") is None
     assert (
         sf.to_timestamp_ntz(
@@ -223,9 +227,6 @@ def test_decimal_functions_use_decimal_arithmetic_and_explicit_rounding():
     assert sf.decimal_safe_divide("1", "0") is None
     assert sf.decimal_round("2.345", 2, "half_up") == Decimal("2.35")
     assert sf.decimal_round("2.345", 2, "half_even") == Decimal("2.34")
-    assert sf.decimal_clamp("12", "0", "10") == Decimal(10)
-    assert sf.decimal_min("2", "3") == Decimal(2)
-    assert sf.decimal_max("2", "3") == Decimal(3)
     assert sf.decimal_add(None, "1") is None
 
     with pytest.raises(ZeroDivisionError):
@@ -234,13 +235,41 @@ def test_decimal_functions_use_decimal_arithmetic_and_explicit_rounding():
         sf.decimal_clamp("5", "10", "0")
 
 
+@pytest.mark.parametrize(
+    ("function_name", "arguments", "expected"),
+    [
+        pytest.param("decimal_min", ("2", "3"), Decimal(2), id="min-forward"),
+        pytest.param("decimal_min", ("3", "2"), Decimal(2), id="min-reverse"),
+        pytest.param("decimal_min", ("2", "2"), Decimal(2), id="min-equal"),
+        pytest.param("decimal_max", ("2", "3"), Decimal(3), id="max-forward"),
+        pytest.param("decimal_max", ("3", "2"), Decimal(3), id="max-reverse"),
+        pytest.param("decimal_max", ("2", "2"), Decimal(2), id="max-equal"),
+        pytest.param("decimal_clamp", ("12", "0", "10"), Decimal(10), id="clamp-above"),
+        pytest.param("decimal_clamp", ("-2", "0", "10"), Decimal(0), id="clamp-below"),
+        pytest.param("decimal_clamp", ("2.5", "0", "10"), Decimal("2.5"), id="clamp-interior"),
+    ],
+)
+def test_decimal_selection_functions_compare_values_and_preserve_decimal_type(
+    function_name,
+    arguments,
+    expected,
+):
+    """Min/max compare either argument order and clamp respects both inclusive bounds."""
+    result = getattr(sf, function_name)(*arguments)
+
+    assert type(result) is Decimal
+    assert result == expected
+
+
 def test_calendar_boundary_and_completed_period_functions_are_explicit():
     leap_day = date(2024, 2, 29)
 
     assert sf.date_diff_months(date(2024, 1, 31), leap_day) == 1
+    assert sf.date_diff_months(leap_day, date(2024, 1, 31)) == -1
     assert sf.date_diff_months(leap_day, date(2024, 3, 28)) == 0
     assert sf.date_diff_months(date(2024, 3, 28), leap_day) == 0
     assert sf.date_diff_years(leap_day, date(2025, 2, 28)) == 1
+    assert sf.date_diff_years(date(2025, 2, 28), leap_day) == -1
     assert sf.date_diff_years(date(2025, 2, 27), leap_day) == 0
     assert sf.date_part(leap_day, "quarter") == 1
     assert sf.date_part(leap_day, "day_of_week") == 4
@@ -281,11 +310,17 @@ def test_array_functions_are_null_aware_and_reject_scalar_inputs():
     assert sf.array_size([]) == 0
     assert sf.array_size(None) is None
     assert sf.array_contains_any(["A", "B"], ["B", "C"]) is True
+    assert sf.array_contains_any(["A"], ["B"]) is False
     assert sf.array_contains_any(["A"], []) is False
     assert sf.array_contains_all(["A", "B"], ["B", "A"]) is True
+    assert sf.array_contains_all(["A", "B"], ["B", "C"]) is False
     assert sf.array_contains_all(["A"], []) is True
     assert sf.array_join(["A", None, 2], "|") == "A|2"
     assert sf.array_join(["A", None], "|", skip_nulls=False) is None
+
+    for function in (sf.array_contains_any, sf.array_contains_all):
+        assert function(None, ["A"]) is None
+        assert function(["A"], None) is None
 
     for function, args in [
         (sf.array_size, ("ABC",)),
@@ -435,8 +470,9 @@ def test_optional_defaults_and_nested_argument_operands_work_end_to_end():
     )
     validator = SparkRulesetCompatibilityValidator(registry)
 
-    validation = validator.validate(ruleset, source_schema)
-    assignment_schema = validator.assignment_schema(ruleset, source_schema)
+    prepared_schema = validator.prepare(ruleset, source_schema)
+    validation = prepared_schema.validation
+    assignment_schema = prepared_schema.assignment_schema
     evaluator = SparkRulesEngineRuntime(
         DummyRepository(),
         registry,
@@ -458,7 +494,7 @@ def test_optional_defaults_and_nested_argument_operands_work_end_to_end():
     )
 
     assert validation.passed, validation.to_text()
-    assert required_source_columns(ruleset) == (
+    assert required_source_columns(ruleset) == prepared_schema.required_source_columns == (
         "primary_code",
         "secondary_code",
         "tags",

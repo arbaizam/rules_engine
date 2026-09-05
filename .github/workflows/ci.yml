@@ -14,6 +14,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        python: ["3.10", "3.12"]
+        timezone:
+          - name: utc
+            value: UTC
+          - name: new-york
+            value: America/New_York
+          - name: lord-howe
+            value: Australia/Lord_Howe
+          - name: kathmandu
+            value: Asia/Kathmandu
+          - name: chatham
+            value: Pacific/Chatham
         include:
           - python: "3.10"
             spark: "3.5.6"
@@ -22,9 +34,11 @@ jobs:
     env:
       RULES_ENGINE_RUN_SPARK_TESTS: "1"
       SPARK_LOCAL_IP: "127.0.0.1"
-      TZ: "UTC"
+      TZ: ${{ matrix.timezone.value }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 2
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
@@ -43,7 +57,7 @@ jobs:
       - name: Lint and whitespace
         run: |
           python -m ruff check .
-          git diff --check
+          git show --check --format=oneline --diff-merges=first-parent HEAD
       - name: Run complete suite with real Spark workers
         run: python -m pytest tests -q --junitxml=test-results.xml
       - name: Verify test documentation inventory
@@ -55,7 +69,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: verification-python-${{ matrix.python }}-spark-${{ matrix.spark }}
+          name: verification-python-${{ matrix.python }}-spark-${{ matrix.spark }}-${{ matrix.timezone.name }}
           path: |
             test-results.xml
             dist/*.whl

@@ -32,7 +32,7 @@ does not run pytest itself.
 | ST-019 | Decimal precision | Self-comparison and `decimal_abs` preserve all 38 significant digits in compact and full-audit execution. |
 | ST-020 | Timestamp and fallback boundaries | Spark timestamps compare with offset-bearing literals by instant; collection null fallbacks pass validation and execute in both audit modes. |
 | ST-021 | Output conversion and audit parity | Replacing an existing NaN succeeds in both audit modes; an invalid timestamp returned by a custom function produces a row error and clears all assignment outcomes. |
-| ST-022 | Execution provenance and persistence integrity | Results record the referenced function contract and hash; persisted rows round-trip, and hash or indexed-identity mismatches fail loading. |
+| ST-022 | Execution provenance and persistence integrity | The driver retains the referenced function manifest, compact rows carry its hash, and full-audit rows include the same manifest; persisted rows round-trip, and hash or indexed-identity mismatches fail loading. |
 
 ## Execution Contract
 

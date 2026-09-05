@@ -281,7 +281,12 @@ def _decode_argument(value: Any) -> Any:
         if not isinstance(raw, list):
             raise ValueError(f"Persisted {kind} argument requires an array.")
         decoded = [_decode_argument(item) for item in raw]
-        return tuple(decoded) if kind == "tuple" else set(decoded)
+        if kind == "tuple":
+            return tuple(decoded)
+        try:
+            return set(decoded)
+        except TypeError as exc:
+            raise ValueError("Persisted set argument must contain only hashable values.") from exc
     raise ValueError(f"Unsupported function argument node: {kind!r}.")
 
 

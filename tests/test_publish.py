@@ -13,6 +13,7 @@ class RecordingRepository:
     def __init__(self):
         self.saved = None
         self.published_by = None
+        self.save_calls = []
 
     def save_published(
         self,
@@ -22,6 +23,7 @@ class RecordingRepository:
     ):
         self.saved = ruleset
         self.published_by = published_by
+        self.save_calls.append((ruleset, published_by))
 
     def retire(self, ruleset_id, version, *, retired_by=None):
         raise NotImplementedError
@@ -86,10 +88,13 @@ def test_publish_allows_omitted_provenance():
     Fails when: Optional provenance becomes mandatory at service level.
     """
     service = _service()
+    ruleset = _ruleset()
 
-    service.publish(_ruleset())
+    service.publish(ruleset)
 
     assert service._repository.published_by is None
+    assert service._repository.saved is ruleset
+    assert service._repository.save_calls == [(ruleset, None)]
 
 
 def test_publish_blocks_invalid_ruleset_before_repository_write():

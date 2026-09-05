@@ -1,0 +1,5 @@
+extend = "../pyproject.toml"
+src = ["../src"]
+
+# Databricks supplies these names when it runs the example notebooks.
+builtins = ["spark", "display"]

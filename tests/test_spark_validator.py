@@ -52,7 +52,8 @@ def test_spark_validator_allows_error_on_null_for_udf_row_path():
         }
     )
 
-    result = SparkRulesetCompatibilityValidator().validate(ruleset)
+    schema = T.StructType([T.StructField("status", T.StringType(), True)])
+    result = SparkRulesetCompatibilityValidator().prepare(ruleset, schema).validation
 
     assert result.passed
     assert not result.has_errors()
@@ -112,6 +113,7 @@ def test_spark_validator_allows_numeric_operand_default():
 
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
 
+    assert result.passed, result.to_text()
     assert "SPARK_DEFAULT_IF_NULL_TYPE_INCOMPATIBLE" not in _checks(result)
 
 
@@ -484,13 +486,22 @@ def test_spark_validator_polymorphic_assignment_requires_new_target_type():
     assert "SPARK_ASSIGNMENT_RETURN_TYPE_UNSUPPORTED" not in _checks(result)
 
 
-def test_spark_validator_does_not_guess_condition_coercion_semantics():
+@pytest.mark.parametrize(
+    ("field_type", "right_literal"),
+    [
+        pytest.param(T.StringType(), "10", id="string-string"),
+        pytest.param(T.StringType(), 10, id="string-integer"),
+        pytest.param(T.StringType(), Decimal(10), id="string-decimal"),
+        pytest.param(T.LongType(), "10", id="integer-string"),
+    ],
+)
+def test_spark_validator_does_not_guess_condition_coercion_semantics(field_type, right_literal):
     """Runtime-supported string-to-number comparisons are not rejected early."""
     payload = _payload({"bucket": "A"}, condition_field="amount")
     payload["rules"][0]["when"]["all"][0]["operator"] = "gt"
-    payload["rules"][0]["when"]["all"][0]["right"] = {"literal": "10"}
+    payload["rules"][0]["when"]["all"][0]["right"] = {"literal": right_literal}
     ruleset = YamlRulesetCompiler().compile_payload(payload)
-    schema = T.StructType([T.StructField("amount", T.StringType(), True)])
+    schema = T.StructType([T.StructField("amount", field_type, True)])
 
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
 
@@ -879,6 +890,7 @@ def test_spark_validator_allows_array_membership_field():
 
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
 
+    assert result.passed, result.to_text()
     assert "SPARK_CONDITION_MEMBERSHIP_COLLECTION_REQUIRED" not in _checks(result)
 
 
@@ -1118,6 +1130,7 @@ def test_timestamp_ntz_literal_hint_matches_ntz_field():
 
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
 
+    assert result.passed, result.to_text()
     assert "SPARK_CONDITION_TEMPORAL_MISMATCH" not in _checks(result)
 
 
@@ -1140,6 +1153,7 @@ def test_timestamp_ntz_collection_hint_matches_ntz_field():
 
     result = SparkRulesetCompatibilityValidator().validate(ruleset, schema)
 
+    assert result.passed, result.to_text()
     assert "SPARK_CONDITION_TEMPORAL_MISMATCH" not in _checks(result)
 
 

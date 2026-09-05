@@ -37,6 +37,10 @@ _JSON_TYPE_KEY = "$rules_engine_type"
 _JSON_VALUE_KEY = "value"
 
 
+class _PreservedFloat(float):
+    """Mark an exported authoring scalar whose binary-float kind must survive."""
+
+
 def normalize_literal(
     value: Any,
     value_type: str | None = None,
@@ -52,6 +56,9 @@ def normalize_literal(
     """
     if value_type is not None and (not isinstance(value_type, str) or not value_type.strip()):
         raise ValueError("Literal value_type must be a non-empty string when provided.")
+    if isinstance(value, _PreservedFloat):
+        value = float(value)
+        normalize_untyped_float = False
     normalized_type = value_type.lower() if isinstance(value_type, str) else None
     if isinstance(value, list):
         return [
