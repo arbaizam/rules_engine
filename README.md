@@ -1,5 +1,10 @@
 # Rules Engine
 
+For an interactive, source-backed team learning experience, run
+`python tools/learning_lab/server.py` and open <http://127.0.0.1:8765>.
+The [Rules Engine Field Guide](tools/learning_lab/README.md) includes executable
+experiments, rule-by-rule traces, architecture exploration, and change reviews.
+
 ALM Engineering designed the `rules_engine` to apply clear, reviewable,
 **row-level**, business rules to PySpark DataFrames. Rules are authored
 in strict YAML, compiled into frozen Python dataclasses, and validated.

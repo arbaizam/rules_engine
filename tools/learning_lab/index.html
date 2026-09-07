@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Source-backed lessons and real execution experiments for the rules engine.">
+  <title>Rules Engine — Field Guide</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <aside class="sidebar">
+    <a href="#learn" class="brand"><span class="brandmark">re</span><span>RULES ENGINE<small>ENGINEERING FIELD GUIDE</small></span></a>
+    <div class="side-label">EXPLORE THE SYSTEM</div>
+    <nav id="nav" aria-label="Main navigation">
+      <a href="#learn" data-route="learn"><span>01</span> Learning path</a>
+      <a href="#lab" data-route="lab"><span>02</span> Execution lab</a>
+      <a href="#map" data-route="map"><span>03</span> Architecture atlas</a>
+      <a href="#reference" data-route="reference"><span>04</span> Contract explorer</a>
+      <a href="#source" data-route="source"><span>05</span> Source & tests</a>
+      <a href="#review" data-route="review"><span>06</span> Change review</a>
+    </nav>
+    <div class="side-bottom"><div class="status-dot"></div> Live checkout <strong id="engine-version">…</strong><p>Read. Predict. Run. Explain.</p><div id="progress-summary"></div><button class="text-button" id="export-progress">Export learning notes ↗</button></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><span>ALM Engineering <span class="muted">/ Team enablement</span></span><span class="checkout" id="fingerprint">Reading source…</span></header>
+    <main id="main" tabindex="-1"><div class="loading">Loading the checkout and its teaching experiments…</div></main>
+    <footer>Local learning environment · Row experiments use the real engine · Spark execution and Delta publication are outside this lab</footer>
+  </div>
+  <dialog id="source-dialog" aria-labelledby="source-title"><div class="dialog-head"><h2 id="source-title">Source evidence</h2><button id="close-source" aria-label="Close source">Close ×</button></div><div id="source-body"></div></dialog>
+  <div id="notice" role="status" aria-live="polite"></div>
+</body>
+</html>

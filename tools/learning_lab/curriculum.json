@@ -1,0 +1,1116 @@
+{
+  "title": "Rules Engine / Field Guide",
+  "labs": [
+    {
+      "id": "atomic",
+      "title": "Two worlds, one commit",
+      "level": "Core execution",
+      "question": "After the second rule, what are bucket, previous_bucket, and source_bucket? Predict before running.",
+      "yaml": "ruleset_id: learning_lab\nruleset_name: Learning lab\nversion: '1'\nowner: Learning team\nowner_department: Engineering\nrules:\n  - rule_id: seed\n    rule_name: Seed a committed value\n    rule_order: 10\n    when:\n      all:\n        - left: {field: eligible}\n          operator: eq\n          right: {literal: true}\n    assign:\n      bucket: A\n  - rule_id: revise\n    rule_name: Revise and copy\n    rule_order: 20\n    when:\n      all:\n        - left: {assigned: bucket}\n          operator: eq\n          right: {literal: A}\n    assign:\n      bucket: B\n      previous_bucket: {assigned: bucket}\n      source_bucket: {field: bucket}\n",
+      "rows": [
+        {
+          "eligible": true,
+          "bucket": "ORIGINAL"
+        },
+        {
+          "eligible": false,
+          "bucket": "ORIGINAL"
+        }
+      ],
+      "explanation": "For row 1, bucket=B, previous_bucket=A, source_bucket=ORIGINAL. Every right-hand assignment expression in revise sees the same pre-rule state. Row 2 never gets a commit; an assigned reference never falls back to the original field.",
+      "mutations": [
+        "Change previous_bucket from assigned to field. Explain the new value.",
+        "Set seed.stop_on_match to true. Which rule disappears?",
+        "Make eligible false. Why does revise fail even though an earlier producer exists?"
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_execute_prepared"
+        },
+        {
+          "path": "tests/test_runtime.py",
+          "symbol": "test_assigned_values_are_visible_to_later_rules_and_atomic_within_a_rule"
+        }
+      ],
+      "expect": {
+        "rows": [
+          {
+            "bucket": "B",
+            "previous_bucket": "A",
+            "source_bucket": "ORIGINAL"
+          },
+          {}
+        ]
+      }
+    },
+    {
+      "id": "overwrite",
+      "title": "Three matches, one final winner",
+      "level": "Ordering & provenance",
+      "question": "Which rules match? Which value wins? Is the first rule's stop flag enough to stop a non-match?",
+      "yaml": "ruleset_id: learning_lab\nruleset_name: Learning lab\nversion: '1'\nowner: Learning team\nowner_department: Engineering\nrules:\n  - rule_id: base\n    rule_name: Base classification\n    rule_order: 10\n    when:\n      all:\n        - left: {field: amount}\n          operator: ge\n          right: {literal: 0}\n    assign: {bucket: base}\n  - rule_id: material\n    rule_name: Material amount\n    rule_order: 20\n    when:\n      all:\n        - left: {field: amount}\n          operator: gt\n          right: {literal: 100}\n    assign: {bucket: material}\n  - rule_id: manual\n    rule_name: Manual override\n    rule_order: 30\n    stop_on_match: true\n    when:\n      all:\n        - left: {field: override}\n          operator: eq\n          right: {literal: true}\n    assign: {bucket: manual}\n",
+      "rows": [
+        {
+          "amount": 150,
+          "override": true
+        },
+        {
+          "amount": 150,
+          "override": false
+        },
+        {
+          "amount": -1,
+          "override": true
+        }
+      ],
+      "explanation": "All three rules match row 1 and manual wins. In production full audit, base is overridden immediately by material, but base's final winner is manual. Changing list position alone does not change explicit rule_order.",
+      "mutations": [
+        "Swap rule_order values for material and base.",
+        "Add stop_on_match: true to material.",
+        "Make the first rule non-matching and set its stop flag. Explain why later rules still run."
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_execute_prepared"
+        },
+        {
+          "path": "src/rules_engine/spark_runtime.py",
+          "symbol": "_assignment_results"
+        }
+      ],
+      "expect": {
+        "rows": [
+          {
+            "bucket": "manual"
+          },
+          {
+            "bucket": "material"
+          },
+          {
+            "bucket": "manual"
+          }
+        ]
+      }
+    },
+    {
+      "id": "null",
+      "title": "Null is an outcome, not a missing write",
+      "level": "Null semantics",
+      "question": "Which row clears the existing bucket, and which row preserves it when assignments are applied?",
+      "yaml": "ruleset_id: learning_lab\nruleset_name: Learning lab\nversion: '1'\nowner: Learning team\nowner_department: Engineering\nrules:\n  - rule_id: clear\n    rule_name: Clear selected rows\n    when:\n      all:\n        - left: {field: clear}\n          operator: eq\n          right: {literal: true}\n    assign:\n      bucket: {literal: null, value_type: string}\n",
+      "rows": [
+        {
+          "clear": true,
+          "bucket": "existing"
+        },
+        {
+          "clear": false,
+          "bucket": "existing"
+        }
+      ],
+      "explanation": "The first result is applied=true, value=null. The second is applied=false, value=null. apply_assignments uses the applied flag, so only the first clears an existing value. Reading value alone loses the distinction.",
+      "mutations": [
+        "Assign an empty string and compare the outcome.",
+        "Remove value_type and try Spark schema preflight for a new all-null target."
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/dataframe_evaluation.py",
+          "symbol": "_applied_value"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "evaluate_row"
+        }
+      ],
+      "expect": {
+        "rows": [
+          {
+            "bucket": null
+          },
+          {}
+        ]
+      }
+    },
+    {
+      "id": "eager",
+      "title": "A true branch cannot hide an error",
+      "level": "Failure investigation",
+      "question": "The first any branch is true. Will the second branch run?",
+      "yaml": "ruleset_id: learning_lab\nruleset_name: Learning lab\nversion: '1'\nowner: Learning team\nowner_department: Engineering\nrules:\n  - rule_id: guarded\n    rule_name: An apparent guard\n    when:\n      any:\n        - condition_id: obvious\n          left: {literal: true}\n          operator: eq\n          right: {literal: true}\n        - condition_id: unsafe\n          left: {field: amount}\n          operator: gt\n          right: {literal: 100}\n          error_on_null: true\n    assign: {bucket: passed}\n",
+      "rows": [
+        {
+          "amount": null
+        },
+        {
+          "amount": 50
+        }
+      ],
+      "explanation": "Row 1 errors. Every active condition is evaluated even when an earlier branch already determines the Boolean result. Row 2 matches because the first condition is true. The lab retains observations for debugging; they are not a successful production result.",
+      "mutations": [
+        "Set error_on_null to false.",
+        "Add default_if_null: 0 to the amount operand.",
+        "Change any to all and keep a failing first condition. Does the error still surface?"
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_evaluate_group"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_compare_values"
+        },
+        {
+          "path": "tests/test_runtime.py",
+          "symbol": "test_losing_rule_preserves_later_condition_errors_in_both_audit_modes"
+        }
+      ],
+      "expect": {
+        "errorRows": [
+          0
+        ],
+        "rows": [
+          null,
+          {
+            "bucket": "passed"
+          }
+        ]
+      }
+    },
+    {
+      "id": "fallback",
+      "title": "A producer exists but never commits",
+      "level": "Dependencies",
+      "question": "Does validation guarantee that the producer matched this particular row?",
+      "yaml": "ruleset_id: learning_lab\nruleset_name: Learning lab\nversion: '1'\nowner: Learning team\nowner_department: Engineering\nrules:\n  - rule_id: optional\n    rule_name: Optional producer\n    rule_order: 1\n    when:\n      all:\n        - left: {field: eligible}\n          operator: eq\n          right: {literal: true}\n    assign: {score: 10}\n  - rule_id: consume\n    rule_name: Consume a committed score\n    rule_order: 2\n    when:\n      all:\n        - left: {assigned: score, default_if_null: 0}\n          operator: ge\n          right: {literal: 0}\n    assign:\n      observed: {assigned: score, default_if_null: -1}\n",
+      "rows": [
+        {
+          "eligible": false,
+          "score": 999
+        },
+        {
+          "eligible": true,
+          "score": 999
+        }
+      ],
+      "explanation": "The earlier active producer satisfies structural validation, but row 1 has no committed score. Its condition uses 0; its assignment independently uses -1. Source score=999 never becomes assigned(score).",
+      "mutations": [
+        "Change consume.rule_order to 0 to produce a semantic validation error.",
+        "Remove the operand defaults.",
+        "Make optional inactive and observe validation."
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/validator.py",
+          "symbol": "_validate_assigned_references"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_resolve_operand"
+        }
+      ],
+      "expect": {
+        "rows": [
+          {
+            "observed": -1
+          },
+          {
+            "score": 10,
+            "observed": 10
+          }
+        ]
+      }
+    },
+    {
+      "id": "tolerance",
+      "title": "Tolerance is a band, not rounding",
+      "level": "Exact values",
+      "question": "With right=100 and tolerance=0.1, does gt accept 100.1? Does ge accept 99.9?",
+      "yaml": "ruleset_id: learning_lab\nruleset_name: Learning lab\nversion: '1'\nowner: Learning team\nowner_department: Engineering\nrules:\n  - rule_id: strict\n    rule_name: Strictly outside the upper band\n    rule_order: 1\n    when:\n      all:\n        - left: {field: amount}\n          operator: gt\n          right: {literal: 100}\n          tolerance_abs: 0.1\n    assign: {strict: true}\n  - rule_id: inclusive\n    rule_name: At or above the lower band\n    rule_order: 2\n    when:\n      all:\n        - left: {field: amount}\n          operator: ge\n          right: {literal: 100}\n          tolerance_abs: 0.1\n    assign: {inclusive: true}\n",
+      "rows": [
+        {
+          "amount": 100.1
+        },
+        {
+          "amount": 99.9
+        },
+        {
+          "amount": 100.1001
+        }
+      ],
+      "explanation": "gt compares left-right > tolerance; ge compares left-right >= -tolerance. The first two rows both pass ge and fail gt. Decimal values are rendered with $decimal tags to preserve precision. No display rounding is fed back into evaluation.",
+      "mutations": [
+        "Change gt to eq and test both edges of the band.",
+        "Use between with [100, 200] and a positive tolerance: inspect _between before predicting whether bounds expand.",
+        "Set tolerance_abs to a negative value."
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_compare_ordered"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_equals"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_between"
+        },
+        {
+          "path": "src/rules_engine/decimal_math.py",
+          "symbol": "subtract_exact"
+        }
+      ],
+      "expect": {
+        "rows": [
+          {
+            "inclusive": true
+          },
+          {
+            "inclusive": true
+          },
+          {
+            "strict": true,
+            "inclusive": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "inactive",
+      "title": "An inactive condition still affects the group",
+      "level": "Boolean trees",
+      "question": "Does active_flag:false remove a condition from an all group?",
+      "yaml": "ruleset_id: learning_lab\nruleset_name: Learning lab\nversion: '1'\nowner: Learning team\nowner_department: Engineering\nrules:\n  - rule_id: inactive_member\n    rule_name: Inactive all member\n    when:\n      all:\n        - left: {literal: true}\n          operator: eq\n          right: {literal: true}\n        - condition_id: disabled\n          active_flag: false\n          left: {field: missing}\n          operator: is_null\n    assign: {bucket: matched}\n",
+      "rows": [
+        {}
+      ],
+      "explanation": "An inactive condition evaluates as not passed. It blocks all. With any, a separate true branch can pass. An inactive rule, in contrast, is excluded from the prepared active-rule sequence.",
+      "mutations": [
+        "Change all to any.",
+        "Delete the disabled condition.",
+        "Set the entire rule inactive. Why does validation now fail?"
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_evaluate_condition"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_prepare_ruleset"
+        }
+      ],
+      "expect": {
+        "rows": [
+          {}
+        ]
+      }
+    },
+    {
+      "id": "compile",
+      "title": "Compilation is not validation",
+      "level": "Contract boundaries",
+      "question": "The YAML parses and compiles. Which boundary rejects this ruleset?",
+      "yaml": "ruleset_id: missing_owner\nruleset_name: Missing accountability\nversion: '1'\nrules:\n  - rule_name: Always\n    when:\n      all:\n        - left: {literal: true}\n          operator: eq\n          right: {literal: true}\n    assign: {bucket: A}\n",
+      "rows": [
+        {}
+      ],
+      "explanation": "Ownership is required by semantic validation, although the compiler can build the model without it. Fix both owner and owner_department. Then try an unknown YAML key to see an earlier compiler failure.",
+      "mutations": [
+        "Add owner and owner_department at root.",
+        "Use operator: equals instead of eq.",
+        "Duplicate ruleset_id at root."
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/compiler_yaml.py",
+          "symbol": "compile_text"
+        },
+        {
+          "path": "src/rules_engine/validator.py",
+          "symbol": "_validate_ruleset"
+        }
+      ],
+      "expect": {
+        "stage": "semantic validation"
+      }
+    },
+    {
+      "id": "atomic_error",
+      "title": "A later assignment fails",
+      "level": "Atomicity",
+      "question": "If the first assignment resolves and a later one fails, is the first committed?",
+      "yaml": "ruleset_id: learning_lab\nruleset_name: Learning lab\nversion: '1'\nowner: Learning team\nowner_department: Engineering\nrules:\n  - rule_id: initial\n    rule_name: Earlier successful rule\n    rule_order: 1\n    when:\n      all:\n        - left: {literal: true}\n          operator: eq\n          right: {literal: true}\n    assign: {bucket: initial}\n  - rule_id: broken\n    rule_name: Two assignments with one error\n    rule_order: 2\n    when:\n      all:\n        - left: {literal: true}\n          operator: eq\n          right: {literal: true}\n    assign:\n      bucket: revised\n      parsed:\n        custom_function:\n          name: to_integer\n          args:\n            value: {field: raw}\n",
+      "rows": [
+        {
+          "raw": "not-a-number"
+        },
+        {
+          "raw": "42"
+        }
+      ],
+      "explanation": "The failing row has no successful result. The broken rule never commits bucket=revised because assignment expressions are all resolved before commit. The earlier initial commit is observable in the lab trace, but is not a partial success payload from this experiment.",
+      "mutations": [
+        "Use raw: '42' for both rows.",
+        "Move the conversion into a separate later rule and compare the observed commit history."
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_execute_prepared"
+        },
+        {
+          "path": "src/rules_engine/standard_functions.py"
+        }
+      ],
+      "expect": {
+        "errorRows": [
+          0
+        ],
+        "rows": [
+          null,
+          {
+            "bucket": "revised",
+            "parsed": 42
+          }
+        ]
+      }
+    },
+    {
+      "id": "schema",
+      "title": "Row success versus Spark compatibility",
+      "level": "Driver / worker",
+      "question": "Why is a successful local row result insufficient when a Spark column is missing?",
+      "yaml": "ruleset_id: learning_lab\nruleset_name: Learning lab\nversion: '1'\nowner: Learning team\nowner_department: Engineering\nrules:\n  - rule_id: amount_check\n    rule_name: Require the original amount\n    when:\n      all:\n        - left: {field: amount, default_if_null: 0}\n          operator: ge\n          right: {literal: 0}\n    assign: {bucket: ok}\n",
+      "rows": [
+        {}
+      ],
+      "schema": "{\n  \"type\": \"struct\",\n  \"fields\": [\n    {\n      \"name\": \"id\",\n      \"type\": \"long\",\n      \"nullable\": false,\n      \"metadata\": {}\n    }\n  ]\n}",
+      "explanation": "The row helper uses row.get and applies the operand default. Spark preflight validates required source columns and rejects a missing amount column. A null cell in an existing column is a different case. Schema preflight needs PySpark but does not start a Spark session.",
+      "mutations": [
+        "Add amount as a long field to the schema.",
+        "Change amount to a string type and inspect compatibility.",
+        "Add an input column that collides with the chosen output prefix in a real Spark integration test."
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/spark_validator.py",
+          "symbol": "prepare"
+        },
+        {
+          "path": "src/rules_engine/spark_runtime.py",
+          "symbol": "_evaluate_attached_dataframe"
+        }
+      ],
+      "expect": {
+        "rows": [
+          {
+            "bucket": "ok"
+          }
+        ]
+      }
+    }
+  ],
+  "lessons": [
+    {
+      "id": "contract",
+      "title": "Follow the contract through the system",
+      "subtitle": "Separate syntax, semantics, schema, execution, and storage.",
+      "time": "20 min",
+      "lab": "compile",
+      "sections": [
+        {
+          "title": "Five boundaries with different evidence",
+          "text": "YamlRulesetCompiler owns strict shape, duplicate keys, canonical vocabulary and literal decoding. RulesetValidator checks business metadata, IDs, operators, function contracts and earlier assignment producers. SparkRulesetCompatibilityValidator adds incoming-column and output-type checks. The worker evaluates actual values. The repository verifies immutable identity and canonical payload integrity. A pass at one boundary does not prove the next."
+        },
+        {
+          "title": "A model is not a published version",
+          "text": "The compiled Ruleset is a frozen dataclass tree. Lifecycle status and publication provenance belong to the persisted version row. PublishService validates and then calls the repository; compilation itself does not create tables or publish. A supplied ruleset can also go directly through the Spark facade's validation path."
+        },
+        {
+          "title": "Read the current contract",
+          "text": "This checkout implements row-level rules. Cross-row facts must arrive as input columns. It has no aggregate operand, expression DSL, or alternative code-authoring language. Historical design notes in codex.md discuss older contracts; use current source, tests, README and the generated authoring manifest as evidence."
+        }
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/compiler_yaml.py",
+          "symbol": "compile_text"
+        },
+        {
+          "path": "src/rules_engine/validator.py",
+          "symbol": "validate"
+        },
+        {
+          "path": "src/rules_engine/spark_validator.py",
+          "symbol": "prepare"
+        },
+        {
+          "path": "src/rules_engine/publish.py",
+          "symbol": "publish"
+        },
+        {
+          "path": "src/rules_engine/models.py",
+          "symbol": "Ruleset"
+        }
+      ],
+      "questions": [
+        {
+          "id": "c1",
+          "prompt": "A ruleset compiles with no owner. What follows?",
+          "options": [
+            "It is publishable.",
+            "Semantic validation still needs to pass.",
+            "The repository supplies an owner."
+          ],
+          "answer": 1,
+          "why": "Compiler construction and required ownership validation are separate boundaries."
+        },
+        {
+          "id": "c2",
+          "prompt": "Where should a grouped total be computed?",
+          "options": [
+            "An aggregate operand in YAML.",
+            "A prior data preparation step that supplies a column.",
+            "A hidden cross-row cache in the worker."
+          ],
+          "answer": 1,
+          "why": "The current contract is row-level; upstream preparation owns cross-row facts."
+        }
+      ]
+    },
+    {
+      "id": "execution",
+      "title": "Reason about one row, precisely",
+      "subtitle": "Original input, pre-rule state, and an atomic commit.",
+      "time": "25 min",
+      "lab": "atomic",
+      "sections": [
+        {
+          "title": "There are two read namespaces",
+          "text": "field reads the original incoming row for the entire evaluation. assigned reads the latest committed value from an earlier matched rule. Neither mutates the other. Missing prior commits yield null, and a default_if_null belongs to the individual operand reading that value."
+        },
+        {
+          "title": "Assignments are simultaneous within one rule",
+          "text": "After a match, all assignment expressions resolve against the same pre-rule state. Only after every expression resolves (and the Spark adapter normalizes values) does the engine commit all assignments. A sibling assignment cannot consume the value just proposed by another sibling. A later rule can."
+        },
+        {
+          "title": "Execution order is explicit",
+          "text": "Only active rules enter the prepared loop, ordered by rule_order. Every matching rule contributes. A later assignment to the same target wins. stop_on_match breaks after that matching rule commits; a non-matching stop rule has no stopping effect. Metadata preparation takes a deep copy, so nested mutable authoring collections do not silently rewrite an already prepared evaluator."
+        }
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_prepare_ruleset"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_execute_prepared"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_resolve_operand"
+        },
+        {
+          "path": "tests/test_runtime.py",
+          "symbol": "test_assigned_values_are_visible_to_later_rules_and_atomic_within_a_rule"
+        }
+      ],
+      "questions": [
+        {
+          "id": "e1",
+          "prompt": "An earlier rule committed score=10. The next rule assigns score=20 and copy={assigned: score}. What is copy?",
+          "options": [
+            "20",
+            "10",
+            "The original row's score"
+          ],
+          "answer": 1,
+          "why": "Sibling expressions all read the pre-rule snapshot."
+        },
+        {
+          "id": "e2",
+          "prompt": "A rule with stop_on_match=true does not match. What happens?",
+          "options": [
+            "Evaluation stops anyway.",
+            "Later active rules are evaluated.",
+            "The row becomes an error."
+          ],
+          "answer": 1,
+          "why": "The stop check occurs only after a matched rule's assignments commit."
+        }
+      ]
+    },
+    {
+      "id": "boolean",
+      "title": "Predict errors as well as matches",
+      "subtitle": "Eager condition evaluation and operand-level null policy.",
+      "time": "20 min",
+      "lab": "eager",
+      "sections": [
+        {
+          "title": "Boolean certainty does not stop evaluation",
+          "text": "Both all and any evaluate every active condition and nested group. A true first any branch does not guard a later error. The traced and compact paths preserve this behavior. Do not use branch position to protect a conversion or null-sensitive operation."
+        },
+        {
+          "title": "Substitute, then compare",
+          "text": "default_if_null belongs to an operand and is applied after resolving that operand, including a function's return value. Unary null operators handle null directly. For ordinary comparisons, null yields an indeterminate result unless error_on_null requests an error; only True passes a condition. Negated operators do not turn missing values into automatic matches."
+        },
+        {
+          "title": "Inactive conditions are not deleted",
+          "text": "An inactive condition returns passed=false without evaluating its operands. This blocks all, but another branch can satisfy any. A whole inactive rule is excluded entirely. These are different controls, so reviewers must inspect where active_flag is placed."
+        }
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_group_matches"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_evaluate_group"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_evaluate_condition"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_compare_values"
+        }
+      ],
+      "questions": [
+        {
+          "id": "b1",
+          "prompt": "any has one true condition followed by a null-sensitive condition that errors. What is the outcome?",
+          "options": [
+            "Match.",
+            "No match.",
+            "Row error."
+          ],
+          "answer": 2,
+          "why": "Every active condition still evaluates."
+        },
+        {
+          "id": "b2",
+          "prompt": "An inactive condition inside all behaves like…",
+          "options": [
+            "A removed list item.",
+            "A passing condition.",
+            "A condition that did not pass."
+          ],
+          "answer": 2,
+          "why": "Inactive conditions block all; inactive rules are omitted from execution."
+        }
+      ]
+    },
+    {
+      "id": "types",
+      "title": "Preserve values across boundaries",
+      "subtitle": "Decimals, dates, collections, defaults, and canonical identity.",
+      "time": "25 min",
+      "lab": "tolerance",
+      "sections": [
+        {
+          "title": "Tolerance is operator-specific",
+          "text": "Numeric equality uses abs(left-right) <= tolerance. gt requires left-right > tolerance; ge requires left-right >= -tolerance; lt and le mirror these bands. Do not generalize that to every operator: _between checks inclusive ordered bounds without expanding them. Dates and timestamps require zero numeric tolerance and compatible temporal kinds."
+        },
+        {
+          "title": "Canonicalization preserves observable kinds",
+          "text": "Untagged fractional YAML values compile as Decimal. Canonical export uses !rules_engine/float to preserve existing binary floats, and a tuple tag to preserve tuples. Canonical persistence uses a separate versioned model codec and typed value encoding. Export/recompile must preserve the content hash, not merely look equivalent on screen."
+        },
+        {
+          "title": "Frozen dataclasses are not recursively immutable",
+          "text": "The evaluator snapshots metadata and copies mutable collections passed to custom functions or committed as assignments. This prevents one row or a mutating function from contaminating later rows. Spark types add another boundary: output values must fit the resolved schema, including decimal precision, integral limits, and collection shapes."
+        }
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_compare_ordered"
+        },
+        {
+          "path": "src/rules_engine/runtime.py",
+          "symbol": "_between"
+        },
+        {
+          "path": "src/rules_engine/canonical_values.py"
+        },
+        {
+          "path": "src/rules_engine/exporter_yaml.py"
+        },
+        {
+          "path": "src/rules_engine/spark_runtime.py",
+          "symbol": "_spark_assignment_value"
+        },
+        {
+          "path": "tests/test_runtime.py",
+          "symbol": "test_decimal_tolerance_keeps_exact_boundary_digits"
+        }
+      ],
+      "questions": [
+        {
+          "id": "t1",
+          "prompt": "right=100, tolerance=0.1, operator=gt. Does 100.1 pass?",
+          "options": [
+            "Yes, because it is greater than 100.",
+            "No, it is exactly at the strict upper boundary."
+          ],
+          "answer": 1,
+          "why": "gt requires a difference strictly greater than tolerance."
+        },
+        {
+          "id": "t2",
+          "prompt": "A canonical export changes a float literal into Decimal with identical printed digits. Is that automatically safe?",
+          "options": [
+            "Yes, the display matches.",
+            "No, concrete numeric kind and canonical identity matter."
+          ],
+          "answer": 1,
+          "why": "The exporter uses safe application tags to preserve kinds, including recursively."
+        }
+      ]
+    },
+    {
+      "id": "spark",
+      "title": "Cross the driver–worker boundary",
+      "subtitle": "Preflight, lazy execution, row identity, and projections.",
+      "time": "30 min",
+      "lab": "schema",
+      "sections": [
+        {
+          "title": "The driver builds a plan",
+          "text": "evaluate_dataframe validates keys and incoming schema, resolves assignment types, builds and cloudpickles the evaluator, and creates a row-oriented Python UDF with useArrow=False. It passes only required source columns, plus existing assignment targets for full audit. DataFrame construction is lazy; fail_on_error surfaces row failures when a caller materializes the plan."
+        },
+        {
+          "title": "Keys are a contract, not a hidden scan",
+          "text": "The engine checks key names, existence, duplicates and immutability, but does not run a Spark job to prove non-nullness or uniqueness. Omitted keys default to all source columns. That default can make overwriting any existing column invalid because it becomes an immutable key. Choose explicit stable keys when assignments overwrite source columns."
+        },
+        {
+          "title": "Results and business rows share a plan",
+          "text": "DataFrameEvaluation.results_df selects keys plus engine output. apply_assignments returns business columns using applied flags, preserves untouched values, and excludes engine columns. These are projections of the same evaluated plan, not a join-back by keys. Multiple actions can recompute the UDF unless the shared evaluation is persisted; unpersist when finished."
+        }
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/spark_runtime.py",
+          "symbol": "evaluate_dataframe"
+        },
+        {
+          "path": "src/rules_engine/spark_runtime.py",
+          "symbol": "_validate_key_columns"
+        },
+        {
+          "path": "src/rules_engine/spark_runtime.py",
+          "symbol": "_evaluate_attached_dataframe"
+        },
+        {
+          "path": "src/rules_engine/dataframe_evaluation.py",
+          "symbol": "apply_assignments"
+        },
+        {
+          "path": "tests/test_spark_runtime.py",
+          "symbol": "test_fail_on_error_remains_lazy_until_callers_action"
+        }
+      ],
+      "questions": [
+        {
+          "id": "s1",
+          "prompt": "Calling evaluate_dataframe with fail_on_error=true immediately proves every row succeeds.",
+          "options": [
+            "True.",
+            "False; row execution remains lazy."
+          ],
+          "answer": 1,
+          "why": "Driver validation runs immediately; row failures arise on materializing Spark actions."
+        },
+        {
+          "id": "s2",
+          "prompt": "The input has bucket, and rules assign bucket. Why can omitted key_columns fail?",
+          "options": [
+            "All input columns become immutable keys.",
+            "Spark cannot ever overwrite strings.",
+            "The repository has a conflicting version."
+          ],
+          "answer": 0,
+          "why": "Pass explicit stable keys to allow source-target overwrites."
+        }
+      ]
+    },
+    {
+      "id": "audit",
+      "title": "Explain a final value and its history",
+      "subtitle": "Applied flags, immediate overrides, and final winners.",
+      "time": "25 min",
+      "lab": "overwrite",
+      "sections": [
+        {
+          "title": "No assignment and assign null are distinct",
+          "text": "Each target has applied and value. applied=false means preserve an existing business value when applying results. applied=true with value=null means clear it. A consumer using coalesce on value alone would silently break explicit null assignments."
+        },
+        {
+          "title": "Two provenance questions",
+          "text": "For three assignments A→B→C to one target, A.overridden_by identifies B, while A.final_winning identifies C. Exactly one event per assigned row/target is effective. Every event for that target points to the same final winner. Final value alone cannot explain which intermediate rule replaced which."
+        },
+        {
+          "title": "Audit has a deliberate cost and scope",
+          "text": "Compact results omit detailed events and traces. Full audit collects matched-rule traces and assignment provenance, with business-result parity. The learning adapter additionally shows non-matching rules and condition failures; that expanded teaching trace is not the production audit schema. Error rows must be distinguished from clean no-match rows."
+        }
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/spark_runtime.py",
+          "symbol": "_assignment_results"
+        },
+        {
+          "path": "src/rules_engine/spark_runtime.py",
+          "symbol": "_error_payload"
+        },
+        {
+          "path": "src/rules_engine/dataframe_evaluation.py",
+          "symbol": "_applied_value"
+        },
+        {
+          "path": "docs/rules_engine_production_checklist.md"
+        }
+      ],
+      "questions": [
+        {
+          "id": "a1",
+          "prompt": "A→B→C all assign the same target. What is A.overridden_by?",
+          "options": [
+            "C, because it won.",
+            "B, the immediate next assignment.",
+            "A itself."
+          ],
+          "answer": 1,
+          "why": "Immediate override and final winner are different provenance edges."
+        },
+        {
+          "id": "a2",
+          "prompt": "applied=true,value=null means…",
+          "options": [
+            "Preserve the original value.",
+            "Explicitly assign null.",
+            "The rule was inactive."
+          ],
+          "answer": 1,
+          "why": "The applied flag carries the write decision independently of the value."
+        }
+      ]
+    },
+    {
+      "id": "persistence",
+      "title": "Publish, load, and retire with evidence",
+      "subtitle": "Two immutable identities and a verifiable canonical document.",
+      "time": "25 min",
+      "lab": "compile",
+      "sections": [
+        {
+          "title": "One authoritative version document",
+          "text": "The repository stores a ruleset version as one canonical payload_json plus queryable identity, summary counts, owner, lifecycle and provenance columns. SHA-256 hashes exact canonical payload bytes. Deserialization verifies the hash first, then payload identity against row identity, then canonical form. Lifecycle status is outside semantic content, so retirement does not rewrite the payload."
+        },
+        {
+          "title": "No implicit latest version",
+          "text": "Both (ruleset_id, version) and (ruleset_name, version) are immutable across published and retired rows. Multiple versions may coexist. load_published without version rejects ambiguity instead of sorting version strings. Retiring a version changes lifecycle metadata; it does not free its identity for reuse."
+        },
+        {
+          "title": "Concurrency remains an orchestration responsibility",
+          "text": "The repository's duplicate checks and append are not one cross-writer transaction. Callers must serialize concurrent publishers. Table creation is explicit. Repository tests often use doubles for boundary behavior; target Databricks system tests are separate evidence for actual persistence and deployment."
+        }
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/repository.py",
+          "symbol": "save_published"
+        },
+        {
+          "path": "src/rules_engine/repository.py",
+          "symbol": "load_published"
+        },
+        {
+          "path": "src/rules_engine/repository.py",
+          "symbol": "retire"
+        },
+        {
+          "path": "src/rules_engine/serializer.py",
+          "symbol": "deserialize_ruleset_version"
+        },
+        {
+          "path": "tests/test_repository.py",
+          "symbol": "test_load_published_requires_version_when_published_siblings_exist"
+        }
+      ],
+      "questions": [
+        {
+          "id": "p1",
+          "prompt": "Versions '9' and '10' are both published. Loading by name alone…",
+          "options": [
+            "Picks 10.",
+            "Picks the most recent timestamp.",
+            "Fails and requires an explicit version."
+          ],
+          "answer": 2,
+          "why": "Caller-defined version strings are not ordered as semantic versions."
+        },
+        {
+          "id": "p2",
+          "prompt": "Retirement changes which of these?",
+          "options": [
+            "The canonical rule payload.",
+            "Lifecycle status and provenance.",
+            "Both immutable version identities become reusable."
+          ],
+          "answer": 1,
+          "why": "Retired identities remain immutable; lifecycle is not part of the payload hash."
+        }
+      ]
+    },
+    {
+      "id": "functions",
+      "title": "Extend through explicit function contracts",
+      "subtitle": "Declared metadata, worker callables, and reproducibility.",
+      "time": "30 min",
+      "lab": "atomic_error",
+      "sections": [
+        {
+          "title": "Registration has two sides",
+          "text": "CustomFunctionSpec declares function name, arguments, allowed contexts, return type, version and implementation reference. FunctionRegistry separately holds the callable. Persisting a registry row does not import executable code into a worker. A spec can exist while implementation lookup still fails."
+        },
+        {
+          "title": "Purity makes retry behavior understandable",
+          "text": "Keep functions deterministic and row-local. Spark can retry work or recompute an unpersisted plan, so side effects make evaluation unsafe to reason about. Validate static argument shapes early, but remember dynamic field values can still fail on a worker. Test null returns, mutable arguments, invalid values and cloudpickle serialization."
+        },
+        {
+          "title": "A manifest is declared identity",
+          "text": "dependency_manifest records active referenced function contracts and declared versions/references. It is not a hash of executable Python code. Changing implementation without changing declared identity undermines reproducibility even if the ruleset hash stays identical. Package, registry metadata and worker code must be deployed coherently."
+        }
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/registry.py",
+          "symbol": "CustomFunctionSpec"
+        },
+        {
+          "path": "src/rules_engine/registry.py",
+          "symbol": "get_implementation"
+        },
+        {
+          "path": "src/rules_engine/registry.py",
+          "symbol": "dependency_manifest"
+        },
+        {
+          "path": "src/rules_engine/spark_runtime.py",
+          "symbol": "validate_worker_serializable"
+        },
+        {
+          "path": "src/rules_engine/standard_functions.py"
+        }
+      ],
+      "questions": [
+        {
+          "id": "f1",
+          "prompt": "A persisted implementation_reference means the repository loads that Python function automatically.",
+          "options": [
+            "True.",
+            "False; callables must be registered in memory."
+          ],
+          "answer": 1,
+          "why": "Persistence describes a function; registry binding supplies executable behavior."
+        },
+        {
+          "id": "f2",
+          "prompt": "Does the function dependency hash prove the bytes of Python implementation code?",
+          "options": [
+            "Yes.",
+            "No; it identifies declared contracts and references."
+          ],
+          "answer": 1,
+          "why": "The manifest explicitly is not an executable-code hash."
+        }
+      ]
+    },
+    {
+      "id": "expert",
+      "title": "Make a change you can defend",
+      "subtitle": "Trace the blast radius and choose the right proof.",
+      "time": "35 min",
+      "lab": "fallback",
+      "sections": [
+        {
+          "title": "Change a semantic rule across every boundary",
+          "text": "Adding an operator affects enums, the authoring manifest, strict compilation, semantic validation, row comparison, Spark compatibility, formatting, persistence/export behavior and tests. Fixing one switch statement is insufficient. Use the architecture map's import relationships as navigation, then trace behavior and tests; imports alone do not prove every downstream effect."
+        },
+        {
+          "title": "A test hierarchy answers different questions",
+          "text": "Pure compiler/runtime tests give fast, precise semantic evidence. Spark boundary tests check schema preparation and worker conversion. Real Spark tests cover lazy failures, serialization, timestamp behavior and projections. Databricks system tests cover the target environment. This lab validates row behavior and optional schema compatibility only; it does not certify a release."
+        },
+        {
+          "title": "Investigate coverage carefully",
+          "text": "Coverage reports analyze the supplied dataset with its actual rule ordering and stop behavior. A rule with zero observed matches is dead on that sample, not mathematically unreachable. A stopped rule may be shadowed. Clean no-match rows exclude error rows. Broad-match thresholds flag investigation candidates rather than proving defects."
+        }
+      ],
+      "refs": [
+        {
+          "path": "src/rules_engine/analytics.py",
+          "symbol": "analyze"
+        },
+        {
+          "path": "tests/test_spark_boundaries.py"
+        },
+        {
+          "path": "docs/rules_engine_production_checklist.md"
+        },
+        {
+          "path": "src/rules_engine/authoring.py",
+          "symbol": "build_authoring_manifest"
+        }
+      ],
+      "questions": [
+        {
+          "id": "x1",
+          "prompt": "A coverage report shows zero matches for a rule. What does that establish?",
+          "options": [
+            "The rule can never match.",
+            "It did not match under this dataset and execution order.",
+            "The compiler rejected it."
+          ],
+          "answer": 1,
+          "why": "Sample coverage and stop behavior cannot prove general unreachability."
+        },
+        {
+          "id": "x2",
+          "prompt": "A successful lab run is sufficient release evidence for a changed Spark output conversion.",
+          "options": [
+            "Yes.",
+            "No; real worker and target-runtime checks are still needed."
+          ],
+          "answer": 1,
+          "why": "The local adapter does not exercise Spark transport, actions or Delta persistence."
+        }
+      ]
+    }
+  ],
+  "playbooks": [
+    {
+      "title": "Add or change an operator",
+      "trigger": "A business request changes comparison semantics.",
+      "files": [
+        "enums",
+        "authoring",
+        "compiler_yaml",
+        "validator",
+        "runtime",
+        "spark_validator",
+        "human_readable",
+        "exporter_yaml"
+      ],
+      "steps": [
+        "Specify truth tables, null behavior, tolerance and accepted operand shapes first.",
+        "Update the accepted vocabulary and manifest; reject unintended aliases.",
+        "Exercise both compact and traced row paths at exact boundaries.",
+        "Prove Spark input/output compatibility and canonical export/recompile parity."
+      ],
+      "proof": "Compiler rejection cases + row truth tables + Spark integration + canonical contract tests."
+    },
+    {
+      "title": "Add a custom function",
+      "trigger": "Existing registered functions cannot express the row transformation.",
+      "files": [
+        "registry",
+        "standard_functions",
+        "validator",
+        "spark_validator",
+        "spark_runtime"
+      ],
+      "steps": [
+        "Declare exact arguments, defaults, contexts and return type.",
+        "Register the implementation separately from persisted metadata.",
+        "Test invalid dynamic values, null returns, nested collections and mutation isolation.",
+        "Update declared version/reference and verify worker serialization and target deployment."
+      ],
+      "proof": "Function unit tests + contract tests + real worker test + dependency manifest review."
+    },
+    {
+      "title": "Change result or audit shape",
+      "trigger": "A consumer needs a new field or provenance behavior.",
+      "files": [
+        "models",
+        "spark_runtime",
+        "dataframe_evaluation",
+        "analytics"
+      ],
+      "steps": [
+        "Define backward compatibility for existing result consumers.",
+        "Update compact/full schemas and reserved names together.",
+        "Check applied=false versus explicit null and three-overwrite provenance.",
+        "Compare business results in compact and audit modes; test actual Spark struct transport."
+      ],
+      "proof": "Schema assertions + full audit canary + compact/full parity + application projection tests."
+    },
+    {
+      "title": "Change persistence format",
+      "trigger": "Canonical metadata needs a new representation.",
+      "files": [
+        "model_codec",
+        "canonical_values",
+        "serializer",
+        "repository",
+        "exporter_yaml"
+      ],
+      "steps": [
+        "Define a format-version and migration strategy before altering canonical bytes.",
+        "Keep row identity consistent with payload identity; reject tampering.",
+        "Test exact numeric and collection kinds across export/recompile and serialization.",
+        "Verify immutable version handling and publish orchestration on target Delta tables."
+      ],
+      "proof": "Canonical fixture round trips + hash/identity failure tests + Databricks system tests."
+    },
+    {
+      "title": "Investigate a wrong business value",
+      "trigger": "A result differs from the analyst's expectation.",
+      "files": [
+        "runtime",
+        "spark_runtime",
+        "dataframe_evaluation",
+        "analytics"
+      ],
+      "steps": [
+        "Pin ruleset version, content hash, engine version and declared function dependencies.",
+        "Separate row error, clean no-match, explicit null and an unapplied target.",
+        "Read assignment events in order; distinguish immediate override from final winner.",
+        "Inspect field versus assigned, pre-rule values, null fallbacks, stop flags and exact comparisons.",
+        "Reproduce a minimal row in the lab, then verify the original Spark schema and worker behavior."
+      ],
+      "proof": "Minimal counterexample + source-linked explanation + a regression test at the failing boundary."
+    }
+  ],
+  "workshop": [
+    {
+      "duration": "15 min",
+      "title": "Predict without running",
+      "text": "Pair an author and a reviewer. Use Two worlds, one commit. Each writes the exact outputs and the reason for every assigned read."
+    },
+    {
+      "duration": "25 min",
+      "title": "Create a counterexample",
+      "text": "Each pair changes one lab assumption: stop flag, producer match, null policy or assignment order. The other pair predicts before execution."
+    },
+    {
+      "duration": "25 min",
+      "title": "Trace an incident",
+      "text": "Use the wrong-business-value playbook. Present evidence from input, commit history, source and a relevant existing test. Explain what the lab cannot establish."
+    },
+    {
+      "duration": "25 min",
+      "title": "Review a proposed change",
+      "text": "Choose an operator, function, audit or persistence change. Identify affected boundaries, an invariant, a counterexample and the smallest useful test at each boundary."
+    }
+  ]
+}
